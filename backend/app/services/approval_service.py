@@ -75,31 +75,32 @@ async def evaluate_approval(
     auto_approve_allowed = False
     human_required = risk_result["human_required"]
 
-    if policy:
-        risk_order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
-        if risk_order.get(risk_level, 0) > risk_order.get(policy.max_risk_level_for_auto_approve, 0):
-            blocked_reasons.append(f"Risk level {risk_level} exceeds policy max {policy.max_risk_level_for_auto_approve}")
-            human_required = True
-        if policy.require_tests_passed and data.tests_passed is not True:
-            blocked_reasons.append("Tests not passed")
-            human_required = True
-        if policy.require_no_security_issues and (data.security_issues_found is True or data.security_issues_found is None):
-            blocked_reasons.append("Security issues unknown or found")
-            human_required = True
-        if policy.require_sonar_passed and data.sonar_passed is not True:
-            blocked_reasons.append("Sonar not passed")
-            human_required = True
-
-    if not blocked_reasons and risk_level in ("low",) and not human_required:
-        auto_approve_allowed = True
-
-    policy_snapshot = {
+    effective_policy = {
         "name": policy.name if policy else "default (memory)",
         "max_risk_level": policy.max_risk_level_for_auto_approve if policy else "low",
         "require_tests_passed": policy.require_tests_passed if policy else True,
         "require_sonar_passed": policy.require_sonar_passed if policy else False,
         "require_no_security_issues": policy.require_no_security_issues if policy else True,
     }
+
+    risk_order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+    if risk_order.get(risk_level, 0) > risk_order.get(effective_policy["max_risk_level"], 0):
+        blocked_reasons.append(f"Risk level {risk_level} exceeds policy max {effective_policy['max_risk_level']}")
+        human_required = True
+    if effective_policy["require_tests_passed"] and data.tests_passed is not True:
+        blocked_reasons.append("Tests not passed")
+        human_required = True
+    if effective_policy["require_no_security_issues"] and (data.security_issues_found is True or data.security_issues_found is None):
+        blocked_reasons.append("Security issues unknown or found")
+        human_required = True
+    if effective_policy["require_sonar_passed"] and data.sonar_passed is not True:
+        blocked_reasons.append("Sonar not passed")
+        human_required = True
+
+    if not blocked_reasons and risk_level in ("low",) and not human_required:
+        auto_approve_allowed = True
+
+    policy_snapshot = effective_policy
 
     decision = ApprovalDecision(
         task_id=task_id,

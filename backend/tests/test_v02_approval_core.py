@@ -235,3 +235,35 @@ async def test_auto_approval_granted_event(client, task):
     r = await client.get(BASE + f"/tasks/{task['id']}/events")
     types = [e["event_type"] for e in r.json()["data"]]
     assert "auto_approval_granted" in types
+
+
+@pytest.mark.asyncio
+async def test_default_policy_blocks_missing_security(client, task):
+    r = await client.post(BASE + f"/tasks/{task['id']}/evaluate-approval", json={"tests_passed": True})
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["auto_approve_allowed"] is False
+    assert d["human_required"] is True
+
+
+@pytest.mark.asyncio
+async def test_default_policy_allows_full_low_risk(client, task):
+    r = await client.post(BASE + f"/tasks/{task['id']}/evaluate-approval", json={"tests_passed": True, "security_issues_found": False})
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["risk_level"] == "low"
+    assert d["auto_approve_allowed"] is True
+    assert d["human_required"] is False
+
+
+@pytest.mark.asyncio
+async def test_default_policy_snapshot_correct(client, task):
+    r = await client.post(BASE + f"/tasks/{task['id']}/evaluate-approval", json={})
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["decision_reason"] == "default (memory)"
+    assert d["auto_approve_allowed"] is False
+    assert d["human_required"] is True
+    r2 = await client.get(BASE + f"/tasks/{task['id']}/approval-decisions")
+    decisions = r2.json()["data"]
+    assert len(decisions) >= 1
