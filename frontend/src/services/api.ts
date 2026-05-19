@@ -8,7 +8,8 @@ const client = axios.create({
 client.interceptors.response.use(
   (res) => res,
   (err) => {
-    const msg = err.response?.data?.message || err.message || 'Unknown error'
+    const detail = err.response?.data?.detail
+    const msg = detail || err.response?.data?.message || err.message || 'Unknown error'
     return Promise.reject(new Error(msg))
   },
 )
