@@ -194,6 +194,13 @@ async def _do_step_create_agent_run(db: AsyncSession, task: Task, actor: str) ->
         await task_service.submit_result(db, task.id, body)
         return {"action": "submit_result", "events": ["orchestration_step_completed"], "stopped": False, "stop_reason": None}
     
+    if latest_run and latest_run.status in (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value):
+        await event_service.create_event(
+            db, task_id=task.id, event_type="agent_result_waiting",
+            actor=actor, message=f"Waiting for AgentRun #{latest_run.id} result",
+        )
+        return {"action": "wait_agent_result", "events": ["agent_result_waiting"], "stopped": True, "stop_reason": "waiting_for_agent_result"}
+    
     # Find an executor agent
     result = await db.execute(
         select(AgentProfile).where(

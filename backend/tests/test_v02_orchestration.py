@@ -143,7 +143,8 @@ async def test_result_submitted_step_to_reviewing(client, task):
 # ─── 10-13: 审批编排 ───
 
 @pytest.mark.asyncio
-async def test_reviewing_auto_approve_with_data(client, task):
+async def test_reviewing_existing_low_risk_auto_approves(client, task):
+    """reviewing + existing low-risk decision -> step should auto-approve"""
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
     await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
     await client.post(BASE + f"/tasks/{task['id']}/submit-result", json=t_actor)
@@ -152,12 +153,12 @@ async def test_reviewing_auto_approve_with_data(client, task):
     r = await client.post(BASE + f"/tasks/{task['id']}/evaluate-approval", json={"tests_passed": True, "security_issues_found": False, "actor": "test"})
     d = r.json()["data"]
     assert d["auto_approve_allowed"] is True
-    # The step evaluates WITHOUT data (no tests_passed), so it will stop at human_required
-    # This is correct: orchestration can't auto-approve without external data
+    assert d["risk_level"] == "low"
+    # Step should find existing decision and auto-approve
     r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
     assert r.status_code == 200
-    # Without evaluation data, human_required is expected
-    assert r.json()["data"]["stop_reason"] in ("human_required", None)
+    assert r.json()["data"]["action_taken"] == "auto_approve"
+    assert r.json()["data"]["after_status"] == "approved"
 
 @pytest.mark.asyncio
 async def test_reviewing_missing_security_to_human_required(client, task):
@@ -444,3 +445,24 @@ async def test_cross_task_cannot_use_other_decision(client, project, agent):
     assert r.json()["data"]["action_taken"] != "auto_approve"
     # Should not be approved (would mean it used Task A's decision)
     assert r.json()["data"]["after_status"] != "approved"
+
+
+@pytest.mark.asyncio
+async def test_running_agent_run_duplicate_step_guard(client, task, agent):
+    """Step on running AgentRun should not create a second AgentRun"""
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    # First step creates AgentRun
+    await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    # Check AgentRun count
+    r = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
+    assert len(r.json()["data"]) == 1
+    # Second step should NOT create another one
+    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    assert r.status_code == 200
+    assert r.json()["data"]["stopped"] is True
+    assert r.json()["data"]["stop_reason"] == "waiting_for_agent_result"
+    assert r.json()["data"]["action_taken"] == "wait_agent_result"
+    # AgentRun count should still be 1
+    r = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
+    assert len(r.json()["data"]) == 1
