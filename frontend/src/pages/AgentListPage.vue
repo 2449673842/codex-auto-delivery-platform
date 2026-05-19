@@ -176,8 +176,8 @@ async function handleDelete(id: number) {
 .page-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; }
 .page-header h1 { font-size: 24px; font-weight: 700; }
 .back-link { color: var(--color-text-secondary); font-size: 14px; }
-.form-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; z-index: 100; }
-.form-panel { padding: 32px; width: 520px; max-width: 90vw; max-height: 90vh; overflow-y: auto; }
+.form-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; z-index: 100; pointer-events: none; }
+.form-panel { padding: 32px; width: 520px; max-width: 90vw; max-height: 90vh; overflow-y: auto; pointer-events: auto; }
 .form-panel h2 { font-size: 18px; margin-bottom: 8px; }
 .form-note { color: var(--color-text-secondary); font-size: 12px; margin-bottom: 16px; font-style: italic; }
 .form-panel form { display: flex; flex-direction: column; gap: 12px; }
