@@ -181,9 +181,16 @@ async def _do_step_create_agent_run(db: AsyncSession, task: Task, actor: str) ->
         return {"action": "blocked", "events": [], "stopped": True, "stop_reason": "agent_failed"}
     
     if latest_run and latest_run.status == AgentRunStatus.SUCCEEDED.value:
-        # Agent already succeeded, create artifacts and transition
+        # Agent already succeeded, create artifacts if not already created by dispatch
         from app.schemas.task import SubmitResultRequest
-        await create_artifact_from_agent_run(db, latest_run)
+        existing_arts = (await db.execute(
+            select(TaskArtifact).where(
+                TaskArtifact.task_id == task.id,
+                TaskArtifact.filename.like(f'%_run_{latest_run.id}_%')
+            ).limit(1)
+        )).scalar_one_or_none()
+        if not existing_arts:
+            await create_artifact_from_agent_run(db, latest_run)
         body = SubmitResultRequest(actor=actor, message="Auto-submit result", result_summary=latest_run.output_summary)
         await task_service.submit_result(db, task.id, body)
         return {"action": "submit_result", "events": ["orchestration_step_completed"], "stopped": False, "stop_reason": None}

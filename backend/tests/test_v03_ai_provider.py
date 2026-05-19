@@ -177,3 +177,93 @@ async def test_existing_tests_still_pass(client, task):
     """Basic health check still works"""
     r = await client.get(BASE + "/health")
     assert r.status_code == 200
+
+
+# ─── Artifact count assertion (specific, not just >= 1) ───
+
+@pytest.mark.asyncio
+async def test_sandbox_creates_exact_artifact_types(client, task, agent):
+    """Sandbox should create specific artifact types"""
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    r = await client.get(BASE + f"/tasks/{task['id']}/artifacts")
+    artifacts = r.json()["data"]
+    types = [a["artifact_type"] for a in artifacts]
+    assert "agent_output_log" in types
+    assert "agent_raw_result" in types
+    # No duplicate artifacts from dispatch + submit_result
+    assert len(artifacts) == len(set(a["artifact_type"] for a in artifacts))
+
+
+# ─── Provider selection: only sandbox works in v0.3 ───
+
+def test_provider_selection_only_sandbox():
+    """v0.3: dispatch_agent_run hardcodes SandboxProvider, not based on AgentProfile.provider"""
+    import os
+    src_path = os.path.join(os.path.dirname(__file__), '../app/services/ai_provider_service.py')
+    with open(src_path, encoding='utf-8') as f:
+        src = f.read()
+    assert 'SandboxProvider()' in src, 'dispatch must use SandboxProvider'
+    # Verify no real provider imports
+    for pkg in ['openai', 'anthropic', 'import requests']:
+        assert pkg not in src, f'dispatch should not import {pkg}'
+
+
+def test_no_secret_ref_read_in_dispatch():
+    """dispatch_agent_run does not read secret_ref"""
+    import ast, os
+    src_path = os.path.join(os.path.dirname(__file__), '../app/services/ai_provider_service.py')
+    with open(src_path, encoding='utf-8') as f:
+        tree = ast.parse(f.read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and 'secret' in node.attr.lower():
+            raise AssertionError(f'dispatch should not access secret: {node.attr}')
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == 'os':
+            if node.attr in ('getenv', 'environ'):
+                raise AssertionError('dispatch should not use os.getenv')
+
+
+# ─── Sandbox failure path ───
+
+@pytest.mark.asyncio
+async def test_sandbox_failure_sets_agent_failed(client, task, agent, monkeypatch):
+    """When SandboxProvider.execute raises, AgentRun should be failed"""
+    from app.services.sandbox_provider import SandboxProvider
+    async def failing_execute(self, run):
+        raise RuntimeError("Simulated provider failure")
+    monkeypatch.setattr(SandboxProvider, "execute", failing_execute)
+    
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["stopped"] is True
+    assert d["stop_reason"] == "agent_failed"
+    # AgentRun should be failed
+    r = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
+    assert r.json()["data"][0]["status"] == "failed"
+    assert r.json()["data"][0]["error_message"] is not None
+    # Task should NOT progress to result_submitted
+    r = await client.get(BASE + f"/tasks/{task['id']}")
+    assert r.json()["data"]["status"] == "dispatched"
+    # Artifacts should NOT be created (failed run)
+    r = await client.get(BASE + f"/tasks/{task['id']}/artifacts")
+    assert len(r.json()["data"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_failed_sandbox_status_returns_agent_failed(client, task, agent, monkeypatch):
+    """After Sandbox failure, orchestration status shows agent_failed"""
+    from app.services.sandbox_provider import SandboxProvider
+    async def failing_execute(self, run):
+        raise RuntimeError("fail")
+    monkeypatch.setattr(SandboxProvider, "execute", failing_execute)
+    
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    r = await client.get(BASE + f"/tasks/{task['id']}/orchestration/status")
+    assert r.json()["data"]["next_action"] == "agent_failed"
+    assert r.json()["data"]["can_auto_continue"] is False

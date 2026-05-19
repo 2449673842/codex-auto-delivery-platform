@@ -404,3 +404,86 @@ async def test_no_duplicate_agent_run(client, task, agent):
     assert r.status_code == 200
     r = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
     assert len(r.json()["data"]) == 1
+
+
+# ─── Restored v0.2 tests (adapted for v0.3: create AgentRun via API, not step) ───
+
+@pytest.mark.asyncio
+async def test_existing_running_run_returns_wait(client, task, agent):
+    """dispatched + existing running AgentRun -> wait_agent_result"""
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    # Create AgentRun directly via API (queued state)
+    r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "plan"})
+    rid = r.json()["data"]["id"]
+    # PATCH to running
+    await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    # Now check status
+    r = await client.get(BASE + f"/tasks/{task['id']}/orchestration/status")
+    assert r.json()["data"]["next_action"] == "wait_agent_result"
+    assert r.json()["data"]["can_auto_continue"] is False
+
+
+@pytest.mark.asyncio
+async def test_existing_failed_run_returns_agent_failed(client, task, agent):
+    """dispatched + existing failed AgentRun -> agent_failed"""
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "plan"})
+    rid = r.json()["data"]["id"]
+    await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    await client.post(BASE + f"/tasks/{task['id']}/agent-runs/{rid}/submit-result", json={"status": "failed", "error_message": "test error"})
+    r = await client.get(BASE + f"/tasks/{task['id']}/orchestration/status")
+    assert r.json()["data"]["next_action"] == "agent_failed"
+    assert r.json()["data"]["can_auto_continue"] is False
+
+
+@pytest.mark.asyncio
+async def test_existing_failed_run_step_stops(client, task, agent):
+    """failed AgentRun step -> stopped, stop_reason=agent_failed"""
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "plan"})
+    rid = r.json()["data"]["id"]
+    await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    await client.post(BASE + f"/tasks/{task['id']}/agent-runs/{rid}/submit-result", json={"status": "failed", "error_message": "err"})
+    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    assert r.status_code == 200
+    assert r.json()["data"]["stopped"] is True
+    assert r.json()["data"]["stop_reason"] == "agent_failed"
+
+
+@pytest.mark.asyncio
+async def test_existing_duplicate_run_guard_no_create(client, task, agent):
+    """running run exists -> step should not create a second AgentRun"""
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "plan"})
+    rid = r.json()["data"]["id"]
+    await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    r = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
+    assert len(r.json()["data"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_existing_canceled_run_returns_agent_failed(client, task, agent):
+    """dispatched + existing canceled AgentRun -> agent_failed"""
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "plan"})
+    rid = r.json()["data"]["id"]
+    await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "canceled"})
+    r = await client.get(BASE + f"/tasks/{task['id']}/orchestration/status")
+    assert r.json()["data"]["next_action"] == "agent_failed"
+
+
+@pytest.mark.asyncio
+async def test_existing_queued_run_returns_wait(client, task, agent):
+    """dispatched + existing queued AgentRun -> wait_agent_result"""
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "plan"})
+    rid = r.json()["data"]["id"]
+    r = await client.get(BASE + f"/tasks/{task['id']}/orchestration/status")
+    assert r.json()["data"]["next_action"] == "wait_agent_result"
