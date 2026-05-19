@@ -356,6 +356,8 @@ async def create_artifact_from_agent_run(db: AsyncSession, run: AgentRun) -> Tas
     artifact = None
     if run.output_log:
         content = run.output_log
+        # SHA-256 is used only as a non-secret content checksum for artifact
+        # integrity/deduplication, not for password storage or authentication.
         sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
         artifact = TaskArtifact(
             task_id=run.task_id,

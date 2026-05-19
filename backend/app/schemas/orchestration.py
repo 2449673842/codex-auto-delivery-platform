@@ -6,7 +6,7 @@ class OrchestrationStatusResponse(BaseModel):
     task_status: str
     next_action: str | None
     can_auto_continue: bool
-    blocked_reasons: list[str] = []
+    blocked_reasons: list[str] = Field(default_factory=list)
     latest_agent_run_id: int | None
     latest_agent_review_id: int | None
     latest_approval_decision_id: int | None
@@ -17,7 +17,7 @@ class OrchestrationStepResponse(BaseModel):
     before_status: str
     after_status: str
     action_taken: str | None
-    events_created: list[str] = []
+    events_created: list[str] = Field(default_factory=list)
     stopped: bool
     stop_reason: str | None = None
 
@@ -33,4 +33,4 @@ class OrchestrationRunResponse(BaseModel):
     final_status: str
     stopped: bool
     stop_reason: str | None = None
-    actions: list[str] = []
+    actions: list[str] = Field(default_factory=list)
