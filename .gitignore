@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+frontend/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SQLite (keep gitkeep, not the real db)
+backend/data/*.db
+backend/data/*.db-wal
+backend/data/*.db-shm
+
+# Logs
+*.log
+server.err.log

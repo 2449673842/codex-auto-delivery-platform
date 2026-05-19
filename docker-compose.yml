@@ -1,0 +1,37 @@
+version: "3.9"
+
+services:
+  # ─── 后端 ────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: codex-platform-backend
+    ports:
+      - "8700:8700"
+    volumes:
+      - ./backend/data:/app/data
+    environment:
+      CODEX_HOST: "0.0.0.0"       # 容器内绑定所有接口
+      CODEX_PORT: "8700"
+      CODEX_DB_DIR: "/app/data"
+      CODEX_FRONTEND_ORIGIN: "http://127.0.0.1:9700"
+      CODEX_DEBUG: "0"
+    restart: unless-stopped
+
+  # ─── 前端（预留，暂不启用）───────────────────────────
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   container_name: codex-platform-frontend
+  #   ports:
+  #     - "9700:80"
+  #   depends_on:
+  #     - backend
+  #   restart: unless-stopped
+
+# ─── 端口规划 ───────────────────────────────────────────
+# 后端  backend  8700  (本地开发 uvicorn 监听 127.0.0.1:8700)
+# 前端  frontend 9700  (本地开发 vite 监听 127.0.0.1:9700)
+# Docker 中 backend 绑定 0.0.0.0:8700 用于容器间通信
