@@ -10,7 +10,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 class Settings:
     # --- 服务监听 ---
     host: str = os.getenv("CODEX_HOST", "127.0.0.1")
-    port: int = int(os.getenv("CODEX_PORT", "8700"))
+    port: int = int(os.getenv("CODEX_PORT", "8701"))
 
     # --- 数据库 ---
     db_dir: Path = Path(os.getenv("CODEX_DB_DIR", str(_PROJECT_ROOT / "data")))
@@ -28,7 +28,7 @@ class Settings:
         return f"sqlite+aiosqlite:///{self.db_path}"
 
     # --- CORS ---
-    frontend_origin: str = os.getenv("CODEX_FRONTEND_ORIGIN", "http://127.0.0.1:9700")
+    frontend_origin: str = os.getenv("CODEX_FRONTEND_ORIGIN", "http://127.0.0.1:9701")
 
     # --- 环境标识 ---
     debug: bool = os.getenv("CODEX_DEBUG", "0") == "1"

@@ -6,14 +6,14 @@ services:
       dockerfile: Dockerfile
     container_name: codex-platform-backend
     ports:
-      - "8700:8700"
+      - "8701:8701"
     volumes:
       - ./backend/data:/app/data
     environment:
       CODEX_HOST: "0.0.0.0"       # 容器内绑定所有接口
-      CODEX_PORT: "8700"
+      CODEX_PORT: "8701"
       CODEX_DB_DIR: "/app/data"
-      CODEX_FRONTEND_ORIGIN: "http://127.0.0.1:9700"
+      CODEX_FRONTEND_ORIGIN: "http://127.0.0.1:9701"
       CODEX_DEBUG: "0"
     restart: unless-stopped
 
@@ -24,7 +24,7 @@ services:
   #     dockerfile: Dockerfile
   #   container_name: codex-platform-frontend
   #   ports:
-  #     - "9700:80"
+  #     - "9701:80"
   #   depends_on:
   #     - backend
   #   restart: unless-stopped
