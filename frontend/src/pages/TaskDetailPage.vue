@@ -33,8 +33,8 @@
         <textarea v-model="resultSummary" placeholder="描述执行结果，如遇问题请说明..." rows="5"></textarea>
       </label>
       <div class="form-actions">
-        <button class="btn btn-primary" @click="confirmSubmitResult">确认提交</button>
-        <button class="btn" @click="showResultForm = false">取消</button>
+        <button class="btn btn-primary" @click="confirmSubmitResult" :disabled="actionLoading">确认提交</button>
+        <button class="btn" @click="showResultForm = false" :disabled="actionLoading">取消</button>
       </div>
     </div>
 
@@ -159,8 +159,8 @@
               <textarea v-model="submitForm.raw_result_json" rows="3" placeholder='{"key": "value"}'></textarea>
             </label>
             <div class="form-actions">
-              <button class="btn btn-primary btn-sm" @click="confirmSubmitRunResult(r)">确认</button>
-              <button class="btn btn-sm" @click="submitFormRunId = null">取消</button>
+              <button class="btn btn-primary btn-sm" @click="confirmSubmitRunResult(r)" :disabled="actionLoading">确认</button>
+              <button class="btn btn-sm" @click="submitFormRunId = null" :disabled="actionLoading">取消</button>
             </div>
           </div>
         </div>
@@ -364,6 +364,7 @@ async function handleAction(action: string) {
 }
 
 async function confirmSubmitResult() {
+  if (actionLoading.value) return
   await doTransition('submit-result', { result_summary: resultSummary.value })
   showResultForm.value = false
   resultSummary.value = ''
@@ -427,12 +428,16 @@ function showSubmitResult(r: AgentRun) {
 }
 
 async function confirmSubmitRunResult(r: AgentRun) {
+  if (actionLoading.value) return
+  actionLoading.value = true
   try {
     await submitAgentRunResult(task.value.id, r.id, submitForm.value)
     submitFormRunId.value = null
     agentRuns.value = await fetchAgentRuns(task.value.id)
   } catch (e: any) {
     alert(e.message)
+  } finally {
+    actionLoading.value = false
   }
 }
 
