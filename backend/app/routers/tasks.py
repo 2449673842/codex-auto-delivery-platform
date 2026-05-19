@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
 from app.schemas.common import ApiEnvelope, Pagination
-from app.schemas.task import TaskCreate, TaskResponse, TaskStatusTransition
+from app.schemas.task import TaskCreate, TaskResponse, TaskStatusTransition, SubmitResultRequest
 from app.services import project_service, task_service
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -79,7 +79,7 @@ async def dispatch_task(
 
 @router.post("/{task_id}/submit-result")
 async def submit_result(
-    task_id: int, body: TaskStatusTransition, db: AsyncSession = Depends(get_session)
+    task_id: int, body: SubmitResultRequest, db: AsyncSession = Depends(get_session)
 ):
     task = await task_service.submit_result(db, task_id, body)
     return ApiEnvelope(data={"status": task.status}, message="Result submitted")

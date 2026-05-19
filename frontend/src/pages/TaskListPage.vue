@@ -5,7 +5,7 @@
         <h1>{{ projectName }} 任务列表</h1>
         <router-link to="/" class="back-link">← 返回仪表盘</router-link>
       </div>
-      <router-link :to="`/tasks/new?project_id=${projectId}`" class="btn btn-primary" v-if="projectId">
+      <router-link :to="`/tasks/new?project_id=${projectId}`" class="btn btn-primary btn-sm" v-if="projectId">
         + 新建任务
       </router-link>
     </header>
@@ -25,17 +25,22 @@
       <div
         v-for="t in taskStore.tasks"
         :key="t.id"
-        class="task-card"
+        class="task-card card"
         @click="$router.push(`/tasks/${t.id}`)"
       >
         <div class="task-header">
-          <span class="status-badge" :class="t.status">{{ STATUS_LABELS[t.status] || t.status }}</span>
+          <StatusBadge :status="t.status" />
           <span class="priority" :class="t.priority">{{ t.priority }}</span>
         </div>
         <h3>{{ t.title }}</h3>
-        <p class="meta">{{ t.project_name }} · {{ new Date(t.created_at).toLocaleDateString() }}</p>
+        <p class="task-meta">{{ t.project_name }} · {{ new Date(t.created_at).toLocaleDateString() }}</p>
       </div>
-      <div v-if="taskStore.tasks.length === 0" class="empty">暂无任务</div>
+      <div v-if="taskStore.tasks.length === 0" class="empty-state">
+        <p>暂无任务</p>
+        <router-link v-if="projectId" :to="`/tasks/new?project_id=${projectId}`" class="btn btn-primary btn-sm" style="margin-top: 12px;">
+          新建任务
+        </router-link>
+      </div>
     </div>
 
     <div class="pagination" v-if="taskStore.total > 20">
@@ -50,6 +55,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useTaskStore, STATUS_LABELS } from '../stores/taskStore'
+import StatusBadge from '../components/StatusBadge.vue'
 
 const route = useRoute()
 const taskStore = useTaskStore()
@@ -94,28 +100,23 @@ async function load() {
 </script>
 
 <style scoped>
-.page { max-width: 1000px; margin: 0 auto; padding: 24px; }
+.page { max-width: 1000px; margin: 0 auto; padding: 32px 24px; }
 .page-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+.page-header h1 { font-size: 24px; font-weight: 700; }
 .back-link { color: var(--color-text-secondary); font-size: 14px; }
-.status-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 16px; }
-.status-tabs button { padding: 6px 14px; border: 1px solid var(--color-border); border-radius: 16px; background: var(--color-surface); cursor: pointer; font-size: 13px; color: var(--color-text-secondary); }
+.status-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
+.status-tabs button { padding: 6px 16px; border: 1px solid var(--color-border); border-radius: 16px; background: var(--color-surface); cursor: pointer; font-size: 13px; color: var(--color-text-secondary); transition: all 0.15s; }
+.status-tabs button:hover { border-color: var(--color-primary); color: var(--color-primary); }
 .status-tabs button.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
 .task-list { display: flex; flex-direction: column; gap: 8px; }
-.task-card { background: var(--color-surface); border-radius: var(--radius); padding: 16px; cursor: pointer; border: 1px solid var(--color-border); }
-.task-card:hover { border-color: var(--color-primary); }
+.task-card { cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
+.task-card:hover { border-color: var(--color-primary); box-shadow: var(--shadow-sm); }
 .task-header { display: flex; gap: 8px; margin-bottom: 8px; }
-.status-badge { padding: 2px 8px; border-radius: 12px; font-size: 12px; background: #e3f2fd; }
-.status-badge.approved { background: #e8f5e9; }
-.status-badge.rejected { background: #ffebee; }
-.status-badge.archived { background: #f5f5f5; }
-.priority { padding: 2px 8px; border-radius: 12px; font-size: 12px; background: #fff3e0; }
-.priority.high { background: #ffebee; color: #d32f2f; }
-.task-card h3 { font-size: 16px; margin-bottom: 4px; }
-.meta { color: var(--color-text-secondary); font-size: 13px; }
-.empty { text-align: center; padding: 40px; color: var(--color-text-secondary); }
+.task-card h3 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+.task-meta { color: var(--color-text-secondary); font-size: 13px; }
 .pagination { display: flex; justify-content: center; align-items: center; gap: 16px; margin-top: 24px; }
 .pagination button { padding: 6px 16px; border: 1px solid var(--color-border); border-radius: var(--radius); background: var(--color-surface); cursor: pointer; }
 .pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn { padding: 8px 16px; border: 1px solid var(--color-border); border-radius: var(--radius); background: var(--color-surface); cursor: pointer; font-size: 14px; text-decoration: none; display: inline-block; }
 .btn-primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.btn-sm { padding: 6px 14px; font-size: 13px; }
 </style>

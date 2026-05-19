@@ -1,7 +1,10 @@
 <template>
   <div class="dashboard">
     <header class="header">
-      <h1>Codex 自动化代码交付平台</h1>
+      <div>
+        <h1>Codex 自动化代码交付平台</h1>
+        <p class="subtitle">开发运维控制台</p>
+      </div>
       <div class="project-selector">
         <select v-model="selectedProjectId" @change="onProjectChange">
           <option value="">所有项目</option>
@@ -9,7 +12,7 @@
             {{ p.display_name || p.name }}
           </option>
         </select>
-        <router-link to="/projects" class="btn-link">项目管理</router-link>
+        <router-link to="/projects" class="btn btn-primary btn-sm">项目管理</router-link>
       </div>
     </header>
 
@@ -33,39 +36,41 @@
     </section>
 
     <section class="projects-overview">
-      <h2>项目概览</h2>
-      <div class="project-grid">
+      <h2 class="section-title">项目概览</h2>
+      <div class="project-grid" v-if="projectStore.activeProjects.length > 0">
         <div
           v-for="p in projectStore.activeProjects"
           :key="p.id"
-          class="project-card"
+          class="project-card card"
           @click="$router.push(`/projects/${p.id}`)"
         >
           <h3>{{ p.display_name || p.name }}</h3>
           <p class="branch">{{ p.current_branch }}</p>
           <p class="meta">{{ p.task_count }} 个任务</p>
         </div>
-        <div v-if="projectStore.activeProjects.length === 0" class="empty">
-          暂无项目，去<router-link to="/projects">创建项目</router-link>
-        </div>
+      </div>
+      <div v-else class="empty-state">
+        <p>暂无项目</p>
+        <router-link to="/projects" class="btn btn-primary btn-sm" style="margin-top: 12px; display: inline-block;">创建项目</router-link>
       </div>
     </section>
 
     <section class="recent-activity" v-if="recentEvents.length">
-      <h2>最近活动</h2>
-      <div class="timeline">
+      <h2 class="section-title">最近活动</h2>
+      <div class="card">
         <div v-for="e in recentEvents" :key="e.id" class="event-item">
           <span class="event-type">{{ e.event_type }}</span>
           <span class="event-msg">{{ e.message }}</span>
           <span class="event-time">{{ new Date(e.created_at).toLocaleString() }}</span>
         </div>
+        <div v-if="recentEvents.length === 0" class="empty-state">暂无活动</div>
       </div>
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useProjectStore } from '../stores/projectStore'
 import { useTaskStore } from '../stores/taskStore'
 import client from '../services/api'
@@ -121,27 +126,29 @@ function onProjectChange() {
 </script>
 
 <style scoped>
-.dashboard { max-width: 1200px; margin: 0 auto; padding: 24px; }
-.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.dashboard { max-width: 1200px; margin: 0 auto; padding: 32px 24px; }
+.header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 32px; gap: 16px; }
+.header h1 { font-size: 28px; font-weight: 700; }
+.subtitle { color: var(--color-text-secondary); font-size: 14px; margin-top: 2px; }
 .project-selector { display: flex; gap: 12px; align-items: center; }
-.project-selector select { padding: 8px 12px; border: 1px solid var(--color-border); border-radius: var(--radius); }
-.btn-link { color: var(--color-primary); text-decoration: none; }
-.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px; }
-.stat-card { background: var(--color-surface); border-radius: var(--radius); padding: 20px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.project-selector select { padding: 8px 12px; border: 1px solid var(--color-border); border-radius: var(--radius); font-size: 14px; min-width: 160px; }
+.section-title { font-size: 18px; font-weight: 600; margin-bottom: 16px; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 40px; }
+.stat-card { background: var(--color-surface); border-radius: var(--radius-lg); padding: 24px 16px; text-align: center; box-shadow: var(--shadow-sm); border: 1px solid var(--color-border); }
 .stat-value { display: block; font-size: 32px; font-weight: 700; color: var(--color-primary); }
 .stat-label { display: block; margin-top: 4px; color: var(--color-text-secondary); font-size: 14px; }
 .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
-.project-card { background: var(--color-surface); border-radius: var(--radius); padding: 20px; cursor: pointer; border: 1px solid var(--color-border); }
-.project-card:hover { border-color: var(--color-primary); }
-.project-card h3 { margin-bottom: 8px; }
-.branch { color: var(--color-text-secondary); font-size: 13px; font-family: monospace; }
+.project-card { cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
+.project-card:hover { border-color: var(--color-primary); box-shadow: var(--shadow-md); }
+.project-card h3 { margin-bottom: 8px; font-size: 16px; }
+.branch { color: var(--color-primary); font-size: 13px; font-family: monospace; }
 .meta { color: var(--color-text-secondary); font-size: 13px; margin-top: 8px; }
-.empty { grid-column: 1 / -1; text-align: center; padding: 40px; color: var(--color-text-secondary); }
-.recent-activity { margin-top: 32px; }
-.timeline { background: var(--color-surface); border-radius: var(--radius); padding: 16px; }
-.event-item { display: flex; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--color-border); font-size: 14px; }
+.recent-activity { margin-top: 40px; }
+.event-item { display: flex; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--color-border); font-size: 14px; }
 .event-item:last-child { border-bottom: none; }
-.event-type { font-weight: 600; min-width: 100px; }
+.event-type { font-weight: 600; min-width: 100px; text-transform: capitalize; }
 .event-msg { flex: 1; color: var(--color-text-secondary); }
 .event-time { color: var(--color-text-secondary); font-size: 12px; white-space: nowrap; }
+.btn-primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.btn-sm { padding: 6px 14px; font-size: 13px; }
 </style>

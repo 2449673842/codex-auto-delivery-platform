@@ -8,7 +8,7 @@
     <button class="btn btn-primary" @click="showForm = true">+ 新建项目</button>
 
     <div v-if="showForm" class="form-overlay" @click.self="showForm = false">
-      <div class="form-panel">
+      <div class="form-panel card">
         <h2>{{ editingId ? '编辑项目' : '新建项目' }}</h2>
         <form @submit.prevent="handleSubmit">
           <label>项目名称 *<input v-model="form.name" required /></label>
@@ -30,7 +30,7 @@
       <div
         v-for="p in projectStore.projects"
         :key="p.id"
-        class="project-card"
+        class="project-card card"
       >
         <h3>{{ p.display_name || p.name }}</h3>
         <p class="branch">{{ p.current_branch }}</p>
@@ -42,8 +42,8 @@
           <router-link :to="`/tasks?project_id=${p.id}`" class="btn btn-sm">查看任务</router-link>
         </div>
       </div>
-      <div v-if="projectStore.projects.length === 0" class="empty">
-        暂无项目
+      <div v-if="projectStore.projects.length === 0" class="empty-state">
+        <p>暂无项目</p>
       </div>
     </div>
   </div>
@@ -112,24 +112,21 @@ async function handleDelete(id: number) {
 </script>
 
 <style scoped>
-.page { max-width: 1200px; margin: 0 auto; padding: 24px; }
+.page { max-width: 1200px; margin: 0 auto; padding: 32px 24px; }
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.page-header h1 { font-size: 24px; font-weight: 700; }
 .back-link { color: var(--color-text-secondary); font-size: 14px; }
 .form-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; z-index: 100; }
-.form-panel { background: var(--color-surface); border-radius: var(--radius); padding: 32px; width: 500px; max-width: 90vw; }
+.form-panel { padding: 32px; width: 500px; max-width: 90vw; }
+.form-panel h2 { font-size: 18px; margin-bottom: 20px; }
 .form-panel form { display: flex; flex-direction: column; gap: 12px; }
-.form-panel label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--color-text-secondary); }
-.form-panel input { padding: 8px 12px; border: 1px solid var(--color-border); border-radius: var(--radius); font-size: 14px; }
 .form-actions { display: flex; gap: 8px; margin-top: 8px; }
 .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-top: 16px; }
-.project-card { background: var(--color-surface); border-radius: var(--radius); padding: 20px; border: 1px solid var(--color-border); }
-.project-card h3 { margin-bottom: 8px; }
+.project-card h3 { margin-bottom: 8px; font-size: 16px; }
 .branch { color: var(--color-primary); font-size: 13px; font-family: monospace; }
 .meta { color: var(--color-text-secondary); font-size: 13px; margin-top: 4px; }
 .card-actions { display: flex; gap: 8px; margin-top: 16px; }
-.empty { grid-column: 1 / -1; text-align: center; padding: 40px; color: var(--color-text-secondary); }
-.btn { padding: 8px 16px; border: 1px solid var(--color-border); border-radius: var(--radius); background: var(--color-surface); cursor: pointer; font-size: 14px; }
 .btn-primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
-.btn-danger { color: #d32f2f; border-color: #d32f2f; }
+.btn-danger { color: var(--color-danger); border-color: var(--color-danger); }
 .btn-sm { padding: 4px 12px; font-size: 13px; }
 </style>
