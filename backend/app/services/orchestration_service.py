@@ -9,6 +9,8 @@ from app.models.agent_run import AgentRun
 from app.models.agent_review import AgentReview
 from app.models.approval_decision import ApprovalDecision
 from app.models.agent_profile import AgentProfile
+
+MSG_TASK_NOT_FOUND = "Task not found"
 from app.models.task_artifact import TaskArtifact
 from app.schemas.task import SubmitResultRequest as TaskSubmitResultRequest
 from app.schemas.orchestration import (
@@ -27,7 +29,7 @@ import hashlib
 async def get_orchestration_status(db: AsyncSession, task_id: int) -> OrchestrationStatusResponse:
     task = await db.get(Task, task_id)
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail=MSG_TASK_NOT_FOUND)
 
     next_action, can_continue, blocked = await _decide_next_action(db, task)
     
@@ -55,56 +57,48 @@ async def get_orchestration_status(db: AsyncSession, task_id: int) -> Orchestrat
 
 
 async def _decide_next_action(db: AsyncSession, task: Task) -> tuple[str | None, bool, list[str]]:
-    """Decide the next action based on task status (synchronous helper)."""
-    blocked = []
+    """Decide the next action based on task status."""
     status = task.status
 
-    if status == TaskStatus.ARCHIVED.value:
-        return None, False, ["Task is archived"]
-
+    if status == TaskStatus.DISPATCHED.value:
+        return await _dispatched_next_action(db, task)
     if status == TaskStatus.DRAFT.value:
         return "generate_ticket", True, []
-
     if status == TaskStatus.TICKET_READY.value:
         return "dispatch", True, []
-
-    if status == TaskStatus.DISPATCHED.value:
-        # Check latest AgentRun status
-        latest_run = (await db.execute(
-            select(AgentRun).where(AgentRun.task_id == task.id).order_by(desc(AgentRun.id)).limit(1)
-        )).scalar_one_or_none()
-        if not latest_run:
-            return "create_agent_run", True, []
-        if latest_run.status in (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value):
-            return "wait_agent_result", False, ["AgentRun is " + latest_run.status]
-        if latest_run.status == AgentRunStatus.SUCCEEDED.value:
-            return "submit_result", True, []
-        if latest_run.status in (AgentRunStatus.FAILED.value, AgentRunStatus.CANCELED.value):
-            return "agent_failed", False, ["AgentRun is " + latest_run.status]
-        return "create_agent_run", True, []
-
     if status == TaskStatus.RESULT_SUBMITTED.value:
         return "start_review", True, []
-
     if status == TaskStatus.REVIEWING.value:
         return "evaluate_approval", True, []
-
     if status == TaskStatus.HUMAN_REQUIRED.value:
         return None, False, ["Human approval required"]
-
     if status == TaskStatus.APPROVED.value:
         return None, False, ["Approved, waiting for archive"]
-
-    if status in (TaskStatus.REJECTED.value, TaskStatus.CHANGES_REQUESTED.value):
-        return None, False, [f"Task is in '{status}' state"]
-
+    if status == TaskStatus.ARCHIVED.value or status in (TaskStatus.REJECTED.value, TaskStatus.CHANGES_REQUESTED.value):
+        return None, False, [f"Task is '{status}' — no auto action"]
     return None, False, [f"Unknown state '{status}'"]
+
+
+async def _dispatched_next_action(db: AsyncSession, task: Task) -> tuple[str | None, bool, list[str]]:
+    """Determine next action for dispatched state based on latest AgentRun."""
+    latest_run = (await db.execute(
+        select(AgentRun).where(AgentRun.task_id == task.id).order_by(desc(AgentRun.id)).limit(1)
+    )).scalar_one_or_none()
+    if not latest_run:
+        return "create_agent_run", True, []
+    if latest_run.status in (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value):
+        return "wait_agent_result", False, ["AgentRun is " + latest_run.status]
+    if latest_run.status == AgentRunStatus.SUCCEEDED.value:
+        return "submit_result", True, []
+    if latest_run.status in (AgentRunStatus.FAILED.value, AgentRunStatus.CANCELED.value):
+        return "agent_failed", False, ["AgentRun is " + latest_run.status]
+    return "create_agent_run", True, []
 
 
 async def orchestration_step(db: AsyncSession, task_id: int, actor: str = "system") -> OrchestrationStepResponse:
     task = await db.get(Task, task_id)
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail=MSG_TASK_NOT_FOUND)
 
     before = task.status
     events_created = []
@@ -302,7 +296,7 @@ async def _do_step_evaluate(db: AsyncSession, task: Task, actor: str) -> dict[st
 async def orchestration_run(db: AsyncSession, task_id: int, max_steps: int, actor: str = "system") -> OrchestrationRunResponse:
     task = await db.get(Task, task_id)
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail=MSG_TASK_NOT_FOUND)
 
     if task.status == TaskStatus.ARCHIVED.value:
         raise HTTPException(status_code=409, detail="Cannot orchestrate archived task")

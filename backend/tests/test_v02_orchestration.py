@@ -117,7 +117,7 @@ async def test_running_agent_run_not_faked(client, task):
 async def test_agent_succeeded_then_result_submitted(client, task, agent):
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
     await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
-    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
     # Get the agent run ID from the API
     r2 = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
     runs = r2.json()["data"]
@@ -319,7 +319,7 @@ async def test_dispatched_running_run_returns_wait(client, task, agent):
 async def test_dispatched_succeeded_run_returns_submit_result(client, task, agent):
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
     await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
-    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
     # Get agent run and submit result
     r2 = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
     rid = r2.json()["data"][0]["id"]
@@ -346,7 +346,6 @@ async def test_orchestration_cross_task_run(client, project, agent):
     await client.post(BASE + f"/tasks/{t1['id']}/dispatch", json=t_actor)
     await client.post(BASE + f"/tasks/{t1['id']}/orchestration/step")
     r3 = await client.get(BASE + f"/tasks/{t1['id']}/agent-runs")
-    run_a = r3.json()["data"][0]
     # Task B's orchestration should not see Task A's run
     r4 = await client.get(BASE + f"/tasks/{t2['id']}/orchestration/status")
     assert r4.json()["data"]["latest_agent_run_id"] is None
@@ -378,7 +377,7 @@ async def test_dispatched_running_run_returns_wait_exact(client, task, agent):
 async def test_dispatched_failed_run_returns_agent_failed(client, task, agent):
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
     await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
-    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
     r2 = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
     rid = r2.json()["data"][0]["id"]
     # Set run to failed
@@ -392,7 +391,7 @@ async def test_dispatched_failed_run_returns_agent_failed(client, task, agent):
 async def test_failed_agent_run_step_stops(client, task, agent):
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
     await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
-    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
     r2 = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
     rid = r2.json()["data"][0]["id"]
     await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
