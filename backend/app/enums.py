@@ -92,6 +92,7 @@ class AgentProvider(str, Enum):
     OPENAI = "openai"
     CLAUDE = "claude"
     LOCAL = "local"
+    SANDBOX = "sandbox"
     MANUAL = "manual"
 
 

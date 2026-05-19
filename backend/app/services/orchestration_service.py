@@ -221,24 +221,18 @@ async def _do_step_create_agent_run(db: AsyncSession, task: Task, actor: str) ->
         actor=actor, message=f"AgentRun #{run.id} auto-created",
     )
 
-    # Start AgentRun (queued -> running)
-    from app.schemas.agent_run import AgentRunUpdate
-    update_data = AgentRunUpdate(status="running")
-    await update_agent_run(db, run.id, update_data, task.id)
-    events.append("agent_run_auto_started")
-    await event_service.create_event(
-        db, task_id=task.id, event_type="agent_run_auto_started",
-        actor=actor, message=f"AgentRun #{run.id} auto-started",
-    )
-
-    # Must stop - can't fake result
-    await event_service.create_event(
-        db, task_id=task.id, event_type="agent_result_waiting",
-        actor=actor, message="Waiting for agent result",
-    )
-    events.append("agent_result_waiting")
-
-    return {"action": "create_agent_run", "events": events, "stopped": True, "stop_reason": "waiting_for_agent_result"}
+    # Dispatch through AI Provider (queued → running → succeeded)
+    from app.services.ai_provider_service import dispatch_agent_run
+    try:
+        await dispatch_agent_run(db, run.id, actor)
+        events.append("agent_run_auto_started")
+        events.append("agent_run_succeeded")
+        events.append("artifact_uploaded")
+        # AgentRun succeeded, next step will handle result_submitted
+        return {"action": "create_and_run_agent", "events": events, "stopped": False, "stop_reason": None}
+    except Exception as e:
+        events.append("agent_run_failed")
+        return {"action": "agent_failed", "events": events, "stopped": True, "stop_reason": "agent_failed"}
 
 
 async def _do_step_start_review(db: AsyncSession, task: Task, actor: str):
