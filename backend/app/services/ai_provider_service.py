@@ -1,0 +1,126 @@
+"""AI Provider dispatch service.
+
+Dispatches AgentRun execution through the appropriate provider.
+In v0.3, only SandboxProvider is available.
+"""
+
+from fastapi import HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.agent_run import AgentRun
+from app.models.task_artifact import TaskArtifact
+from app.schemas.ai_provider import AgentRunResult
+from app.schemas.agent_run import AgentRunUpdate, SubmitResultRequest
+from app.services.agent_run_service import update_agent_run
+from app.services.sandbox_provider import SandboxProvider
+from app.services.event_service import create_event
+from app.enums import AgentRunStatus
+import hashlib
+
+
+async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system") -> AgentRun:
+    """Execute an AgentRun through the provider and update its status.
+
+    Flow: queued → running → succeeded (or failed on error)
+    On success: writes output_summary, output_log, raw_result_json, creates artifacts.
+    On failure: marks as failed, stops further progression.
+    """
+    run = await db.get(AgentRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="AgentRun not found")
+
+    if run.status != AgentRunStatus.QUEUED.value:
+        raise HTTPException(status_code=409, detail=f"Cannot dispatch AgentRun in status '{run.status}'")
+
+    # Step 1: queued → running
+    update_data = AgentRunUpdate(status=AgentRunStatus.RUNNING.value)
+    await update_agent_run(db, run.id, update_data, run.task_id)
+
+    await create_event(
+        db, task_id=run.task_id, event_type="agent_run_started",
+        actor=actor, message=f"AgentRun #{run.id} started by {actor}",
+    )
+
+    # Step 2: Execute via Sandbox provider (v0.3 only)
+    try:
+        provider = SandboxProvider()
+        result = await provider.execute(run)
+    except Exception as e:
+        # Mark as failed (direct model update)
+        run.status = AgentRunStatus.FAILED.value
+        run.error_message = f"Provider execution failed: {str(e)}"
+        await db.flush()
+        await create_event(
+            db, task_id=run.task_id, event_type="agent_run_failed",
+            actor=actor, message=f"AgentRun #{run.id} failed: {str(e)}",
+        )
+        raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} execution failed: {str(e)}")
+
+    # Step 3: running → succeeded with results (direct model update)
+    run.status = AgentRunStatus.SUCCEEDED.value
+    run.output_summary = result.output_summary
+    run.output_log = result.output_log
+    run.raw_result_json = result.raw_result_json
+    await db.flush()
+
+    await create_event(
+        db, task_id=run.task_id, event_type="agent_run_succeeded",
+        actor=actor, message=f"AgentRun #{run.id} succeeded: {result.output_summary[:80]}",
+    )
+
+    # Step 4: Create artifacts from output
+    await _create_artifacts_from_result(db, run, result)
+
+    return run
+
+
+async def _create_artifacts_from_result(db: AsyncSession, run: AgentRun, result: AgentRunResult):
+    """Create TaskArtifact entries from provider results."""
+    artifacts = []
+
+    if result.plan_md:
+        content = result.plan_md
+        sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        artifacts.append(TaskArtifact(
+            task_id=run.task_id, artifact_type="agent_output_log",
+            content=content, filename=f"agent_run_{run.id}_plan.md",
+            size_bytes=len(content.encode("utf-8")), sha256=sha256,
+        ))
+
+    if result.patch_diff:
+        content = result.patch_diff
+        sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        artifacts.append(TaskArtifact(
+            task_id=run.task_id, artifact_type="agent_output_diff",
+            content=content, filename=f"agent_run_{run.id}_patch.diff",
+            size_bytes=len(content.encode("utf-8")), sha256=sha256,
+        ))
+
+    if result.review_md:
+        content = result.review_md
+        sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        artifacts.append(TaskArtifact(
+            task_id=run.task_id, artifact_type="agent_review_report",
+            content=content, filename=f"agent_run_{run.id}_review.md",
+            size_bytes=len(content.encode("utf-8")), sha256=sha256,
+        ))
+
+    if result.raw_result_json:
+        content = result.raw_result_json
+        sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        artifacts.append(TaskArtifact(
+            task_id=run.task_id, artifact_type="agent_raw_result",
+            content=content, filename=f"agent_run_{run.id}_result.json",
+            size_bytes=len(content.encode("utf-8")), sha256=sha256,
+        ))
+
+    for art in artifacts:
+        db.add(art)
+
+    if artifacts:
+        await db.flush()
+        await create_event(
+            db, task_id=run.task_id, event_type="artifact_uploaded",
+            actor=f"agent_run:{run.id}",
+            message=f"{len(artifacts)} artifact(s) created from AgentRun #{run.id}",
+        )

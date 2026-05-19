@@ -101,8 +101,7 @@ async def test_dispatched_step_creates_agent_run(client, task, agent):
     r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
     assert r.status_code == 200
     d = r.json()["data"]
-    assert d["stopped"] is True
-    assert d["stop_reason"] == "waiting_for_agent_result"
+    assert d["action_taken"] == "create_and_run_agent"
 
 @pytest.mark.asyncio
 async def test_running_agent_run_not_faked(client, task):
@@ -115,18 +114,11 @@ async def test_running_agent_run_not_faked(client, task):
 
 @pytest.mark.asyncio
 async def test_agent_succeeded_then_result_submitted(client, task, agent):
+    """v0.3: Sandbox auto-completes, step transitions to result_submitted"""
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
     await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
     await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
-    # Get the agent run ID from the API
-    r2 = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
-    runs = r2.json()["data"]
-    assert len(runs) > 0
-    rid = runs[0]["id"]
-    # Manually submit result
-    await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
-    await client.post(BASE + f"/tasks/{task['id']}/agent-runs/{rid}/submit-result", json={"status": "succeeded", "output_summary": "done"})
-    # Now step should go to result_submitted
+    # Sandbox auto-completed, next step submits result
     r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
     assert r.status_code == 200
     assert r.json()["data"]["after_status"] == "result_submitted"
@@ -210,15 +202,15 @@ async def test_run_max_steps_1(client, task):
     assert d["actions"] == ["generate_ticket"]
 
 @pytest.mark.asyncio
-async def test_run_stops_at_waiting_for_agent(client, task, agent):
+async def test_run_progresses_through_sandbox(client, task, agent):
+    """v0.3: Sandbox auto-completes, run progresses multiple steps"""
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
     await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
     r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/run", json={"max_steps": 10})
     assert r.status_code == 200
     d = r.json()["data"]
-    assert d["stopped"] is True
-    assert d["stop_reason"] == "waiting_for_agent_result"
-    assert d["steps_executed"] >= 1
+    assert d["actions"] is not None
+    assert len(d["actions"]) >= 2
 
 @pytest.mark.asyncio
 async def test_no_infinite_loop(client, task):
@@ -267,8 +259,8 @@ async def test_agent_run_auto_created_event(client, task, agent):
     r = await client.get(BASE + f"/tasks/{task['id']}/events")
     types = [e["event_type"] for e in r.json()["data"]]
     assert "agent_run_auto_created" in types
-    assert "agent_run_auto_started" in types
-    assert "agent_result_waiting" in types
+    assert "agent_run_started" in types
+    assert "artifact_uploaded" in types  # v0.3: Sandbox creates artifacts
 
 def test_orchestration_no_external_ai():
     """Verify orchestration doesn't call external AI"""
@@ -307,14 +299,6 @@ async def test_dispatched_no_run_returns_create_agent_run(client, task):
     assert r.json()["data"]["next_action"] == "create_agent_run"
 
 @pytest.mark.asyncio
-async def test_dispatched_running_run_returns_wait(client, task, agent):
-    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
-    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
-    await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
-    r = await client.get(BASE + f"/tasks/{task['id']}/orchestration/status")
-    # Engine stopped at waiting_for_agent_result, but next status check should show wait
-    assert r.json()["data"]["next_action"] in ("wait_agent_result", "create_agent_run")
-
 @pytest.mark.asyncio
 async def test_dispatched_succeeded_run_returns_submit_result(client, task, agent):
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
@@ -366,44 +350,8 @@ async def test_orchestration_cross_task_decision(client, project, agent):
 # ─── Failed AgentRun ───
 
 @pytest.mark.asyncio
-async def test_dispatched_running_run_returns_wait_exact(client, task, agent):
-    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
-    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
-    await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
-    r = await client.get(BASE + f"/tasks/{task['id']}/orchestration/status")
-    assert r.json()["data"]["next_action"] == "wait_agent_result"
-
 @pytest.mark.asyncio
-async def test_dispatched_failed_run_returns_agent_failed(client, task, agent):
-    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
-    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
-    await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
-    r2 = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
-    rid = r2.json()["data"][0]["id"]
-    # Set run to failed
-    await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
-    await client.post(BASE + f"/tasks/{task['id']}/agent-runs/{rid}/submit-result", json={"status": "failed", "error_message": "error"})
-    r = await client.get(BASE + f"/tasks/{task['id']}/orchestration/status")
-    assert r.json()["data"]["next_action"] == "agent_failed"
-    assert r.json()["data"]["can_auto_continue"] is False
-
 @pytest.mark.asyncio
-async def test_failed_agent_run_step_stops(client, task, agent):
-    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
-    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
-    await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
-    r2 = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
-    rid = r2.json()["data"][0]["id"]
-    await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
-    await client.post(BASE + f"/tasks/{task['id']}/agent-runs/{rid}/submit-result", json={"status": "failed", "error_message": "fail"})
-    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
-    assert r.status_code == 200
-    assert r.json()["data"]["stopped"] is True
-    assert r.json()["data"]["stop_reason"] == "agent_failed"
-
-
-# ─── Cross-task ownership ───
-
 @pytest.mark.asyncio
 async def test_cross_task_cannot_use_other_run(client, project, agent):
     """Task B cannot use Task A's succeeded AgentRun for submit_result"""
@@ -445,21 +393,97 @@ async def test_cross_task_cannot_use_other_decision(client, project, agent):
 
 
 @pytest.mark.asyncio
-async def test_running_agent_run_duplicate_step_guard(client, task, agent):
-    """Step on running AgentRun should not create a second AgentRun"""
+async def test_no_duplicate_agent_run(client, task, agent):
+    """v0.3: Second step should not create another AgentRun"""
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
     await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
-    # First step creates AgentRun
     await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
-    # Check AgentRun count
     r = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
     assert len(r.json()["data"]) == 1
-    # Second step should NOT create another one
+    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    assert r.status_code == 200
+    r = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
+    assert len(r.json()["data"]) == 1
+
+
+# ─── Restored v0.2 tests (adapted for v0.3: create AgentRun via API, not step) ───
+
+@pytest.mark.asyncio
+async def test_existing_running_run_returns_wait(client, task, agent):
+    """dispatched + existing running AgentRun -> wait_agent_result"""
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    # Create AgentRun directly via API (queued state)
+    r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "plan"})
+    rid = r.json()["data"]["id"]
+    # PATCH to running
+    await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    # Now check status
+    r = await client.get(BASE + f"/tasks/{task['id']}/orchestration/status")
+    assert r.json()["data"]["next_action"] == "wait_agent_result"
+    assert r.json()["data"]["can_auto_continue"] is False
+
+
+@pytest.mark.asyncio
+async def test_existing_failed_run_returns_agent_failed(client, task, agent):
+    """dispatched + existing failed AgentRun -> agent_failed"""
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "plan"})
+    rid = r.json()["data"]["id"]
+    await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    await client.post(BASE + f"/tasks/{task['id']}/agent-runs/{rid}/submit-result", json={"status": "failed", "error_message": "test error"})
+    r = await client.get(BASE + f"/tasks/{task['id']}/orchestration/status")
+    assert r.json()["data"]["next_action"] == "agent_failed"
+    assert r.json()["data"]["can_auto_continue"] is False
+
+
+@pytest.mark.asyncio
+async def test_existing_failed_run_step_stops(client, task, agent):
+    """failed AgentRun step -> stopped, stop_reason=agent_failed"""
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "plan"})
+    rid = r.json()["data"]["id"]
+    await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    await client.post(BASE + f"/tasks/{task['id']}/agent-runs/{rid}/submit-result", json={"status": "failed", "error_message": "err"})
     r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
     assert r.status_code == 200
     assert r.json()["data"]["stopped"] is True
-    assert r.json()["data"]["stop_reason"] == "waiting_for_agent_result"
-    assert r.json()["data"]["action_taken"] == "wait_agent_result"
-    # AgentRun count should still be 1
+    assert r.json()["data"]["stop_reason"] == "agent_failed"
+
+
+@pytest.mark.asyncio
+async def test_existing_duplicate_run_guard_no_create(client, task, agent):
+    """running run exists -> step should not create a second AgentRun"""
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "plan"})
+    rid = r.json()["data"]["id"]
+    await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
     r = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
     assert len(r.json()["data"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_existing_canceled_run_returns_agent_failed(client, task, agent):
+    """dispatched + existing canceled AgentRun -> agent_failed"""
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "plan"})
+    rid = r.json()["data"]["id"]
+    await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "canceled"})
+    r = await client.get(BASE + f"/tasks/{task['id']}/orchestration/status")
+    assert r.json()["data"]["next_action"] == "agent_failed"
+
+
+@pytest.mark.asyncio
+async def test_existing_queued_run_returns_wait(client, task, agent):
+    """dispatched + existing queued AgentRun -> wait_agent_result"""
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "plan"})
+    rid = r.json()["data"]["id"]
+    r = await client.get(BASE + f"/tasks/{task['id']}/orchestration/status")
+    assert r.json()["data"]["next_action"] == "wait_agent_result"

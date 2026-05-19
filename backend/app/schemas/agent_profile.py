@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 class AgentProfileCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     agent_type: str = Field(..., pattern=r'^(planner|executor|reviewer|test)$')
-    provider: str = Field(..., pattern=r'^(codex|openai|claude|local|manual)$')
+    provider: str = Field(..., pattern=r'^(codex|openai|claude|local|manual|sandbox)$')
     model_name: str | None = None
     secret_ref: str | None = None
     enabled: bool = True
@@ -17,7 +17,7 @@ class AgentProfileCreate(BaseModel):
 class AgentProfileUpdate(BaseModel):
     name: str | None = None
     agent_type: str | None = Field(None, pattern=r'^(planner|executor|reviewer|test)$')
-    provider: str | None = Field(None, pattern=r'^(codex|openai|claude|local|manual)$')
+    provider: str | None = Field(None, pattern=r'^(codex|openai|claude|local|manual|sandbox)$')
     model_name: str | None = None
     secret_ref: str | None = None
     enabled: bool | None = None
