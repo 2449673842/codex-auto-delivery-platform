@@ -21,6 +21,10 @@ class TaskStatusTransition(BaseModel):
     message: str | None = None
 
 
+class SubmitResultRequest(TaskStatusTransition):
+    result_summary: str | None = None
+
+
 class TaskResponse(BaseModel):
     id: int
     project_id: int

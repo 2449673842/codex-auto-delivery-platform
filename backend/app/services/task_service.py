@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.project import Project
 from app.models.task import Task
-from app.schemas.task import TaskCreate, TaskStatusTransition
+from app.schemas.task import TaskCreate, TaskStatusTransition, SubmitResultRequest
 from app.services.event_service import create_event
 from app.services.ticket_renderer import render_ticket
 from app.enums import ALLOWED_TRANSITIONS, TaskStatus
@@ -123,9 +123,12 @@ async def dispatch_task(
 
 
 async def submit_result(
-    db: AsyncSession, task_id: int, body: TaskStatusTransition
+    db: AsyncSession, task_id: int, body: SubmitResultRequest
 ) -> Task:
     task = await get_task(db, task_id)
+    if body.result_summary:
+        task.result_summary = body.result_summary
+        await db.flush()
     return await _transition(
         db, task, TaskStatus.RESULT_SUBMITTED, body.actor, body.message
     )

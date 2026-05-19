@@ -2,7 +2,7 @@
   <div class="page" v-if="project">
     <header class="page-header">
       <h1>{{ project.display_name || project.name }}</h1>
-      <router-link :to="`/tasks?project_id=${project.id}`" class="btn-link">查看任务 →</router-link>
+      <router-link :to="`/tasks?project_id=${project.id}`" class="back-link">查看任务 →</router-link>
     </header>
 
     <div class="tabs">
@@ -12,7 +12,7 @@
       <button :class="{ active: tab === 'integrate' }" @click="tab = 'integrate'">CI & 部署</button>
     </div>
 
-    <form @submit.prevent="handleSave" class="config-form">
+    <form @submit.prevent="handleSave" class="config-form card">
       <div v-show="tab === 'basic'">
         <label>项目名称<input v-model="form.name" /></label>
         <label>展示名<input v-model="form.display_name" /></label>
@@ -77,15 +77,15 @@ async function handleSave() {
 </script>
 
 <style scoped>
-.page { max-width: 800px; margin: 0 auto; padding: 24px; }
+.page { max-width: 800px; margin: 0 auto; padding: 32px 24px; }
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-.btn-link { color: var(--color-primary); text-decoration: none; }
+.page-header h1 { font-size: 24px; font-weight: 700; }
+.back-link { color: var(--color-primary); text-decoration: none; font-size: 14px; }
 .tabs { display: flex; gap: 0; border-bottom: 2px solid var(--color-border); margin-bottom: 24px; }
-.tabs button { padding: 10px 20px; border: none; background: none; cursor: pointer; font-size: 14px; color: var(--color-text-secondary); border-bottom: 2px solid transparent; margin-bottom: -2px; }
+.tabs button { padding: 10px 20px; border: none; background: none; cursor: pointer; font-size: 14px; color: var(--color-text-secondary); border-bottom: 2px solid transparent; margin-bottom: -2px; transition: color 0.15s; }
 .tabs button.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
-.config-form { display: flex; flex-direction: column; gap: 16px; }
-.config-form label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--color-text-secondary); }
-.config-form input { padding: 8px 12px; border: 1px solid var(--color-border); border-radius: var(--radius); font-size: 14px; }
+.tabs button:hover { color: var(--color-primary); }
+.config-form { display: flex; flex-direction: column; gap: 16px; padding: 24px; }
 .btn-primary { background: var(--color-primary); color: #fff; border: none; padding: 10px 20px; border-radius: var(--radius); cursor: pointer; font-size: 14px; align-self: flex-start; }
-.loading { text-align: center; padding: 40px; color: var(--color-text-secondary); }
+.loading { text-align: center; padding: 60px; color: var(--color-text-secondary); }
 </style>

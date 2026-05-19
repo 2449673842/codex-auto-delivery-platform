@@ -2,13 +2,14 @@
   <div class="page">
     <header class="page-header">
       <h1>新建任务</h1>
-      <router-link :to="`/tasks?project_id=${projectId}`" class="back-link">← 返回任务列表</router-link>
+      <router-link :to="backLink" class="back-link">← 返回任务列表</router-link>
     </header>
 
-    <form @submit.prevent="handleCreate" class="create-form">
+    <form @submit.prevent="handleCreate" class="create-form card">
       <label>
         所属项目 *
         <select v-model="form.project_id" required :disabled="!!route.query.project_id">
+          <option value="">请选择项目</option>
           <option v-for="p in projectStore.activeProjects" :key="p.id" :value="p.id">
             {{ p.display_name || p.name }}
           </option>
@@ -37,7 +38,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProjectStore } from '../stores/projectStore'
 import { useTaskStore } from '../stores/taskStore'
@@ -47,6 +48,12 @@ const router = useRouter()
 const projectStore = useProjectStore()
 const taskStore = useTaskStore()
 const submitting = ref(false)
+
+const projectId = computed(() => Number(route.query.project_id) || '')
+const backLink = computed(() => {
+  const pid = projectId.value
+  return pid ? `/tasks?project_id=${pid}` : '/tasks'
+})
 
 const form = ref({
   project_id: Number(route.query.project_id) || '',
@@ -83,12 +90,11 @@ async function handleCreate() {
 </script>
 
 <style scoped>
-.page { max-width: 700px; margin: 0 auto; padding: 24px; }
+.page { max-width: 700px; margin: 0 auto; padding: 32px 24px; }
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.page-header h1 { font-size: 24px; font-weight: 700; }
 .back-link { color: var(--color-text-secondary); font-size: 14px; }
-.create-form { display: flex; flex-direction: column; gap: 16px; }
-.create-form label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--color-text-secondary); }
-.create-form input, .create-form select, .create-form textarea { padding: 8px 12px; border: 1px solid var(--color-border); border-radius: var(--radius); font-size: 14px; font-family: inherit; }
+.create-form { display: flex; flex-direction: column; gap: 16px; padding: 24px; }
 .create-form textarea { resize: vertical; }
 .btn-primary { background: var(--color-primary); color: #fff; border: none; padding: 10px 20px; border-radius: var(--radius); cursor: pointer; font-size: 14px; align-self: flex-start; }
 .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
