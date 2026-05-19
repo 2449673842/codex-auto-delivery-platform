@@ -7,19 +7,13 @@ from app.config import settings
 from app.database import init_db
 
 
-# ─── Lifespan ─────────────────────────────────────────
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 启动：初始化数据库
     await init_db()
     print(f"[startup] listening on {settings.host}:{settings.port}")
     yield
-    # 关闭：无需额外清理
     print("[shutdown] bye")
 
-
-# ─── App ───────────────────────────────────────────────
 
 app = FastAPI(
     title="Codex 自动化代码交付平台",
@@ -27,8 +21,6 @@ app = FastAPI(
     description="多项目自动化代码交付平台 MVP",
     lifespan=lifespan,
 )
-
-# ─── CORS ───────────────────────────────────────────────
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,18 +30,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from app.routers import health, projects, tasks, artifacts, events, reviews
 
-# ─── Routers（后续在此注册）─────────────────────────────
-# from app.routers import projects, tasks, artifacts, events, reviews
-
-
-# ─── Health ─────────────────────────────────────────────
-
-@app.get("/api/health")
-def health() -> dict:
-    return {
-        "status": "ok",
-        "service": "codex-auto-delivery",
-        "version": "0.1.0",
-        "db": settings.db_url,
-    }
+app.include_router(health.router)
+app.include_router(projects.router)
+app.include_router(tasks.router)
+app.include_router(artifacts.router)
+app.include_router(events.router)
+app.include_router(reviews.router)
