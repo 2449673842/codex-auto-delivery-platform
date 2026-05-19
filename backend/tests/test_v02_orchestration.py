@@ -270,8 +270,7 @@ async def test_agent_run_auto_created_event(client, task, agent):
     assert "agent_run_auto_started" in types
     assert "agent_result_waiting" in types
 
-@pytest.mark.asyncio
-async def test_orchestration_no_external_ai(client):
+def test_orchestration_no_external_ai():
     """Verify orchestration doesn't call external AI"""
     import os
     src_path = os.path.join(os.path.dirname(__file__), '../app/services/orchestration_service.py')
@@ -281,8 +280,7 @@ async def test_orchestration_no_external_ai(client):
         assert pattern not in src, f'orchestration should not call {pattern}'
 
 
-@pytest.mark.asyncio
-async def test_orchestration_no_secret_or_shell(client):
+def test_orchestration_no_secret_or_shell():
     """Verify orchestration doesn't read secret or execute shell"""
     import os
     src_path = os.path.join(os.path.dirname(__file__), '../app/services/orchestration_service.py')
