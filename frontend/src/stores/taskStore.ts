@@ -34,6 +34,7 @@ export const STATUS_LABELS: Record<string, string> = {
   changes_requested: '已要求修改',
   approved: '已通过',
   rejected: '已拒绝',
+  human_required: '需要人工审批',
   archived: '已归档',
 }
 

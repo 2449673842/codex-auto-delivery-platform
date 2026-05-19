@@ -16,6 +16,7 @@ const LABELS: Record<string, string> = {
   changes_requested: '要求修改',
   approved: '已通过',
   rejected: '已拒绝',
+  human_required: '需要人工审批',
   archived: '已归档',
 }
 
@@ -32,5 +33,6 @@ const label = computed(() => LABELS[props.status] || props.status)
 .status-badge.changes_requested { background: #fff8e1; color: #f57f17; }
 .status-badge.approved { background: #e8f5e9; color: #2e7d32; }
 .status-badge.rejected { background: #ffebee; color: #c62828; }
+.status-badge.human_required { background: #fce4ec; color: #c62828; }
 .status-badge.archived { background: #f5f5f5; color: #616161; }
 </style>

@@ -33,6 +33,16 @@ const router = createRouter({
       name: 'task-detail',
       component: () => import('../pages/TaskDetailPage.vue'),
     },
+    {
+      path: '/agents',
+      name: 'agent-list',
+      component: () => import('../pages/AgentListPage.vue'),
+    },
+    {
+      path: '/approval-policies',
+      name: 'approval-policies',
+      component: () => import('../pages/ApprovalPolicyPage.vue'),
+    },
   ],
 })
 
