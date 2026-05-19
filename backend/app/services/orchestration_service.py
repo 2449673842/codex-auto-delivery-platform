@@ -69,7 +69,18 @@ async def _decide_next_action(db: AsyncSession, task: Task) -> tuple[str | None,
         return "dispatch", True, []
 
     if status == TaskStatus.DISPATCHED.value:
-        # Check if there's a running AgentRun
+        # Check latest AgentRun status
+        latest_run = (await db.execute(
+            select(AgentRun).where(AgentRun.task_id == task.id).order_by(desc(AgentRun.id)).limit(1)
+        )).scalar_one_or_none()
+        if not latest_run:
+            return "create_agent_run", True, []
+        if latest_run.status in (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value):
+            return "wait_agent_result", False, ["AgentRun is " + latest_run.status]
+        if latest_run.status == AgentRunStatus.SUCCEEDED.value:
+            return "submit_result", True, []
+        if latest_run.status in (AgentRunStatus.FAILED.value, AgentRunStatus.CANCELED.value):
+            return "agent_failed", False, ["AgentRun is " + latest_run.status]
         return "create_agent_run", True, []
 
     if status == TaskStatus.RESULT_SUBMITTED.value:
@@ -166,18 +177,20 @@ async def _do_step_dispatch(db: AsyncSession, task: Task, actor: str):
 
 async def _do_step_create_agent_run(db: AsyncSession, task: Task, actor: str) -> dict[str, Any]:
     events = []
-    # Check if there's already a succeeded AgentRun
-    existing_run = (await db.execute(
-        select(AgentRun).where(
-            AgentRun.task_id == task.id,
-            AgentRun.status == AgentRunStatus.SUCCEEDED.value
-        ).order_by(desc(AgentRun.id)).limit(1)
+    # Check existing AgentRun states
+    latest_run = (await db.execute(
+        select(AgentRun).where(AgentRun.task_id == task.id).order_by(desc(AgentRun.id)).limit(1)
     )).scalar_one_or_none()
-    if existing_run:
+    
+    if latest_run and latest_run.status in (AgentRunStatus.FAILED.value, AgentRunStatus.CANCELED.value):
+        # Agent failed/canceled, stop
+        return {"action": "blocked", "events": [], "stopped": True, "stop_reason": "agent_failed"}
+    
+    if latest_run and latest_run.status == AgentRunStatus.SUCCEEDED.value:
         # Agent already succeeded, create artifacts and transition
         from app.schemas.task import SubmitResultRequest
-        await create_artifact_from_agent_run(db, existing_run)
-        body = SubmitResultRequest(actor=actor, message="Auto-submit result", result_summary=existing_run.output_summary)
+        await create_artifact_from_agent_run(db, latest_run)
+        body = SubmitResultRequest(actor=actor, message="Auto-submit result", result_summary=latest_run.output_summary)
         await task_service.submit_result(db, task.id, body)
         return {"action": "submit_result", "events": ["orchestration_step_completed"], "stopped": False, "stop_reason": None}
     
@@ -236,15 +249,31 @@ async def _do_step_evaluate(db: AsyncSession, task: Task, actor: str) -> dict[st
     events = []
     actions = []
 
-    # 1. Check if we can evaluate
-    # Pass tests_passed=false to avoid creating blocked decision when no data
+    # 1. Check existing auto-approvable decision
+    latest_decision = (await db.execute(
+        select(ApprovalDecision).where(
+            ApprovalDecision.task_id == task.id,
+            ApprovalDecision.auto_approve_allowed == True,
+            ApprovalDecision.human_required == False,
+        ).order_by(desc(ApprovalDecision.id)).limit(1)
+    )).scalar_one_or_none()
+
+    if latest_decision and latest_decision.risk_level == 'low':
+        try:
+            await do_auto_approve(db, task.id, latest_decision.id, actor, 'Auto-approved by orchestration')
+            events.append('approval_auto_applied')
+            actions.append('auto_approve')
+            return {'action': 'auto_approve', 'events': events, 'stopped': False, 'stop_reason': None}
+        except Exception as e:
+            return {'action': 'blocked', 'events': events, 'stopped': True, 'stop_reason': str(e)}
+
+    # 2. No existing decision, evaluate
     eval_req = ApprovalEvaluationRequest(actor=actor)
     eval_result = await evaluate_approval(db, task.id, eval_req)
     events.append("approval_auto_evaluated")
     actions.append("evaluate_approval")
 
     if eval_result.auto_approve_allowed and not eval_result.human_required:
-        # Auto approve using the evaluation decision
         if eval_result.id > 0:
             try:
                 await do_auto_approve(db, task.id, eval_result.id, actor, "Auto-approved by orchestration")
@@ -255,7 +284,6 @@ async def _do_step_evaluate(db: AsyncSession, task: Task, actor: str) -> dict[st
                 return {"action": "blocked", "events": events, "stopped": True, "stop_reason": str(e)}
 
     if eval_result.human_required:
-        # Transition to human_required
         body = TaskStatusTransition(actor=actor, message="Human approval required")
         await task_service.require_human_approval(db, task.id, body)
         events.append("human_approval_required")

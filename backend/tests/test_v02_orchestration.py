@@ -363,3 +363,84 @@ async def test_orchestration_cross_task_decision(client, project, agent):
     # Task B's status should not show Task A's decision
     r3 = await client.get(BASE + f"/tasks/{t2['id']}/orchestration/status")
     assert r3.json()["data"]["latest_approval_decision_id"] is None
+
+
+# ─── Failed AgentRun ───
+
+@pytest.mark.asyncio
+async def test_dispatched_running_run_returns_wait_exact(client, task, agent):
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    r = await client.get(BASE + f"/tasks/{task['id']}/orchestration/status")
+    assert r.json()["data"]["next_action"] == "wait_agent_result"
+
+@pytest.mark.asyncio
+async def test_dispatched_failed_run_returns_agent_failed(client, task, agent):
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    r2 = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
+    rid = r2.json()["data"][0]["id"]
+    # Set run to failed
+    await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    await client.post(BASE + f"/tasks/{task['id']}/agent-runs/{rid}/submit-result", json={"status": "failed", "error_message": "error"})
+    r = await client.get(BASE + f"/tasks/{task['id']}/orchestration/status")
+    assert r.json()["data"]["next_action"] == "agent_failed"
+    assert r.json()["data"]["can_auto_continue"] is False
+
+@pytest.mark.asyncio
+async def test_failed_agent_run_step_stops(client, task, agent):
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    r2 = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
+    rid = r2.json()["data"][0]["id"]
+    await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    await client.post(BASE + f"/tasks/{task['id']}/agent-runs/{rid}/submit-result", json={"status": "failed", "error_message": "fail"})
+    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    assert r.status_code == 200
+    assert r.json()["data"]["stopped"] is True
+    assert r.json()["data"]["stop_reason"] == "agent_failed"
+
+
+# ─── Cross-task ownership ───
+
+@pytest.mark.asyncio
+async def test_cross_task_cannot_use_other_run(client, project, agent):
+    """Task B cannot use Task A's succeeded AgentRun for submit_result"""
+    r1 = await client.post(BASE + "/tasks", json={"project_id": project["id"], "title": "task-a", "planner": "test"})
+    t1 = r1.json()["data"]
+    r2 = await client.post(BASE + "/tasks", json={"project_id": project["id"], "title": "task-b", "planner": "test"})
+    t2 = r2.json()["data"]
+    await client.post(BASE + f"/tasks/{t1['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{t1['id']}/dispatch", json=t_actor)
+    await client.post(BASE + f"/tasks/{t1['id']}/orchestration/step")
+    r3 = await client.get(BASE + f"/tasks/{t1['id']}/agent-runs")
+    rid = r3.json()["data"][0]["id"]
+    await client.patch(BASE + f"/tasks/{t1['id']}/agent-runs/{rid}", json={"status": "running"})
+    await client.post(BASE + f"/tasks/{t1['id']}/agent-runs/{rid}/submit-result", json={"status": "succeeded"})
+    # Task B in dispatched should NOT see Task A's run
+    await client.post(BASE + f"/tasks/{t2['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{t2['id']}/dispatch", json=t_actor)
+    r4 = await client.get(BASE + f"/tasks/{t2['id']}/orchestration/status")
+    assert r4.json()["data"]["next_action"] == "create_agent_run"
+
+@pytest.mark.asyncio
+async def test_cross_task_cannot_use_other_decision(client, project, agent):
+    """Task B cannot use Task A's auto-approvable decision"""
+    r1 = await client.post(BASE + "/tasks", json={"project_id": project["id"], "title": "task-a", "planner": "test"})
+    t1 = r1.json()["data"]
+    r2 = await client.post(BASE + "/tasks", json={"project_id": project["id"], "title": "task-b", "planner": "test"})
+    t2 = r2.json()["data"]
+    # Create auto-approvable decision for Task A
+    await client.post(BASE + f"/tasks/{t1['id']}/evaluate-approval", json={"tests_passed": True, "security_issues_found": False})
+    # Task B in reviewing should NOT see Task A's decision
+    await client.post(BASE + f"/tasks/{t2['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{t2['id']}/dispatch", json=t_actor)
+    await client.post(BASE + f"/tasks/{t2['id']}/submit-result", json=t_actor)
+    await client.post(BASE + f"/tasks/{t2['id']}/start-review", json=t_actor)
+    r = await client.post(BASE + f"/tasks/{t2['id']}/orchestration/step")
+    assert r.json()["data"]["action_taken"] != "auto_approve"
+    # Should not be approved (would mean it used Task A's decision)
+    assert r.json()["data"]["after_status"] != "approved"
