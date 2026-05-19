@@ -11,6 +11,5 @@ def health():
         "status": "ok",
         "service": "codex-auto-delivery",
         "version": "0.1.0",
-        "agent": "ai2",
         "db": settings.db_url,
     }

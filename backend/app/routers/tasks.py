@@ -21,8 +21,9 @@ async def list_tasks(
     items = []
     for t in tasks:
         resp = TaskResponse.model_validate(t, from_attributes=True)
-        if t.project:
-            resp.project_name = t.project.display_name or t.project.name
+        pname = await task_service.get_task_project_name(db, t)
+        if pname:
+            resp.project_name = pname
         items.append(resp)
     return ApiEnvelope(
         data=items,
@@ -32,10 +33,9 @@ async def list_tasks(
 
 @router.post("", status_code=201)
 async def create_task(body: TaskCreate, db: AsyncSession = Depends(get_session)):
-    task = await task_service.create_task(db, body)
+    task, project_name = await task_service.create_task(db, body)
     resp = TaskResponse.model_validate(task, from_attributes=True)
-    if task.project:
-        resp.project_name = task.project.display_name or task.project.name
+    resp.project_name = project_name
     return ApiEnvelope(data=resp)
 
 
@@ -43,8 +43,9 @@ async def create_task(body: TaskCreate, db: AsyncSession = Depends(get_session))
 async def get_task(task_id: int, db: AsyncSession = Depends(get_session)):
     task = await task_service.get_task(db, task_id)
     resp = TaskResponse.model_validate(task, from_attributes=True)
-    if task.project:
-        resp.project_name = task.project.display_name or task.project.name
+    pname = await task_service.get_task_project_name(db, task)
+    if pname:
+        resp.project_name = pname
     return ApiEnvelope(data=resp)
 
 

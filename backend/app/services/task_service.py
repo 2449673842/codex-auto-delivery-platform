@@ -42,10 +42,11 @@ async def get_task(db: AsyncSession, task_id: int) -> Task:
     return task
 
 
-async def create_task(db: AsyncSession, data: TaskCreate) -> Task:
+async def create_task(db: AsyncSession, data: TaskCreate) -> tuple[Task, str]:
     project = await db.get(Project, data.project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+    project_name = project.display_name or project.name
     task = Task(**data.model_dump())
     db.add(task)
     await db.flush()
@@ -59,7 +60,7 @@ async def create_task(db: AsyncSession, data: TaskCreate) -> Task:
         to_status="draft",
         message=f"Task created: {task.title}",
     )
-    return task
+    return task, project_name
 
 
 async def delete_task(db: AsyncSession, task_id: int) -> None:
@@ -165,3 +166,10 @@ async def archive_task(
 ) -> Task:
     task = await get_task(db, task_id)
     return await _transition(db, task, TaskStatus.ARCHIVED, body.actor, body.message)
+
+
+async def get_task_project_name(db: AsyncSession, task: Task) -> str | None:
+    project = await db.get(Project, task.project_id)
+    if project:
+        return project.display_name or project.name
+    return None

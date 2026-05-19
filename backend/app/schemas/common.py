@@ -4,7 +4,7 @@ from pydantic import BaseModel
 class ApiEnvelope(BaseModel):
     success: bool = True
     data: object = None
-    message: str = "ok"
+    message: str | dict | list | None = "ok"
 
 
 class Pagination(BaseModel):
