@@ -27,6 +27,11 @@ backend/data/*.db-shm
 .vite/
 start_vite.cmd
 
+# Config & secrets
+.config/
+.env
+ccx.exe
+
 # Logs
 *.log
 server.err.log

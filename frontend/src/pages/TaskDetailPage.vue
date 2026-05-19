@@ -279,7 +279,7 @@ import {
   fetchAgentRuns, createAgentRun, updateAgentRun, submitAgentRunResult,
   fetchAgentReviews, createAgentReview,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -304,7 +304,7 @@ const submitFormRunId = ref<number | null>(null)
 
 const agentRunForm = ref({ agent_id: 0, run_type: 'plan', input_prompt: '', branch: '' })
 const agentReviewForm = ref({ reviewer_agent_id: 0, decision: 'approved', risk_level: 'low', comments: '', confidence_score: null as number | null, agent_run_id: 0, issues_json: '' })
-const submitForm = ref({ status: 'succeeded', output_summary: '', error_message: '', output_diff: '', output_log: '', raw_result_json: '' })
+const submitForm = ref<AgentRunSubmitResult>({ status: 'succeeded', output_summary: '', error_message: '', output_diff: '', output_log: '', raw_result_json: '' })
 
 const ACTION_MAP: Record<string, { action: string; label: string; cls: string }[]> = {
   draft: [{ action: 'generate-ticket', label: '生成任务单', cls: 'btn-primary' }],
@@ -423,7 +423,7 @@ async function cancelAgentRun(r: AgentRun) {
 
 function showSubmitResult(r: AgentRun) {
   submitFormRunId.value = r.id
-  submitForm.value = { status: 'succeeded', output_summary: '', error_message: '', output_diff: '', output_log: '', raw_result_json: '' }
+  submitForm.value = { status: 'succeeded' as const, output_summary: '', error_message: '', output_diff: '', output_log: '', raw_result_json: '' }
 }
 
 async function confirmSubmitRunResult(r: AgentRun) {
