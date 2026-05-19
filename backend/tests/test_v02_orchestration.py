@@ -19,7 +19,7 @@ async def _reset_db():
 @pytest.fixture
 async def client():
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(transport=transport, base_url="https://test.local") as ac:
         yield ac
 
 @pytest.fixture
