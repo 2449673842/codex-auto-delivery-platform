@@ -30,7 +30,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from app.routers import health, projects, tasks, artifacts, events, reviews, agents, agent_runs, agent_reviews, approval_policies
+from app.routers import health, projects, tasks, artifacts, events, reviews, agents, agent_runs, agent_reviews, approval_policies, approval
 
 app.include_router(health.router)
 app.include_router(projects.router)
@@ -42,3 +42,4 @@ app.include_router(agents.router)
 app.include_router(agent_runs.router)
 app.include_router(agent_reviews.router)
 app.include_router(approval_policies.router)
+app.include_router(approval.router)
