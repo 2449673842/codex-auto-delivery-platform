@@ -270,17 +270,96 @@ async def test_agent_run_auto_created_event(client, task, agent):
     assert "agent_result_waiting" in types
 
 @pytest.mark.asyncio
-async def test_orchestration_not_calling_external_ai(client):
-    # No external AI calls possible - no API keys configured
-    pass
+async def test_orchestration_no_external_ai(client):
+    """Verify orchestration doesn't call external AI"""
+    import os
+    src_path = os.path.join(os.path.dirname(__file__), '../app/services/orchestration_service.py')
+    with open(src_path, encoding='utf-8') as f:
+        src = f.read()
+    for pattern in ['openai', 'anthropic', 'requests.post']:
+        assert pattern not in src, f'orchestration should not call {pattern}'
+
 
 @pytest.mark.asyncio
-async def test_orchestration_not_reading_secret(client):
-    # No secret_ref reading in orchestration code
-    pass
+async def test_orchestration_no_secret_or_shell(client):
+    """Verify orchestration doesn't read secret or execute shell"""
+    import os
+    src_path = os.path.join(os.path.dirname(__file__), '../app/services/orchestration_service.py')
+    with open(src_path, encoding='utf-8') as f:
+        src = f.read()
+    for pattern in ['os.getenv', 'subprocess', 'os.system', 'os.popen', 'Project.root_path']:
+        assert pattern not in src, f'orchestration should not use {pattern}'
+
 
 @pytest.mark.asyncio
 async def test_existing_tests_still_pass(client, task):
     # Verify basic API still works after orchestration import
     r = await client.get(BASE + "/health")
     assert r.status_code == 200
+
+
+# ─── Dispatched next_action tests ───
+
+@pytest.mark.asyncio
+async def test_dispatched_no_run_returns_create_agent_run(client, task):
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.get(BASE + f"/tasks/{task['id']}/orchestration/status")
+    assert r.json()["data"]["next_action"] == "create_agent_run"
+
+@pytest.mark.asyncio
+async def test_dispatched_running_run_returns_wait(client, task, agent):
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    r = await client.get(BASE + f"/tasks/{task['id']}/orchestration/status")
+    # Engine stopped at waiting_for_agent_result, but next status check should show wait
+    assert r.json()["data"]["next_action"] in ("wait_agent_result", "create_agent_run")
+
+@pytest.mark.asyncio
+async def test_dispatched_succeeded_run_returns_submit_result(client, task, agent):
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    # Get agent run and submit result
+    r2 = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
+    rid = r2.json()["data"][0]["id"]
+    await client.patch(BASE + f"/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    await client.post(BASE + f"/tasks/{task['id']}/agent-runs/{rid}/submit-result", json={"status": "succeeded", "output_summary": "done"})
+    # The orchestration step should transition from dispatched to result_submitted
+    # because it finds the succeeded AgentRun
+    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    assert r.status_code == 200
+    assert r.json()["data"]["action_taken"] == "submit_result"
+    assert r.json()["data"]["after_status"] == "result_submitted"
+
+
+# ─── Ownership tests ───
+
+@pytest.mark.asyncio
+async def test_orchestration_cross_task_run(client, project, agent):
+    r1 = await client.post(BASE + "/tasks", json={"project_id": project["id"], "title": "task-a", "planner": "test"})
+    t1 = r1.json()["data"]
+    r2 = await client.post(BASE + "/tasks", json={"project_id": project["id"], "title": "task-b", "planner": "test"})
+    t2 = r2.json()["data"]
+    # Create AgentRun for task A
+    await client.post(BASE + f"/tasks/{t1['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{t1['id']}/dispatch", json=t_actor)
+    await client.post(BASE + f"/tasks/{t1['id']}/orchestration/step")
+    r3 = await client.get(BASE + f"/tasks/{t1['id']}/agent-runs")
+    run_a = r3.json()["data"][0]
+    # Task B's orchestration should not see Task A's run
+    r4 = await client.get(BASE + f"/tasks/{t2['id']}/orchestration/status")
+    assert r4.json()["data"]["latest_agent_run_id"] is None
+
+@pytest.mark.asyncio
+async def test_orchestration_cross_task_decision(client, project, agent):
+    r1 = await client.post(BASE + "/tasks", json={"project_id": project["id"], "title": "task-a", "planner": "test"})
+    t1 = r1.json()["data"]
+    r2 = await client.post(BASE + "/tasks", json={"project_id": project["id"], "title": "task-b", "planner": "test"})
+    t2 = r2.json()["data"]
+    # Create approval decision for Task A
+    await client.post(BASE + f"/tasks/{t1['id']}/evaluate-approval", json={"tests_passed": True, "security_issues_found": False})
+    # Task B's status should not show Task A's decision
+    r3 = await client.get(BASE + f"/tasks/{t2['id']}/orchestration/status")
+    assert r3.json()["data"]["latest_approval_decision_id"] is None

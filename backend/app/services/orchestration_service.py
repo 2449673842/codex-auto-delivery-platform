@@ -9,6 +9,8 @@ from app.models.agent_run import AgentRun
 from app.models.agent_review import AgentReview
 from app.models.approval_decision import ApprovalDecision
 from app.models.agent_profile import AgentProfile
+from app.models.task_artifact import TaskArtifact
+from app.schemas.task import SubmitResultRequest as TaskSubmitResultRequest
 from app.schemas.orchestration import (
     OrchestrationStatusResponse, OrchestrationStepResponse, OrchestrationRunResponse,
 )
@@ -27,7 +29,7 @@ async def get_orchestration_status(db: AsyncSession, task_id: int) -> Orchestrat
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    next_action, can_continue, blocked = _decide_next_action(db, task)
+    next_action, can_continue, blocked = await _decide_next_action(db, task)
     
     # Get latest IDs
     latest_run = (await db.execute(
@@ -52,7 +54,7 @@ async def get_orchestration_status(db: AsyncSession, task_id: int) -> Orchestrat
     )
 
 
-def _decide_next_action(db: AsyncSession, task: Task) -> tuple[str | None, bool, list[str]]:
+async def _decide_next_action(db: AsyncSession, task: Task) -> tuple[str | None, bool, list[str]]:
     """Decide the next action based on task status (synchronous helper)."""
     blocked = []
     status = task.status
@@ -172,8 +174,9 @@ async def _do_step_create_agent_run(db: AsyncSession, task: Task, actor: str) ->
         ).order_by(desc(AgentRun.id)).limit(1)
     )).scalar_one_or_none()
     if existing_run:
-        # Agent already succeeded, transition to result_submitted
+        # Agent already succeeded, create artifacts and transition
         from app.schemas.task import SubmitResultRequest
+        await create_artifact_from_agent_run(db, existing_run)
         body = SubmitResultRequest(actor=actor, message="Auto-submit result", result_summary=existing_run.output_summary)
         await task_service.submit_result(db, task.id, body)
         return {"action": "submit_result", "events": ["orchestration_step_completed"], "stopped": False, "stop_reason": None}
