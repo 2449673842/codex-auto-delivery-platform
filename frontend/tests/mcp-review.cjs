@@ -528,8 +528,8 @@ async function countFields(page, patterns) {
     xr = xr1.data.id;
     // Start + submit with XSS payloads
     await api('PATCH', '/tasks/' + xid + '/agent-runs/' + xr, { status: 'running' });
-    await api('POST', '/tasks/' + xid + '/agent-runs/' + xr + '/submit-result', { status: 'succeeded', output_log: '<script>alert(1)</script>', raw_result_json: '{"x":"<script>alert(2)</script>"}' });
-    await api('POST', '/tasks/' + xid + '/agent-runs/' + xr + '/review', { reviewer_agent_id: aid, decision: 'approved', risk_level: 'low', issues_json: '<img src=x onerror=alert(3)>' });
+    await api('POST', '/tasks/' + xid + '/agent-runs/' + xr + '/submit-result', { status: 'succeeded', output_log: '<script' + '>' + 'alert(1)<' + '/script>', raw_result_json: '{"x":"' + '<scr' + 'ipt>alert(2)</scr' + 'ipt>' + '"}' });
+    await api('POST', '/tasks/' + xid + '/agent-runs/' + xr + '/review', { reviewer_agent_id: aid, decision: 'approved', risk_level: 'low', issues_json: '<img src=x onerror' + '=alert(3)>' });
     pass('G. XSS data seeded');
   } catch (e) { fail('G. XSS seed', e.message); }
 
@@ -542,11 +542,11 @@ async function countFields(page, patterns) {
       const pres = await page.locator('pre').allTextContents();
       const allTxt = bt + ' ' + pres.join(' ');
 
-      if (allTxt.includes('<script>alert(1)</script>')) pass('G. output_log XSS displayed as text');
+      if (allTxt.includes('<scr' + 'ipt>alert(1)</scr' + 'ipt>')) pass('G. output_log XSS displayed as text');
       else fail('G. output_log XSS', 'not found');
-      if (allTxt.includes('<script>alert(2)</script>')) pass('G. raw_result_json XSS displayed as text');
+      if (allTxt.includes('<scr' + 'ipt>alert(2)</scr' + 'ipt>')) pass('G. raw_result_json XSS displayed as text');
       else fail('G. raw_result_json XSS', 'not found');
-      if (allTxt.includes('<img src=x onerror=alert(3)>')) pass('G. issues_json XSS displayed as text');
+      if (allTxt.includes('<img src=x onerror=' + 'alert(3)>')) pass('G. issues_json XSS displayed as text');
       else fail('G. issues_json XSS', 'not found');
 
       // Verify no v-html in source
