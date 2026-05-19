@@ -271,22 +271,6 @@ async def test_list_approval_policies(client: AsyncClient):
 # ═══════════════════════════════════════════════════════
 
 @pytest.mark.asyncio
-async def test_human_required_legal_transition(client: AsyncClient, task: dict):
-    await client.post(f"{BASE}/tasks/{task['id']}/generate-ticket", json=t_actor)
-    await client.post(f"{BASE}/tasks/{task['id']}/dispatch", json=t_actor)
-    await client.post(f"{BASE}/tasks/{task['id']}/submit-result", json=t_actor)
-    await client.post(f"{BASE}/tasks/{task['id']}/start-review", json=t_actor)
-
-    # reviewing → human_required
-    r = await client.post(f"{BASE}/tasks/{task['id']}/request-changes", json=t_actor)
-    # Actually, reviewing → human_required is now valid. Let me test that route
-    # But we don't have a dedicated endpoint for that. The ALLOWED_TRANSITIONS has it,
-    # but no router endpoint maps to human_required directly.
-    # Let me test the other direction: human_required can later be approved.
-    # For now, I'll verify the transition list allows it by checking with a 409 case.
-    pass
-
-@pytest.mark.asyncio
 async def test_human_required_reviewing_to_human_required(client: AsyncClient, task: dict):
     await client.post(f"{BASE}/tasks/{task['id']}/generate-ticket", json=t_actor)
     await client.post(f"{BASE}/tasks/{task['id']}/dispatch", json=t_actor)
@@ -311,11 +295,20 @@ async def test_human_required_can_be_approved(client: AsyncClient, task: dict):
 
 @pytest.mark.asyncio
 async def test_human_required_cannot_archive_directly(client: AsyncClient, task: dict):
-    # human_required → archive is NOT in ALLOWED_TRANSITIONS
-    # So directly calling archive should 409 for any non-archived state
-    # that doesn't allow archive.
+    """Full flow to human_required, then try archive -> 409"""
+    r = await client.post(f"{BASE}/tasks/{task['id']}/generate-ticket", json=t_actor)
+    assert r.status_code == 200
+    r = await client.post(f"{BASE}/tasks/{task['id']}/dispatch", json=t_actor)
+    assert r.status_code == 200
+    r = await client.post(f"{BASE}/tasks/{task['id']}/submit-result", json=t_actor)
+    assert r.status_code == 200
+    r = await client.post(f"{BASE}/tasks/{task['id']}/start-review", json=t_actor)
+    assert r.status_code == 200
+    r = await client.post(f"{BASE}/tasks/{task['id']}/require-human-approval", json=t_actor)
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "human_required"
     r = await client.post(f"{BASE}/tasks/{task['id']}/archive", json=t_actor)
-    assert r.status_code == 409  # draft cannot archive
+    assert r.status_code == 409
 
 
 # ═══════════════════════════════════════════════════════
@@ -417,3 +410,47 @@ async def test_agent_profile_update_invalid_type_422(client: AsyncClient, agent:
     r = await client.patch(f"{BASE}/agents/{agent['id']}", json={"provider": "google"})
     assert r.status_code == 422
 
+
+
+@pytest.mark.asyncio
+async def test_agent_review_risk_level_invalid_422(client: AsyncClient, task: dict, agent: dict):
+    r = await client.post(f"{BASE}/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "review"})
+    rid = r.json()["data"]["id"]
+    await client.patch(f"{BASE}/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    await client.post(f"{BASE}/tasks/{task['id']}/agent-runs/{rid}/submit-result", json={"status": "succeeded"})
+    r = await client.post(f"{BASE}/tasks/{task['id']}/agent-runs/{rid}/review", json={"reviewer_agent_id": agent["id"], "decision": "approved", "confidence_score": 0.9, "risk_level": "extreme"})
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_patch_cannot_set_terminal_state(client: AsyncClient, task: dict, agent: dict):
+    r = await client.post(f"{BASE}/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "execute"})
+    rid = r.json()["data"]["id"]
+    r = await client.patch(f"{BASE}/tasks/{task['id']}/agent-runs/{rid}", json={"status": "succeeded"})
+    assert r.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_patch_cancel_event(client: AsyncClient, task: dict, agent: dict):
+    r = await client.post(f"{BASE}/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "plan"})
+    rid = r.json()["data"]["id"]
+    r = await client.patch(f"{BASE}/tasks/{task['id']}/agent-runs/{rid}", json={"status": "canceled"})
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "canceled"
+    r = await client.get(f"{BASE}/tasks/{task['id']}/events")
+    types = [e["event_type"] for e in r.json()["data"]]
+    assert "agent_run_failed" in types
+
+
+@pytest.mark.asyncio
+async def test_human_required_events_both_written(client: AsyncClient, task: dict):
+    """require-human-approval produces both status_changed and human_approval_required"""
+    r = await client.post(f"{BASE}/tasks/{task['id']}/generate-ticket", json=t_actor)
+    r = await client.post(f"{BASE}/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.post(f"{BASE}/tasks/{task['id']}/submit-result", json=t_actor)
+    r = await client.post(f"{BASE}/tasks/{task['id']}/start-review", json=t_actor)
+    r = await client.post(f"{BASE}/tasks/{task['id']}/require-human-approval", json=t_actor)
+    r = await client.get(f"{BASE}/tasks/{task['id']}/events")
+    types = [e["event_type"] for e in r.json()["data"]]
+    assert "status_changed" in types
+    assert "human_approval_required" in types

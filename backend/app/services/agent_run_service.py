@@ -66,11 +66,16 @@ async def update_agent_run(db: AsyncSession, run_id: int, data: AgentRunUpdate, 
     current = AgentRunStatus(run.status)
     if data.status:
         target = AgentRunStatus(data.status)
-        allowed = ALLOWED_AGENT_RUN_TRANSITIONS.get(current, [])
+        # PATCH only allows: queued->running, queued/running->canceled
+        patch_allowed = {
+            AgentRunStatus.QUEUED: [AgentRunStatus.RUNNING, AgentRunStatus.CANCELED],
+            AgentRunStatus.RUNNING: [AgentRunStatus.CANCELED],
+        }
+        allowed = patch_allowed.get(current, [])
         if target not in allowed:
             raise HTTPException(
                 status_code=409,
-                detail=f"AgentRun transition from '{current.value}' to '{target.value}' not allowed",
+                detail=f"PATCH cannot transition from '{current.value}' to '{target.value}'. Use submit-result for terminal states.",
             )
     for key, val in data.model_dump(exclude_unset=True).items():
         setattr(run, key, val)
@@ -81,6 +86,12 @@ async def update_agent_run(db: AsyncSession, run_id: int, data: AgentRunUpdate, 
         await create_event(
             db, task_id=run.task_id, event_type="agent_run_started",
             actor=f"agent_run:{run_id}",
+        )
+    elif data.status == "canceled":
+        await create_event(
+            db, task_id=run.task_id, event_type="agent_run_failed",
+            actor=f"agent_run:{run_id}",
+            message=f"AgentRun #{run_id} canceled",
         )
     return run
 
