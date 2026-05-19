@@ -12,14 +12,14 @@ class AgentRunCreate(BaseModel):
 
 
 class AgentRunUpdate(BaseModel):
-    status: str | None = None
+    status: str | None = Field(None, pattern=r'^(queued|running|succeeded|failed|canceled|human_required)$')
     output_summary: str | None = None
     output_diff: str | None = None
     output_log: str | None = None
     branch: str | None = None
     commit_sha: str | None = None
     pr_url: str | None = None
-    risk_level: str | None = None
+    risk_level: str | None = Field(None, pattern=r'^(low|medium|high|critical)$')
     started_at: datetime | None = None
     finished_at: datetime | None = None
     duration_ms: int | None = None

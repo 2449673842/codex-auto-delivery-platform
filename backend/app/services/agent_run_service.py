@@ -20,10 +20,12 @@ async def list_agent_runs(db: AsyncSession, task_id: int) -> list[AgentRun]:
     return list(result.scalars().all())
 
 
-async def get_agent_run(db: AsyncSession, run_id: int) -> AgentRun:
+async def get_agent_run(db: AsyncSession, run_id: int, task_id: int | None = None) -> AgentRun:
     run = await db.get(AgentRun, run_id)
     if not run:
         raise HTTPException(status_code=404, detail="AgentRun not found")
+    if task_id is not None and run.task_id != task_id:
+        raise HTTPException(status_code=404, detail="AgentRun not found for this task")
     return run
 
 
@@ -59,8 +61,8 @@ async def create_agent_run(db: AsyncSession, task_id: int, data: AgentRunCreate)
     return run
 
 
-async def update_agent_run(db: AsyncSession, run_id: int, data: AgentRunUpdate) -> AgentRun:
-    run = await get_agent_run(db, run_id)
+async def update_agent_run(db: AsyncSession, run_id: int, data: AgentRunUpdate, task_id: int | None = None) -> AgentRun:
+    run = await get_agent_run(db, run_id, task_id)
     current = AgentRunStatus(run.status)
     if data.status:
         target = AgentRunStatus(data.status)
@@ -83,8 +85,8 @@ async def update_agent_run(db: AsyncSession, run_id: int, data: AgentRunUpdate) 
     return run
 
 
-async def submit_agent_run_result(db: AsyncSession, run_id: int, data: SubmitResultRequest) -> AgentRun:
-    run = await get_agent_run(db, run_id)
+async def submit_agent_run_result(db: AsyncSession, run_id: int, task_id: int, data: SubmitResultRequest) -> AgentRun:
+    run = await get_agent_run(db, run_id, task_id)
     current = AgentRunStatus(run.status)
     target = AgentRunStatus(data.status)
     allowed = ALLOWED_AGENT_RUN_TRANSITIONS.get(current, [])
@@ -103,27 +105,21 @@ async def submit_agent_run_result(db: AsyncSession, run_id: int, data: SubmitRes
     run.error_message = data.error_message
     await db.flush()
 
-    # Create TaskArtifact for diff if provided
     if data.output_diff:
         sha = hashlib.sha256(data.output_diff.encode("utf-8")).hexdigest()
         artifact = TaskArtifact(
-            task_id=run.task_id,
-            artifact_type="diff",
+            task_id=run.task_id, artifact_type="diff",
             content=data.output_diff[:50000],
-            size_bytes=len(data.output_diff.encode("utf-8")),
-            sha256=sha,
+            size_bytes=len(data.output_diff.encode("utf-8")), sha256=sha,
         )
         db.add(artifact)
 
-    # Create TaskArtifact for log if provided
     if data.output_log:
         sha = hashlib.sha256(data.output_log.encode("utf-8")).hexdigest()
         artifact = TaskArtifact(
-            task_id=run.task_id,
-            artifact_type="execution_log",
+            task_id=run.task_id, artifact_type="execution_log",
             content=data.output_log[:50000],
-            size_bytes=len(data.output_log.encode("utf-8")),
-            sha256=sha,
+            size_bytes=len(data.output_log.encode("utf-8")), sha256=sha,
         )
         db.add(artifact)
 

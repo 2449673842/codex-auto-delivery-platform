@@ -6,7 +6,7 @@ class ApprovalPolicyCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     project_id: int | None = None
     enabled: bool = True
-    max_risk_level_for_auto_approve: str = "low"
+    max_risk_level_for_auto_approve: str = Field("low", pattern=r'^(low|medium|high|critical)$')
     require_tests_passed: bool = True
     require_sonar_passed: bool = False
     require_no_security_issues: bool = True
@@ -20,7 +20,7 @@ class ApprovalPolicyUpdate(BaseModel):
     name: str | None = None
     project_id: int | None = None
     enabled: bool | None = None
-    max_risk_level_for_auto_approve: str | None = None
+    max_risk_level_for_auto_approve: str | None = Field(None, pattern=r'^(low|medium|high|critical)$')
     require_tests_passed: bool | None = None
     require_sonar_passed: bool | None = None
     require_no_security_issues: bool | None = None

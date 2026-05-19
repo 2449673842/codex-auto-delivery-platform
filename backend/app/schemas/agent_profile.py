@@ -16,8 +16,8 @@ class AgentProfileCreate(BaseModel):
 
 class AgentProfileUpdate(BaseModel):
     name: str | None = None
-    agent_type: str | None = None
-    provider: str | None = None
+    agent_type: str | None = Field(None, pattern=r'^(planner|executor|reviewer|test)$')
+    provider: str | None = Field(None, pattern=r'^(codex|openai|claude|local|manual)$')
     model_name: str | None = None
     secret_ref: str | None = None
     enabled: bool | None = None

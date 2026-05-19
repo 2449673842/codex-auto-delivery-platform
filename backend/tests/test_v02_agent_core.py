@@ -286,6 +286,28 @@ async def test_human_required_legal_transition(client: AsyncClient, task: dict):
     # For now, I'll verify the transition list allows it by checking with a 409 case.
     pass
 
+@pytest.mark.asyncio
+async def test_human_required_reviewing_to_human_required(client: AsyncClient, task: dict):
+    await client.post(f"{BASE}/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(f"{BASE}/tasks/{task['id']}/dispatch", json=t_actor)
+    await client.post(f"{BASE}/tasks/{task['id']}/submit-result", json=t_actor)
+    await client.post(f"{BASE}/tasks/{task['id']}/start-review", json=t_actor)
+    r = await client.post(f"{BASE}/tasks/{task['id']}/require-human-approval", json=t_actor)
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "human_required"
+
+
+@pytest.mark.asyncio
+async def test_human_required_can_be_approved(client: AsyncClient, task: dict):
+    await client.post(f"{BASE}/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(f"{BASE}/tasks/{task['id']}/dispatch", json=t_actor)
+    await client.post(f"{BASE}/tasks/{task['id']}/submit-result", json=t_actor)
+    await client.post(f"{BASE}/tasks/{task['id']}/start-review", json=t_actor)
+    await client.post(f"{BASE}/tasks/{task['id']}/require-human-approval", json=t_actor)
+    r = await client.post(f"{BASE}/tasks/{task['id']}/approve", json=t_actor)
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "approved"
+
 
 @pytest.mark.asyncio
 async def test_human_required_cannot_archive_directly(client: AsyncClient, task: dict):
@@ -320,3 +342,78 @@ async def test_agent_run_events_written(client: AsyncClient, task: dict, agent: 
 # ═══════════════════════════════════════════════════════
 # 17. Existing tests still pass
 # ═══════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════
+# Extra: ownership, events, validation
+# ═══════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_agent_run_wrong_task_404(client: AsyncClient, task: dict, agent: dict, project: dict):
+    r = await client.post(f"{BASE}/tasks", json={"project_id": project["id"], "title": "other-task", "planner": "test"})
+    other_task = r.json()["data"]
+    r = await client.post(f"{BASE}/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "plan"})
+    rid = r.json()["data"]["id"]
+    r = await client.get(f"{BASE}/tasks/{other_task['id']}/agent-runs/{rid}")
+    assert r.status_code == 404
+    r = await client.patch(f"{BASE}/tasks/{other_task['id']}/agent-runs/{rid}", json={"status": "running"})
+    assert r.status_code == 404
+    r = await client.post(f"{BASE}/tasks/{other_task['id']}/agent-runs/{rid}/submit-result", json={"status": "succeeded"})
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_agent_review_wrong_task_404(client: AsyncClient, task: dict, agent: dict, project: dict):
+    r = await client.post(f"{BASE}/tasks", json={"project_id": project["id"], "title": "other", "planner": "test"})
+    other_task = r.json()["data"]
+    r = await client.post(f"{BASE}/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "review"})
+    rid = r.json()["data"]["id"]
+    await client.patch(f"{BASE}/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    await client.post(f"{BASE}/tasks/{task['id']}/agent-runs/{rid}/submit-result", json={"status": "succeeded"})
+    r = await client.post(f"{BASE}/tasks/{other_task['id']}/agent-runs/{rid}/review", json={"reviewer_agent_id": agent["id"], "decision": "approved", "confidence_score": 0.9})
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_agent_run_failed_event(client: AsyncClient, task: dict, agent: dict):
+    r = await client.post(f"{BASE}/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "test"})
+    rid = r.json()["data"]["id"]
+    await client.patch(f"{BASE}/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    await client.post(f"{BASE}/tasks/{task['id']}/agent-runs/{rid}/submit-result", json={"status": "failed", "error_message": "Timeout"})
+    r = await client.get(f"{BASE}/tasks/{task['id']}/events")
+    types = [e["event_type"] for e in r.json()["data"]]
+    assert "agent_run_failed" in types
+
+
+@pytest.mark.asyncio
+async def test_agent_run_terminal_no_transition(client: AsyncClient, task: dict, agent: dict):
+    r = await client.post(f"{BASE}/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "execute"})
+    rid = r.json()["data"]["id"]
+    await client.patch(f"{BASE}/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    await client.post(f"{BASE}/tasks/{task['id']}/agent-runs/{rid}/submit-result", json={"status": "succeeded"})
+    r = await client.patch(f"{BASE}/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    assert r.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_confidence_score_out_of_range_422(client: AsyncClient, task: dict, agent: dict):
+    r = await client.post(f"{BASE}/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "review"})
+    rid = r.json()["data"]["id"]
+    await client.patch(f"{BASE}/tasks/{task['id']}/agent-runs/{rid}", json={"status": "running"})
+    await client.post(f"{BASE}/tasks/{task['id']}/agent-runs/{rid}/submit-result", json={"status": "succeeded"})
+    r = await client.post(f"{BASE}/tasks/{task['id']}/agent-runs/{rid}/review", json={"reviewer_agent_id": agent["id"], "decision": "approved", "confidence_score": 1.5})
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_approval_policy_invalid_risk_level_422(client: AsyncClient):
+    r = await client.post(f"{BASE}/approval-policies", json={"name": "bad", "max_risk_level_for_auto_approve": "extreme"})
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_agent_profile_update_invalid_type_422(client: AsyncClient, agent: dict):
+    r = await client.patch(f"{BASE}/agents/{agent['id']}", json={"agent_type": "supervisor"})
+    assert r.status_code == 422
+    r = await client.patch(f"{BASE}/agents/{agent['id']}", json={"provider": "google"})
+    assert r.status_code == 422
+

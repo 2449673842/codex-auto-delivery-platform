@@ -117,6 +117,14 @@ async def request_changes(
     return ApiEnvelope(data={"status": task.status}, message="Changes requested")
 
 
+@router.post("/{task_id}/require-human-approval")
+async def require_human_approval(
+    task_id: int, body: TaskStatusTransition, db: AsyncSession = Depends(get_session)
+):
+    task = await task_service.require_human_approval(db, task_id, body)
+    return ApiEnvelope(data={"status": task.status}, message="Human approval required")
+
+
 @router.post("/{task_id}/archive")
 async def archive_task(
     task_id: int, body: TaskStatusTransition, db: AsyncSession = Depends(get_session)
