@@ -33,8 +33,8 @@
         <textarea v-model="resultSummary" placeholder="描述执行结果，如遇问题请说明..." rows="5"></textarea>
       </label>
       <div class="form-actions">
-        <button class="btn btn-primary" @click="confirmSubmitResult">确认提交</button>
-        <button class="btn" @click="showResultForm = false">取消</button>
+        <button class="btn btn-primary" @click="confirmSubmitResult" :disabled="actionLoading">确认提交</button>
+        <button class="btn" @click="showResultForm = false" :disabled="actionLoading">取消</button>
       </div>
     </div>
 
@@ -61,6 +61,184 @@
           <div><strong>Executor:</strong> {{ task.executor || '-' }}</div>
           <div><strong>Reviewer:</strong> {{ task.reviewer || '-' }}</div>
           <div><strong>Approver:</strong> {{ task.human_approver || '-' }}</div>
+        </div>
+      </section>
+
+      <!-- Agent Runs -->
+      <section class="card">
+        <div class="section-header">
+          <h2>Agent 运行</h2>
+          <button v-if="!isArchived" class="btn btn-sm btn-primary" @click="showAgentRunForm = true">+ 创建 AgentRun</button>
+        </div>
+        <p v-if="isArchived && task" class="section-note">已归档，不能创建 AgentRun</p>
+
+        <div v-if="showAgentRunForm && !isArchived" class="inline-form">
+          <label>
+            Agent
+            <select v-model="agentRunForm.agent_id">
+              <option value="">请选择</option>
+              <option v-for="a in agents" :key="a.id" :value="a.id" :disabled="!a.enabled">
+                {{ a.name }} ({{ a.agent_type }})
+              </option>
+            </select>
+          </label>
+          <label>
+            运行类型
+            <select v-model="agentRunForm.run_type">
+              <option value="plan">规划 (Plan)</option>
+              <option value="execute">执行 (Execute)</option>
+              <option value="review">审查 (Review)</option>
+              <option value="test">测试 (Test)</option>
+              <option value="remediate">修复 (Remediate)</option>
+            </select>
+          </label>
+          <label>
+            输入提示
+            <textarea v-model="agentRunForm.input_prompt" rows="4" placeholder="输入 prompt..."></textarea>
+          </label>
+          <label>分支<input v-model="agentRunForm.branch" placeholder="可选" /></label>
+          <div class="form-actions">
+            <button class="btn btn-primary btn-sm" @click="handleCreateAgentRun" :disabled="!agentRunForm.agent_id">创建</button>
+            <button class="btn btn-sm" @click="showAgentRunForm = false">取消</button>
+          </div>
+        </div>
+
+        <div v-if="agentRuns.length === 0" class="empty-state" style="margin-top: 12px;">
+          <p>暂无 Agent 运行记录</p>
+        </div>
+        <div v-for="r in agentRuns" :key="r.id" class="agent-run-item">
+          <div class="agent-run-header">
+            <strong>{{ runTypeLabel(r.run_type) }}</strong>
+            <span class="run-status-badge" :class="r.status">{{ AGENT_RUN_STATUS_LABELS[r.status] || r.status }}</span>
+            <span class="run-risk" :class="r.risk_level">风险: {{ r.risk_level }}</span>
+            <span class="run-attempt">#{{ r.attempt_no }}</span>
+          </div>
+          <div class="agent-run-meta">
+            Agent #{{ r.agent_id }} · {{ r.branch || '无分支' }}
+            <span v-if="r.duration_ms"> · {{ Math.round(r.duration_ms / 1000) }}s</span>
+            <span v-if="r.commit_sha"> · commit {{ r.commit_sha.substring(0, 8) }}</span>
+          </div>
+          <div class="agent-run-meta">
+            创建: {{ formatTime(r.created_at) }}
+            <span v-if="r.updated_at"> · 更新: {{ formatTime(r.updated_at) }}</span>
+          </div>
+          <p v-if="r.input_prompt" class="run-prompt">{{ r.input_prompt }}</p>
+          <p v-if="r.output_summary" class="run-output">{{ r.output_summary }}</p>
+          <p v-if="r.error_message" class="run-error">{{ r.error_message }}</p>
+          <div v-if="r.output_diff" class="run-diff">
+            <DiffViewer :content="r.output_diff" />
+          </div>
+          <div v-if="r.output_log" class="run-field">
+            <span class="field-label">日志输出 (output_log)</span>
+            <pre class="run-pre">{{ r.output_log }}</pre>
+          </div>
+          <div v-if="r.raw_result_json" class="run-field">
+            <span class="field-label">原始结果 JSON (raw_result_json)</span>
+            <pre class="run-pre">{{ r.raw_result_json }}</pre>
+          </div>
+          <div class="agent-run-actions">
+            <button v-if="r.status === 'queued'" class="btn btn-sm btn-primary" @click="startAgentRun(r)">Start</button>
+            <button v-if="r.status === 'queued' || r.status === 'running'" class="btn btn-sm btn-warn" @click="cancelAgentRun(r)">Cancel</button>
+            <button v-if="r.status === 'running'" class="btn btn-sm" @click="showSubmitResult(r)">提交结果</button>
+          </div>
+
+          <div v-if="submitFormRunId === r.id" class="inline-form">
+            <label>
+              结果状态
+              <select v-model="submitForm.status">
+                <option value="succeeded">成功 (Succeeded)</option>
+                <option value="failed">失败 (Failed)</option>
+              </select>
+            </label>
+            <label>输出摘要<textarea v-model="submitForm.output_summary" rows="3"></textarea></label>
+            <label>错误信息<textarea v-model="submitForm.error_message" rows="2"></textarea></label>
+            <label>Diff 输出<textarea v-model="submitForm.output_diff" rows="3"></textarea></label>
+            <label>日志输出<textarea v-model="submitForm.output_log" rows="3"></textarea></label>
+            <label>
+              原始结果 JSON (raw_result_json)
+              <textarea v-model="submitForm.raw_result_json" rows="3" placeholder='{"key": "value"}'></textarea>
+            </label>
+            <div class="form-actions">
+              <button class="btn btn-primary btn-sm" @click="confirmSubmitRunResult(r)" :disabled="actionLoading">确认</button>
+              <button class="btn btn-sm" @click="submitFormRunId = null" :disabled="actionLoading">取消</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Agent Review -->
+      <section class="card">
+        <div class="section-header">
+          <h2>Agent 审查</h2>
+          <button v-if="agentRuns.length > 0 && !isArchived" class="btn btn-sm btn-primary" @click="showAgentReviewForm = true">+ 提交 AI 审查</button>
+        </div>
+        <p class="section-note">AgentReview 是 AI 预审建议，不等同于人类最终审批</p>
+
+        <div v-if="showAgentReviewForm && !isArchived" class="inline-form">
+          <label>
+            关联 AgentRun
+            <select v-model="agentReviewForm.agent_run_id" class="run-select">
+              <option value="">请选择 AgentRun</option>
+              <option v-for="r in agentRuns" :key="r.id" :value="r.id">
+                #{{ r.id }} · {{ runTypeLabel(r.run_type) }} · {{ AGENT_RUN_STATUS_LABELS[r.status] || r.status }} · {{ formatTime(r.created_at) }}
+              </option>
+            </select>
+          </label>
+          <label>
+            审查 Agent
+            <select v-model="agentReviewForm.reviewer_agent_id">
+              <option value="">请选择</option>
+              <option v-for="a in agents" :key="a.id" :value="a.id" :disabled="!a.enabled">
+                {{ a.name }} ({{ a.agent_type }})
+              </option>
+            </select>
+          </label>
+          <label>
+            决策
+            <select v-model="agentReviewForm.decision">
+              <option value="approved">通过 (Approved)</option>
+              <option value="changes_requested">要求修改 (Changes Requested)</option>
+              <option value="rejected">拒绝 (Rejected)</option>
+              <option value="human_required">需要人工审批 (Human Required)</option>
+            </select>
+          </label>
+          <label>
+            风险等级
+            <select v-model="agentReviewForm.risk_level">
+              <option value="low">低 (Low)</option>
+              <option value="medium">中 (Medium)</option>
+              <option value="high">高 (High)</option>
+              <option value="critical">严重 (Critical)</option>
+            </select>
+          </label>
+          <label>置信度 (0-1)<input v-model.number="agentReviewForm.confidence_score" type="number" min="0" max="1" step="0.1" /></label>
+          <label>审查意见<textarea v-model="agentReviewForm.comments" rows="3"></textarea></label>
+          <label>
+            问题列表 JSON (issues_json)
+            <textarea v-model="agentReviewForm.issues_json" rows="3" placeholder='[{"severity":"high","description":"..."}]'></textarea>
+          </label>
+          <div class="form-actions">
+            <button class="btn btn-primary btn-sm" @click="handleCreateAgentReview" :disabled="!agentReviewForm.reviewer_agent_id || !agentReviewForm.agent_run_id">提交</button>
+            <button class="btn btn-sm" @click="showAgentReviewForm = false">取消</button>
+          </div>
+        </div>
+
+        <div v-if="agentReviews.length === 0" class="empty-state" style="margin-top: 12px;">
+          <p>暂无 AI 审查记录</p>
+        </div>
+        <div v-for="rev in agentReviews" :key="rev.id" class="agent-review-item">
+          <div class="agent-review-header">
+            <span class="review-decision" :class="rev.decision">{{ rev.decision }}</span>
+            <span class="review-risk" :class="rev.risk_level">风险: {{ rev.risk_level }}</span>
+            <span v-if="rev.confidence_score !== null" class="review-confidence">置信度 {{ rev.confidence_score }}</span>
+            <span class="review-time">{{ formatTime(rev.created_at) }}</span>
+          </div>
+          <p class="review-meta">审查 Agent #{{ rev.reviewer_agent_id }} · AgentRun #{{ rev.agent_run_id }}</p>
+          <p v-if="rev.comments" class="review-comments">{{ rev.comments }}</p>
+          <div v-if="rev.issues_json" class="run-field">
+            <span class="field-label">问题列表 (issues_json)</span>
+            <pre class="run-pre">{{ rev.issues_json }}</pre>
+          </div>
         </div>
       </section>
 
@@ -96,11 +274,19 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useTaskStore } from '../stores/taskStore'
+import {
+  fetchAgents,
+  fetchAgentRuns, createAgentRun, updateAgentRun, submitAgentRunResult,
+  fetchAgentReviews, createAgentReview,
+} from '../services/agentService'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult } from '../types/agent'
+import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
 import ArtifactTab from '../components/ArtifactTab.vue'
 import ReviewPanel from '../components/ReviewPanel.vue'
 import EventTimeline from '../components/EventTimeline.vue'
+import DiffViewer from '../components/DiffViewer.vue'
 
 const route = useRoute()
 const taskStore = useTaskStore()
@@ -109,17 +295,34 @@ const actionLoading = ref(false)
 const showResultForm = ref(false)
 const resultSummary = ref('')
 
+const agents = ref<AgentProfile[]>([])
+const agentRuns = ref<AgentRun[]>([])
+const agentReviews = ref<AgentReview[]>([])
+const showAgentRunForm = ref(false)
+const showAgentReviewForm = ref(false)
+const submitFormRunId = ref<number | null>(null)
+
+const agentRunForm = ref({ agent_id: 0, run_type: 'plan', input_prompt: '', branch: '' })
+const agentReviewForm = ref({ reviewer_agent_id: 0, decision: 'approved', risk_level: 'low', comments: '', confidence_score: null as number | null, agent_run_id: 0, issues_json: '' })
+const submitForm = ref<AgentRunSubmitResult>({ status: 'succeeded', output_summary: '', error_message: '', output_diff: '', output_log: '', raw_result_json: '' })
+
 const ACTION_MAP: Record<string, { action: string; label: string; cls: string }[]> = {
   draft: [{ action: 'generate-ticket', label: '生成任务单', cls: 'btn-primary' }],
   ticket_ready: [{ action: 'dispatch', label: '分派给 Executor', cls: 'btn-primary' }],
   dispatched: [{ action: 'submit-result', label: '提交执行结果', cls: 'btn-primary' }],
   result_submitted: [{ action: 'start-review', label: '开始审查', cls: 'btn-primary' }],
   reviewing: [
+    { action: 'require-human-approval', label: '需要人工审批', cls: 'btn-warn' },
     { action: 'approve', label: '通过 (Approve)', cls: 'btn-approve' },
     { action: 'reject', label: '拒绝 (Reject)', cls: 'btn-reject' },
     { action: 'request-changes', label: '要求修改', cls: 'btn-warn' },
   ],
   changes_requested: [{ action: 'dispatch', label: '重新分派', cls: 'btn-primary' }],
+  human_required: [
+    { action: 'approve', label: '通过 (Approve)', cls: 'btn-approve' },
+    { action: 'reject', label: '拒绝 (Reject)', cls: 'btn-reject' },
+    { action: 'request-changes', label: '要求修改', cls: 'btn-warn' },
+  ],
   approved: [{ action: 'archive', label: '归档', cls: 'btn-archive' }],
   rejected: [{ action: 'archive', label: '归档', cls: 'btn-archive' }],
 }
@@ -131,11 +334,25 @@ const availableActions = computed(() => {
   return ACTION_MAP[task.value.status] || []
 })
 
-onMounted(refresh)
+function runTypeLabel(t: string) {
+  return AGENT_RUN_TYPE_LABELS[t] || t
+}
+
+function formatTime(ts: string | null | undefined) {
+  if (!ts) return '-'
+  return new Date(ts).toLocaleString()
+}
+
+onMounted(async () => {
+  agents.value = await fetchAgents()
+  await refresh()
+})
 
 async function refresh() {
   const id = Number(route.params.id)
   task.value = await taskStore.fetchTask(id)
+  agentRuns.value = await fetchAgentRuns(id)
+  agentReviews.value = await fetchAgentReviews(id)
 }
 
 async function handleAction(action: string) {
@@ -147,6 +364,7 @@ async function handleAction(action: string) {
 }
 
 async function confirmSubmitResult() {
+  if (actionLoading.value) return
   await doTransition('submit-result', { result_summary: resultSummary.value })
   showResultForm.value = false
   resultSummary.value = ''
@@ -172,6 +390,76 @@ async function handleStub(action: string) {
     alert(e.message)
   }
 }
+
+// Agent Run actions
+async function handleCreateAgentRun() {
+  if (!agentRunForm.value.agent_id) return
+  try {
+    await createAgentRun(task.value.id, agentRunForm.value)
+    agentRunForm.value = { agent_id: 0, run_type: 'plan', input_prompt: '', branch: '' }
+    showAgentRunForm.value = false
+    agentRuns.value = await fetchAgentRuns(task.value.id)
+  } catch (e: any) {
+    alert(e.message)
+  }
+}
+
+async function startAgentRun(r: AgentRun) {
+  try {
+    await updateAgentRun(task.value.id, r.id, { status: 'running' })
+    agentRuns.value = await fetchAgentRuns(task.value.id)
+  } catch (e: any) {
+    alert(e.message)
+  }
+}
+
+async function cancelAgentRun(r: AgentRun) {
+  try {
+    await updateAgentRun(task.value.id, r.id, { status: 'canceled' })
+    agentRuns.value = await fetchAgentRuns(task.value.id)
+  } catch (e: any) {
+    alert(e.message)
+  }
+}
+
+function showSubmitResult(r: AgentRun) {
+  submitFormRunId.value = r.id
+  submitForm.value = { status: 'succeeded' as const, output_summary: '', error_message: '', output_diff: '', output_log: '', raw_result_json: '' }
+}
+
+async function confirmSubmitRunResult(r: AgentRun) {
+  if (actionLoading.value) return
+  actionLoading.value = true
+  try {
+    await submitAgentRunResult(task.value.id, r.id, submitForm.value)
+    submitFormRunId.value = null
+    agentRuns.value = await fetchAgentRuns(task.value.id)
+  } catch (e: any) {
+    alert(e.message)
+  } finally {
+    actionLoading.value = false
+  }
+}
+
+// Agent Review actions
+async function handleCreateAgentReview() {
+  if (!agentReviewForm.value.reviewer_agent_id || !agentReviewForm.value.agent_run_id) return
+  try {
+    await createAgentReview(task.value.id, agentReviewForm.value.agent_run_id, {
+      reviewer_agent_id: agentReviewForm.value.reviewer_agent_id,
+      decision: agentReviewForm.value.decision,
+      risk_level: agentReviewForm.value.risk_level,
+      comments: agentReviewForm.value.comments || null,
+      confidence_score: agentReviewForm.value.confidence_score,
+      issues_json: agentReviewForm.value.issues_json || null,
+    })
+    agentReviewForm.value = { reviewer_agent_id: 0, decision: 'approved', risk_level: 'low', comments: '', confidence_score: null, agent_run_id: 0, issues_json: '' }
+    showAgentReviewForm.value = false
+    agentReviews.value = await fetchAgentReviews(task.value.id)
+  } catch (e: any) {
+    alert(e.message)
+  }
+}
 </script>
 
 <style scoped>
@@ -193,4 +481,59 @@ async function handleStub(action: string) {
 .stub-actions { display: flex; gap: 8px; }
 .stub-section { opacity: 0.7; }
 .loading { text-align: center; padding: 60px; color: var(--color-text-secondary); }
+.section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--color-border); }
+.section-header h2 { font-size: 16px; font-weight: 600; margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+.section-note { font-size: 12px; color: var(--color-text-secondary); font-style: italic; margin-bottom: 12px; }
+.inline-form { background: var(--color-bg); border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.inline-form label { font-size: 13px; }
+.inline-form input, .inline-form select, .inline-form textarea { width: 100%; }
+.agent-run-item { padding: 12px; margin-top: 8px; border: 1px solid var(--color-border); border-radius: var(--radius); }
+.agent-run-header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.agent-run-header strong { font-size: 14px; }
+.run-status-badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+.run-status-badge.queued { background: #f5f5f5; color: #616161; }
+.run-status-badge.running { background: #e3f2fd; color: #1565c0; }
+.run-status-badge.succeeded { background: #e8f5e9; color: #2e7d32; }
+.run-status-badge.failed { background: #ffebee; color: #c62828; }
+.run-status-badge.canceled { background: #f5f5f5; color: #9e9e9e; }
+.run-status-badge.human_required { background: #fce4ec; color: #c62828; }
+.run-risk { padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+.run-risk.low { background: #e8f5e9; color: #2e7d32; }
+.run-risk.medium { background: #fff3e0; color: #e65100; }
+.run-risk.high { background: #ffebee; color: #c62828; }
+.run-risk.critical { background: #fce4ec; color: #b71c1c; }
+.run-attempt { font-size: 12px; color: var(--color-text-secondary); margin-left: auto; }
+.agent-run-meta { font-size: 12px; color: var(--color-text-secondary); margin-bottom: 4px; }
+.run-prompt { font-size: 13px; color: var(--color-text-secondary); background: #f5f5f5; padding: 8px; border-radius: 6px; margin: 4px 0; white-space: pre-wrap; }
+.run-output { font-size: 13px; color: var(--color-text); margin: 4px 0; white-space: pre-wrap; }
+.run-error { font-size: 13px; color: var(--color-danger); margin: 4px 0; white-space: pre-wrap; }
+.run-diff { margin: 4px 0; }
+.run-field { margin: 4px 0; }
+.field-label { font-size: 11px; color: var(--color-text-secondary); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+.run-pre { background: #f5f5f5; padding: 8px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; margin-top: 4px; }
+.agent-run-actions { display: flex; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--color-border); }
+.agent-review-item { padding: 10px 0; border-bottom: 1px solid var(--color-border); }
+.agent-review-item:last-child { border-bottom: none; }
+.agent-review-header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.review-decision { padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+.review-decision.approved { background: #e8f5e9; color: #2e7d32; }
+.review-decision.rejected { background: #ffebee; color: #c62828; }
+.review-decision.changes_requested { background: #fff3e0; color: #e65100; }
+.review-decision.human_required { background: #fce4ec; color: #c62828; }
+.review-risk { padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+.review-risk.low { background: #e8f5e9; color: #2e7d32; }
+.review-risk.medium { background: #fff3e0; color: #e65100; }
+.review-risk.high { background: #ffebee; color: #c62828; }
+.review-risk.critical { background: #fce4ec; color: #b71c1c; }
+.review-confidence { font-size: 12px; color: var(--color-text-secondary); }
+.review-time { font-size: 12px; color: var(--color-text-secondary); margin-left: auto; }
+.review-meta { font-size: 12px; color: var(--color-text-secondary); }
+.review-comments { font-size: 13px; color: var(--color-text-secondary); margin-top: 4px; }
+.run-select { max-width: 100%; }
+.btn-primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.btn-approve { background: #4caf50; color: #fff; border-color: #4caf50; }
+.btn-reject { background: #f44336; color: #fff; border-color: #f44336; }
+.btn-warn { background: #ff9800; color: #fff; border-color: #ff9800; }
+.btn-archive { background: #607d8b; color: #fff; border-color: #607d8b; }
+.btn-sm { padding: 6px 14px; font-size: 13px; }
 </style>

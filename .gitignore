@@ -23,6 +23,15 @@ backend/data/*.db
 backend/data/*.db-wal
 backend/data/*.db-shm
 
+# Vite cache
+.vite/
+start_vite.cmd
+
+# Config & secrets
+.config/
+.env
+ccx.exe
+
 # Logs
 *.log
 server.err.log
