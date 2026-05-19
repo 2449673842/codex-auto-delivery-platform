@@ -68,7 +68,7 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
             await db.flush()
             await create_event(
                 db, task_id=run.task_id, event_type="agent_run_failed",
-                actor=actor, message=f"AgentRun #{run.id} failed: {str(e)}",
+                actor=actor, message=f"AgentRun #{run.id} failed",
             )
             raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} failed: Provider init error")
         except Exception as e:
@@ -78,7 +78,7 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
             await db.flush()
             await create_event(
                 db, task_id=run.task_id, event_type="agent_run_failed",
-                actor=actor, message=f"AgentRun #{run.id} failed: {str(e)}",
+                actor=actor, message=f"AgentRun #{run.id} failed",
             )
             raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} failed: Execution error")
     else:
@@ -92,9 +92,9 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
             await db.flush()
             await create_event(
                 db, task_id=run.task_id, event_type="agent_run_failed",
-                actor=actor, message=f"AgentRun #{run.id} failed: {str(e)}",
+                actor=actor, message=f"AgentRun #{run.id} failed",
             )
-            raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} execution failed: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} execution failed")
 
     # Step 3: running → succeeded with results (direct model update)
     run.status = AgentRunStatus.SUCCEEDED.value
