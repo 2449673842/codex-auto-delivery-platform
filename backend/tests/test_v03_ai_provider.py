@@ -198,15 +198,16 @@ async def test_sandbox_creates_exact_artifact_types(client, task, agent):
 
 # ─── Provider selection: only sandbox works in v0.3 ───
 
-def test_provider_selection_only_sandbox():
-    """v0.3: dispatch_agent_run hardcodes SandboxProvider, not based on AgentProfile.provider"""
+def test_provider_selection_sandbox_default():
+    """v0.3 S2: Default provider is sandbox, openai is also available"""
     import os
     src_path = os.path.join(os.path.dirname(__file__), '../app/services/ai_provider_service.py')
     with open(src_path, encoding='utf-8') as f:
         src = f.read()
     assert 'SandboxProvider()' in src, 'dispatch must use SandboxProvider'
-    # Verify no real provider imports
-    for pkg in ['openai', 'anthropic', 'import requests']:
+    assert 'OpenAIProvider' in src, 'v0.3 S2: OpenAIProvider should be available'
+    # Verify no other real provider imports
+    for pkg in ['anthropic']:
         assert pkg not in src, f'dispatch should not import {pkg}'
 
 
