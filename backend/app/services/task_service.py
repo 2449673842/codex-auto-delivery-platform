@@ -164,6 +164,20 @@ async def request_changes(
     )
 
 
+async def require_human_approval(
+    db: AsyncSession, task_id: int, body
+) -> Task:
+    task = await get_task(db, task_id)
+    from app.enums import TaskStatus
+    result = await _transition(db, task, TaskStatus.HUMAN_REQUIRED, body.actor, body.message)
+    await create_event(
+        db, task_id=task.id, event_type="human_approval_required",
+        actor=body.actor,
+        message=body.message or "Human approval required",
+    )
+    return result
+
+
 async def archive_task(
     db: AsyncSession, task_id: int, body: TaskStatusTransition
 ) -> Task:
