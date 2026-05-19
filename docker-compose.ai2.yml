@@ -1,0 +1,11 @@
+# AI2 本地并行测试覆盖
+# 用法: docker-compose -f docker-compose.yml -f docker-compose.ai2.yml up -d
+# 后端: 8701, 前端: 9701, 避免与 AI1 (8700/9700) 端口冲突
+
+services:
+  backend:
+    ports:
+      - "8701:8700"
+    environment:
+      CODEX_PORT: "8700"
+      CODEX_FRONTEND_ORIGIN: "http://127.0.0.1:9701"
