@@ -317,12 +317,12 @@ const ACTION_MAP: Record<string, { action: string; label: string; cls: string }[
     { action: 'reject', label: '拒绝 (Reject)', cls: 'btn-reject' },
     { action: 'request-changes', label: '要求修改', cls: 'btn-warn' },
   ],
+  changes_requested: [{ action: 'dispatch', label: '重新分派', cls: 'btn-primary' }],
   human_required: [
     { action: 'approve', label: '通过 (Approve)', cls: 'btn-approve' },
     { action: 'reject', label: '拒绝 (Reject)', cls: 'btn-reject' },
     { action: 'request-changes', label: '要求修改', cls: 'btn-warn' },
   ],
-  changes_requested: [{ action: 'dispatch', label: '重新分派', cls: 'btn-primary' }],
   approved: [{ action: 'archive', label: '归档', cls: 'btn-archive' }],
   rejected: [{ action: 'archive', label: '归档', cls: 'btn-archive' }],
 }
