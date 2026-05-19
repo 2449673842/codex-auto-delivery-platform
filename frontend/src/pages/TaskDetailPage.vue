@@ -68,10 +68,11 @@
       <section class="card">
         <div class="section-header">
           <h2>Agent 运行</h2>
-          <button class="btn btn-sm btn-primary" @click="showAgentRunForm = true">+ 创建 AgentRun</button>
+          <button v-if="!isArchived" class="btn btn-sm btn-primary" @click="showAgentRunForm = true">+ 创建 AgentRun</button>
         </div>
+        <p v-if="isArchived && task" class="section-note">已归档，不能创建 AgentRun</p>
 
-        <div v-if="showAgentRunForm" class="inline-form">
+        <div v-if="showAgentRunForm && !isArchived" class="inline-form">
           <label>
             Agent
             <select v-model="agentRunForm.agent_id">
@@ -115,12 +116,25 @@
           <div class="agent-run-meta">
             Agent #{{ r.agent_id }} · {{ r.branch || '无分支' }}
             <span v-if="r.duration_ms"> · {{ Math.round(r.duration_ms / 1000) }}s</span>
+            <span v-if="r.commit_sha"> · commit {{ r.commit_sha.substring(0, 8) }}</span>
+          </div>
+          <div class="agent-run-meta">
+            创建: {{ formatTime(r.created_at) }}
+            <span v-if="r.updated_at"> · 更新: {{ formatTime(r.updated_at) }}</span>
           </div>
           <p v-if="r.input_prompt" class="run-prompt">{{ r.input_prompt }}</p>
           <p v-if="r.output_summary" class="run-output">{{ r.output_summary }}</p>
           <p v-if="r.error_message" class="run-error">{{ r.error_message }}</p>
           <div v-if="r.output_diff" class="run-diff">
             <DiffViewer :content="r.output_diff" />
+          </div>
+          <div v-if="r.output_log" class="run-field">
+            <span class="field-label">日志输出 (output_log)</span>
+            <pre class="run-pre">{{ r.output_log }}</pre>
+          </div>
+          <div v-if="r.raw_result_json" class="run-field">
+            <span class="field-label">原始结果 JSON (raw_result_json)</span>
+            <pre class="run-pre">{{ r.raw_result_json }}</pre>
           </div>
           <div class="agent-run-actions">
             <button v-if="r.status === 'queued'" class="btn btn-sm btn-primary" @click="startAgentRun(r)">Start</button>
@@ -140,6 +154,10 @@
             <label>错误信息<textarea v-model="submitForm.error_message" rows="2"></textarea></label>
             <label>Diff 输出<textarea v-model="submitForm.output_diff" rows="3"></textarea></label>
             <label>日志输出<textarea v-model="submitForm.output_log" rows="3"></textarea></label>
+            <label>
+              原始结果 JSON (raw_result_json)
+              <textarea v-model="submitForm.raw_result_json" rows="3" placeholder='{"key": "value"}'></textarea>
+            </label>
             <div class="form-actions">
               <button class="btn btn-primary btn-sm" @click="confirmSubmitRunResult(r)">确认</button>
               <button class="btn btn-sm" @click="submitFormRunId = null">取消</button>
@@ -152,11 +170,20 @@
       <section class="card">
         <div class="section-header">
           <h2>Agent 审查</h2>
-          <button v-if="agentRuns.length > 0" class="btn btn-sm btn-primary" @click="showAgentReviewForm = true">+ 提交 AI 审查</button>
+          <button v-if="agentRuns.length > 0 && !isArchived" class="btn btn-sm btn-primary" @click="showAgentReviewForm = true">+ 提交 AI 审查</button>
         </div>
         <p class="section-note">AgentReview 是 AI 预审建议，不等同于人类最终审批</p>
 
-        <div v-if="showAgentReviewForm" class="inline-form">
+        <div v-if="showAgentReviewForm && !isArchived" class="inline-form">
+          <label>
+            关联 AgentRun
+            <select v-model="agentReviewForm.agent_run_id" class="run-select">
+              <option value="">请选择 AgentRun</option>
+              <option v-for="r in agentRuns" :key="r.id" :value="r.id">
+                #{{ r.id }} · {{ runTypeLabel(r.run_type) }} · {{ AGENT_RUN_STATUS_LABELS[r.status] || r.status }} · {{ formatTime(r.created_at) }}
+              </option>
+            </select>
+          </label>
           <label>
             审查 Agent
             <select v-model="agentReviewForm.reviewer_agent_id">
@@ -186,8 +213,12 @@
           </label>
           <label>置信度 (0-1)<input v-model.number="agentReviewForm.confidence_score" type="number" min="0" max="1" step="0.1" /></label>
           <label>审查意见<textarea v-model="agentReviewForm.comments" rows="3"></textarea></label>
+          <label>
+            问题列表 JSON (issues_json)
+            <textarea v-model="agentReviewForm.issues_json" rows="3" placeholder='[{"severity":"high","description":"..."}]'></textarea>
+          </label>
           <div class="form-actions">
-            <button class="btn btn-primary btn-sm" @click="handleCreateAgentReview" :disabled="!agentReviewForm.reviewer_agent_id">提交</button>
+            <button class="btn btn-primary btn-sm" @click="handleCreateAgentReview" :disabled="!agentReviewForm.reviewer_agent_id || !agentReviewForm.agent_run_id">提交</button>
             <button class="btn btn-sm" @click="showAgentReviewForm = false">取消</button>
           </div>
         </div>
@@ -195,15 +226,19 @@
         <div v-if="agentReviews.length === 0" class="empty-state" style="margin-top: 12px;">
           <p>暂无 AI 审查记录</p>
         </div>
-        <div v-for="r in agentReviews" :key="r.id" class="agent-review-item">
+        <div v-for="rev in agentReviews" :key="rev.id" class="agent-review-item">
           <div class="agent-review-header">
-            <span class="review-decision" :class="r.decision">{{ r.decision }}</span>
-            <span class="review-risk" :class="r.risk_level">风险: {{ r.risk_level }}</span>
-            <span v-if="r.confidence_score !== null" class="review-confidence">置信度: {{ r.confidence_score }}</span>
-            <span class="review-time">{{ new Date(r.created_at).toLocaleString() }}</span>
+            <span class="review-decision" :class="rev.decision">{{ rev.decision }}</span>
+            <span class="review-risk" :class="rev.risk_level">风险: {{ rev.risk_level }}</span>
+            <span v-if="rev.confidence_score !== null" class="review-confidence">置信度 {{ rev.confidence_score }}</span>
+            <span class="review-time">{{ formatTime(rev.created_at) }}</span>
           </div>
-          <p class="review-meta">审查 Agent #{{ r.reviewer_agent_id }} · AgentRun #{{ r.agent_run_id }}</p>
-          <p v-if="r.comments" class="review-comments">{{ r.comments }}</p>
+          <p class="review-meta">审查 Agent #{{ rev.reviewer_agent_id }} · AgentRun #{{ rev.agent_run_id }}</p>
+          <p v-if="rev.comments" class="review-comments">{{ rev.comments }}</p>
+          <div v-if="rev.issues_json" class="run-field">
+            <span class="field-label">问题列表 (issues_json)</span>
+            <pre class="run-pre">{{ rev.issues_json }}</pre>
+          </div>
         </div>
       </section>
 
@@ -268,8 +303,8 @@ const showAgentReviewForm = ref(false)
 const submitFormRunId = ref<number | null>(null)
 
 const agentRunForm = ref({ agent_id: 0, run_type: 'plan', input_prompt: '', branch: '' })
-const agentReviewForm = ref({ reviewer_agent_id: 0, decision: 'approved', risk_level: 'low', comments: '', confidence_score: null as number | null })
-const submitForm = ref({ status: 'succeeded', output_summary: '', error_message: '', output_diff: '', output_log: '' })
+const agentReviewForm = ref({ reviewer_agent_id: 0, decision: 'approved', risk_level: 'low', comments: '', confidence_score: null as number | null, agent_run_id: 0, issues_json: '' })
+const submitForm = ref({ status: 'succeeded', output_summary: '', error_message: '', output_diff: '', output_log: '', raw_result_json: '' })
 
 const ACTION_MAP: Record<string, { action: string; label: string; cls: string }[]> = {
   draft: [{ action: 'generate-ticket', label: '生成任务单', cls: 'btn-primary' }],
@@ -301,6 +336,11 @@ const availableActions = computed(() => {
 
 function runTypeLabel(t: string) {
   return AGENT_RUN_TYPE_LABELS[t] || t
+}
+
+function formatTime(ts: string | null | undefined) {
+  if (!ts) return '-'
+  return new Date(ts).toLocaleString()
 }
 
 onMounted(async () => {
@@ -383,7 +423,7 @@ async function cancelAgentRun(r: AgentRun) {
 
 function showSubmitResult(r: AgentRun) {
   submitFormRunId.value = r.id
-  submitForm.value = { status: 'succeeded', output_summary: '', error_message: '', output_diff: '', output_log: '' }
+  submitForm.value = { status: 'succeeded', output_summary: '', error_message: '', output_diff: '', output_log: '', raw_result_json: '' }
 }
 
 async function confirmSubmitRunResult(r: AgentRun) {
@@ -398,11 +438,17 @@ async function confirmSubmitRunResult(r: AgentRun) {
 
 // Agent Review actions
 async function handleCreateAgentReview() {
-  if (!agentReviewForm.value.reviewer_agent_id) return
+  if (!agentReviewForm.value.reviewer_agent_id || !agentReviewForm.value.agent_run_id) return
   try {
-    const runId = agentRuns.value.length > 0 ? agentRuns.value[agentRuns.value.length - 1].id : 0
-    await createAgentReview(task.value.id, runId, agentReviewForm.value)
-    agentReviewForm.value = { reviewer_agent_id: 0, decision: 'approved', risk_level: 'low', comments: '', confidence_score: null }
+    await createAgentReview(task.value.id, agentReviewForm.value.agent_run_id, {
+      reviewer_agent_id: agentReviewForm.value.reviewer_agent_id,
+      decision: agentReviewForm.value.decision,
+      risk_level: agentReviewForm.value.risk_level,
+      comments: agentReviewForm.value.comments || null,
+      confidence_score: agentReviewForm.value.confidence_score,
+      issues_json: agentReviewForm.value.issues_json || null,
+    })
+    agentReviewForm.value = { reviewer_agent_id: 0, decision: 'approved', risk_level: 'low', comments: '', confidence_score: null, agent_run_id: 0, issues_json: '' }
     showAgentReviewForm.value = false
     agentReviews.value = await fetchAgentReviews(task.value.id)
   } catch (e: any) {
@@ -457,6 +503,9 @@ async function handleCreateAgentReview() {
 .run-output { font-size: 13px; color: var(--color-text); margin: 4px 0; white-space: pre-wrap; }
 .run-error { font-size: 13px; color: var(--color-danger); margin: 4px 0; white-space: pre-wrap; }
 .run-diff { margin: 4px 0; }
+.run-field { margin: 4px 0; }
+.field-label { font-size: 11px; color: var(--color-text-secondary); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+.run-pre { background: #f5f5f5; padding: 8px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; margin-top: 4px; }
 .agent-run-actions { display: flex; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--color-border); }
 .agent-review-item { padding: 10px 0; border-bottom: 1px solid var(--color-border); }
 .agent-review-item:last-child { border-bottom: none; }
@@ -475,6 +524,7 @@ async function handleCreateAgentReview() {
 .review-time { font-size: 12px; color: var(--color-text-secondary); margin-left: auto; }
 .review-meta { font-size: 12px; color: var(--color-text-secondary); }
 .review-comments { font-size: 13px; color: var(--color-text-secondary); margin-top: 4px; }
+.run-select { max-width: 100%; }
 .btn-primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
 .btn-approve { background: #4caf50; color: #fff; border-color: #4caf50; }
 .btn-reject { background: #f44336; color: #fff; border-color: #f44336; }
