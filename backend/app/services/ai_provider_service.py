@@ -131,9 +131,28 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
         validation=validation,
     )
 
+    # Secret redaction for provider_raw (safe: never raise)
+    def _redact_secrets(text):
+        import re
+        for pat, repl in [
+            (r'(sk-)[A-Za-z0-9]{20,}', r'\1***REDACTED***'),
+            (r'(ghp_|gho_|ghu_|ghs_)[A-Za-z0-9]{20,}', r'\1***REDACTED***'),
+            (r'(AKIA)[A-Z0-9]{16,}', r'\1***REDACTED***'),
+            (r'-----BEGIN\s*PRIVATE\s*KEY-----.*?-----END\s*PRIVATE\s*KEY-----', '-----BEGIN PRIVATE KEY-----***REDACTED***-----END PRIVATE KEY-----'),
+            (r'password\s*=\s*\S+', 'password=***REDACTED***'),
+            (r'token\s*=\s*\S+', 'token=***REDACTED***'),
+            (r'api_key\s*=\s*\S+', 'api_key=***REDACTED***'),
+        ]:
+            text = re.sub(pat, repl, text, flags=re.IGNORECASE)
+        return text
+    try:
+        _safe_raw = _redact_secrets(_provider_raw) if _provider_raw else None
+    except Exception:
+        _safe_raw = _provider_raw
+
     # Build combined raw_result_json: provider_raw + governance + trace
     run.raw_result_json = _json.dumps({
-        "provider_raw": _provider_raw,
+        "provider_raw": _safe_raw,
         "governance": {
             "valid": validation.valid,
             "requires_human": validation.requires_human,
@@ -159,20 +178,17 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
             detail=f"AgentRun #{run.id} failed governance validation",
         )
 
-    # Step 5: If requires_human → record RiskAssessment (but NOT auto-approve)
+    # Step 5: If requires_human → record ApprovalDecision (NOT auto-approve)
     if validation.requires_human:
         from app.models.approval_decision import ApprovalDecision
-        from app.enums import TaskStatus
-        task_obj = await db.get(type('Task', (), {'__tablename__': 'tasks'}), run.task_id)
-        if task_obj:
-            decision = ApprovalDecision(
-                task_id=run.task_id,
-                risk_level=validation.risk_level or "medium",
-                auto_approve_allowed=False,
-                requires_human=True,
-                summary=f"Governance: {validation.risk_level} risk, requires human review",
-            )
-            db.add(decision)
+        decision = ApprovalDecision(
+            task_id=run.task_id,
+            risk_level=validation.risk_level or "medium",
+            auto_approve_allowed=False,
+            requires_human=True,
+            summary=f"Governance: {validation.risk_level} risk, requires human review",
+        )
+        db.add(decision)
 
     # Step 6: Final succeeded
     run.status = AgentRunStatus.SUCCEEDED.value
