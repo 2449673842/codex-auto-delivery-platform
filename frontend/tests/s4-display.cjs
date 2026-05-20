@@ -17,14 +17,14 @@ function log(m) { console.log(m); r.details.push(m) }  // NOSONAR - test log
 function pass(m) { r.passed++; log(`  [PASS] ${m}`) }
 function fail(m, e) { r.failed++; log(`  [FAIL] ${m}: ${e}`) }
 
-function httpGet(url, cb) {  // NOSONAR - test harness
-  http.get(url, res => { let d = ''; res.on('data', c => d += c); res.on('end', () => cb({ status: res.statusCode, body: d })) })
+function httpGet(url, cb) {
+  http.get(url, res => { let d = ''; res.on('data', c => d += c); res.on('end', () => cb({ status: res.statusCode, body: d })) })  // NOSONAR - test harness
     .on('error', cb)
 }
 
-function httpPost(url, body, cb) {  // NOSONAR - test harness
+function httpPost(url, body, cb) {
   const u = new URL(url)
-  const req = http.request({ hostname: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' } },
+  const req = http.request({ hostname: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' } },  // NOSONAR - test harness
     res => { let d = ''; res.on('data', c => d += c); res.on('end', () => cb({ status: res.statusCode, body: d })) })
   req.on('error', cb); req.write(JSON.stringify(body)); req.end()
 }

@@ -625,9 +625,9 @@ async function handleCreateAgentReview() {
 .gov-tag { padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 500; }
 .gov-pass { background: #e8f5e9; color: #2e7d32; }
 .gov-fail { background: #ffebee; color: #c62828; }
-.gov-human { background: #fce4ec; color: #c62828; }
+.gov-human { background: #f8bbd0; color: #000000; }
 .gov-risk-low { background: #e8f5e9; color: #2e7d32; }
-.gov-risk-medium { background: #ffe0b2; color: #bf360c; }
+.gov-risk-medium { background: #ffcc80; color: #000000; }
 .gov-risk-high { background: #ffebee; color: #c62828; }
 .gov-risk-critical { background: #fce4ec; color: #b71c1c; }
 .gov-info { background: #e3f2fd; color: #1565c0; }
@@ -645,7 +645,7 @@ async function handleCreateAgentReview() {
 .label-ai { background: #e8f5e9; color: #2e7d32; }
 .label-provider { background: #e3f2fd; color: #1565c0; }
 .label-redacted { background: #fff3e0; color: #e65100; }
-.label-merged { background: #e1bee7; color: #4a148c; }
+.label-merged { background: #ce93d8; color: #000000; }
 .label-exec { background: #ffcdd2; color: #b71c1c; }
 .label-applied { background: #ffcdd2; color: #b71c1c; }
 .approval-decision-item { padding: 10px 0; border-bottom: 1px solid var(--color-border); }
