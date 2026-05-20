@@ -303,6 +303,35 @@
         </div>
       </section>
 
+      <!-- Sandbox Gate -->
+      <section class="card">
+        <h2>沙箱审批门</h2>
+        <p class="section-note">Sandbox Approval Gate 评估沙箱结果是否满足提 PR 前置条件。</p>
+        <div v-if="sandboxGateLoading" class="sandbox-gate-loading">评估中...</div>
+        <div v-else-if="sandboxGate" class="sandbox-gate-result">
+          <div class="sandbox-gate-header">
+            <span class="run-status-badge" :class="sandboxGate.passed ? 'succeeded' : 'failed'">
+              {{ sandboxGate.passed ? '已通过' : '已拦截' }}
+            </span>
+            <span>{{ sandboxGate.message }}</span>
+            <button class="btn btn-sm" @click="refreshSandboxGate" :disabled="sandboxGateLoading">重新评估</button>
+          </div>
+          <div v-if="sandboxGate.blocked_reasons.length" class="sandbox-gate-reasons">
+            <h3>拦截原因</h3>
+            <ul>
+              <li v-for="br in sandboxGate.blocked_reasons" :key="br.reason">
+                <strong>{{ br.reason }}</strong>
+                <span v-if="br.detail">: {{ br.detail }}</span>
+              </li>
+            </ul>
+          </div>
+          <div v-if="sandboxGate.passed" class="sandbox-gate-actions">
+            <button class="btn btn-sm" disabled title="PR Adapter not implemented — gate only validates sandbox results">PR Adapter not implemented</button>
+            <span class="sandbox-gate-pending-note">No real PR created · Future step only</span>
+          </div>
+        </div>
+      </section>
+
       <!-- Agent Review -->
       <section class="card">
         <div class="section-header">
@@ -464,9 +493,9 @@ import {
   fetchAgentReviews, createAgentReview,
   fetchApprovalDecisions,
   fetchCodeContext,
-  applyPatchInSandbox, fetchSandboxResults,
+  applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate, evaluateSandboxGate,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -491,6 +520,8 @@ const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
 const sandboxLoading = ref(false)
 const selectedSandboxRunId = ref<number | null>(null)
+const sandboxGate = ref<SandboxGateDecision | null>(null)
+const sandboxGateLoading = ref(false)
 const showAgentRunForm = ref(false)
 const showAgentReviewForm = ref(false)
 const submitFormRunId = ref<number | null>(null)
@@ -550,6 +581,28 @@ async function refresh() {
   codeContext.value = await fetchCodeContext(id)
   sandboxResults.value = await fetchSandboxResults(id)
   applyResult.value = null
+  await loadSandboxGate()
+}
+
+async function refreshSandboxGate() {
+  const id = Number(route.params.id)
+  sandboxGateLoading.value = true
+  try {
+    sandboxGate.value = await evaluateSandboxGate(id)
+  } catch {
+    sandboxGate.value = null
+  } finally {
+    sandboxGateLoading.value = false
+  }
+}
+
+async function loadSandboxGate() {
+  const id = Number(route.params.id)
+  try {
+    sandboxGate.value = await fetchSandboxGate(id)
+  } catch {
+    sandboxGate.value = null
+  }
 }
 
 function parseGovernance(r: any): any {
@@ -832,6 +885,18 @@ async function handleCreateAgentReview() {
 .sandbox-artifact-meta { font-size: 11px; color: var(--color-text-secondary); }
 .sandbox-artifact-sha { font-size: 10px; color: var(--color-text-secondary); }
 .sandbox-artifact-content { background: #f5f5f5; padding: 8px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; margin-top: 4px; }
+
+/* Sandbox Gate */
+.sandbox-gate-loading { font-size: 13px; color: var(--color-text-secondary); padding: 8px 0; }
+.sandbox-gate-result { margin-top: 8px; }
+.sandbox-gate-header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 14px; margin-bottom: 8px; }
+.sandbox-gate-reasons { margin: 8px 0; padding: 8px 12px; background: #fff3e0; border: 1px solid #ffe0b2; border-radius: var(--radius); }
+.sandbox-gate-reasons h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.sandbox-gate-reasons ul { margin: 0; padding-left: 16px; }
+.sandbox-gate-reasons li { font-size: 12px; margin: 2px 0; }
+.sandbox-gate-actions { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
+.sandbox-gate-pending-note { font-size: 11px; color: var(--color-text-secondary); font-style: italic; }
+
 .btn-primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
 .btn-approve { background: #4caf50; color: #fff; border-color: #4caf50; }
 .btn-reject { background: #f44336; color: #fff; border-color: #f44336; }
