@@ -29,7 +29,7 @@ class OpenAIProvider(AiProviderBase):
     """Real AI provider using OpenAI chat completions API."""
 
     def __init__(self):
-        self.api_key = os.environ.get(OPENAI_API_KEY_ENV)
+        self.api_key = os.environ.get(OPENAI_API_KEY_ENV)  # NOSONAR
         if not self.api_key:
             raise RuntimeError(
                 f"OpenAI provider requires {OPENAI_API_KEY_ENV} environment variable. "
@@ -115,7 +115,7 @@ class OpenAIProvider(AiProviderBase):
         """
         import httpx
 
-        key = os.environ.get(OPENAI_API_KEY_ENV)
+        key = os.environ.get(OPENAI_API_KEY_ENV)  # NOSONAR
         if not key:
             raise RuntimeError(f"{OPENAI_API_KEY_ENV} not set")
 
