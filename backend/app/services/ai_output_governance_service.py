@@ -113,13 +113,11 @@ def _check_patch_diff(patch_diff: str, errors: list, warnings: list, requires_hu
         warnings.append("patch.diff modifies forbidden path")
         requires_human.append(True)
 
-def _check_risk(risk_report: dict | None, errors: list, requires_human: list):
+def _check_risk(risk_report: dict | None, requires_human: list):
     if not risk_report:
         return None
     rc = check_risk_report(risk_report)
-    if rc.risk_level in ("high", "critical"):
-        requires_human.append(True)
-    if rc.requires_human:
+    if rc.risk_level in ("high", "critical") or rc.requires_human:
         requires_human.append(True)
     return rc.risk_level
     return rc.risk_level
@@ -179,7 +177,7 @@ def validate_agent_run_result(
 
     risk_level_from_risk = None
     if risk_report:
-        risk_level_from_risk = _check_risk(risk_report, errors, requires_human_flags)
+        risk_level_from_risk = _check_risk(risk_report, requires_human_flags)
 
     requires_human = any(requires_human_flags)
 
@@ -288,7 +286,7 @@ SECRET_REDACT_PATTERNS: list[tuple[str, str]] = [
     (r'(ghp_|gho_|ghu_|ghs_)[A-Za-z0-9]{20,}', REDACTED_MARKER),
     (r'(AKIA)[A-Z0-9]{16,}', REDACTED_MARKER),
     (r'-----BEGIN\s*PRIVATE\s*KEY-----.*?-----END\s*PRIVATE\s*KEY-----', REDACTED_BLOCK_MARKER),
-    (r'password\s*=\s*\S+', 'password=***REDACTED***'),
+    (r'password\s*=\s*\S+', 'password=***REDACTED***'),  # NOSONAR - pattern for detecting leaked passwords
     (r'token\s*=\s*\S+', 'token=***REDACTED***'),
     (r'api_key\s*=\s*\S+', 'api_key=***REDACTED***'),
 ]
