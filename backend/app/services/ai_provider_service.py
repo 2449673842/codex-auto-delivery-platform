@@ -96,26 +96,14 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
             )
             raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} execution failed")
 
-    # Step 3: running → succeeded with results (direct model update)
-    run.status = AgentRunStatus.SUCCEEDED.value
-    run.output_summary = result.output_summary
-    run.output_log = result.output_log
-    run.raw_result_json = result.raw_result_json
-    await db.flush()
-
-    await create_event(
-        db, task_id=run.task_id, event_type="agent_run_succeeded",
-        actor=actor, message=f"AgentRun #{run.id} succeeded: {result.output_summary[:80]}",
-    )
-
-    # Step 4: Governance validation
+    # Step 3: Governance validation (BEFORE final succeeded confirmation)
+    import json as _json
     from app.services.ai_output_governance_service import (
         validate_agent_run_result, parse_review_result,
         create_agent_review_from_ai_output, build_trace_json,
     )
 
-    # Parse risk_report from raw_result_json if possible
-    import json as _json
+    _provider_raw = result.raw_result_json
     risk_report = None
     if result.raw_result_json:
         try:
@@ -135,7 +123,6 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
         risk_report=risk_report,
     )
 
-    # Write validation result into raw_result_json trace
     trace = build_trace_json(
         provider=agent.provider if agent else "sandbox",
         model=getattr(agent, "model_name", None),
@@ -143,20 +130,71 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
         output_kind=validation.output_kind,
         validation=validation,
     )
-    run.raw_result_json = trace
+
+    # Build combined raw_result_json: provider_raw + governance + trace
+    run.raw_result_json = _json.dumps({
+        "provider_raw": _provider_raw,
+        "governance": {
+            "valid": validation.valid,
+            "requires_human": validation.requires_human,
+            "risk_level": validation.risk_level,
+            "errors": validation.errors,
+            "warnings": validation.warnings,
+        },
+        "trace": _json.loads(trace) if isinstance(trace, str) else trace,
+    }, ensure_ascii=False)
+
+    # Step 4: If validation invalid → fail the AgentRun
+    if not validation.valid:
+        run.status = AgentRunStatus.FAILED.value
+        run.error_message = "Governance validation failed"
+        await db.flush()
+        await create_event(
+            db, task_id=run.task_id, event_type="agent_run_failed",
+            actor=actor,
+            message=f"AgentRun #{run.id} failed governance validation: {validation.errors[0] if validation.errors else 'unknown'}",
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=f"AgentRun #{run.id} failed governance validation",
+        )
+
+    # Step 5: If requires_human → record RiskAssessment (but NOT auto-approve)
+    if validation.requires_human:
+        from app.models.approval_decision import ApprovalDecision
+        from app.enums import TaskStatus
+        task_obj = await db.get(type('Task', (), {'__tablename__': 'tasks'}), run.task_id)
+        if task_obj:
+            decision = ApprovalDecision(
+                task_id=run.task_id,
+                risk_level=validation.risk_level or "medium",
+                auto_approve_allowed=False,
+                requires_human=True,
+                summary=f"Governance: {validation.risk_level} risk, requires human review",
+            )
+            db.add(decision)
+
+    # Step 6: Final succeeded
+    run.status = AgentRunStatus.SUCCEEDED.value
+    run.output_summary = result.output_summary
+    run.output_log = result.output_log
     await db.flush()
 
-    # Create AgentReview if review output exists
+    await create_event(
+        db, task_id=run.task_id, event_type="agent_run_succeeded",
+        actor=actor, message=f"AgentRun #{run.id} succeeded: {result.output_summary[:80]}",
+    )
+
+    # Step 7: Create AgentReview if review output exists
     if result.review_md:
         review_parsed = parse_review_result(result.review_md)
         if review_parsed.parsed:
-            from app.services.ai_output_governance_service import create_agent_review_from_ai_output
             await create_agent_review_from_ai_output(
                 db, run.task_id, run.agent_id, run.id,
                 review_parsed, actor,
             )
 
-    # Step 5: Create artifacts from output
+    # Step 8: Create artifacts from output
     await _create_artifacts_from_result(db, run, result)
 
     return run
