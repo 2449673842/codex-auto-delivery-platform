@@ -19,6 +19,12 @@ class AiProviderBase(ABC):
     """
 
     @abstractmethod
-    async def execute(self, run: AgentRun) -> AgentRunResult:
-        """Execute the AgentRun and return results."""
+    async def execute(self, run: AgentRun, code_context: dict | None = None) -> AgentRunResult:
+        """Execute the AgentRun and return results.
+        
+        Args:
+            run: The AgentRun to execute.
+            code_context: Optional dict with files array (path, content, language).
+                          This data comes from TaskArtifacts, not from file system.
+        """
         ...

@@ -36,12 +36,12 @@ class OpenAIProvider(AiProviderBase):
                 "Set it before using real AI provider."
             )
 
-    async def execute(self, run: AgentRun) -> AgentRunResult:
+    async def execute(self, run: AgentRun, code_context: dict | None = None) -> AgentRunResult:
         ts = datetime.now(timezone.utc).isoformat()
         run_type = run.run_type or AgentRunType.PLAN.value
         prompt = run.input_prompt or "No input provided"
 
-        system_prompt, user_prompt = self._build_prompts(run_type, prompt, ts)
+        system_prompt, user_prompt = self._build_prompts(run_type, prompt, ts, code_context)
 
         try:
             response_text = await self._call_openai(system_prompt, user_prompt)
@@ -59,8 +59,13 @@ class OpenAIProvider(AiProviderBase):
 
         return result
 
-    def _build_prompts(self, run_type: str, prompt: str, ts: str) -> tuple[str, str]:
-        """Build system and user prompts for the given run type."""
+    def _build_prompts(self, run_type: str, prompt: str, ts: str,
+                       code_context: dict | None = None) -> tuple[str, str]:
+        """Build system and user prompts for the given run type.
+        
+        v0.4 S1: Includes code context files in EXECUTE prompt when available.
+        code_context comes from TaskArtifacts, not from file system.
+        """
         base_system = (
             "You are an AI code delivery assistant. "
             "Generate the requested output in a structured format. "
@@ -73,10 +78,24 @@ class OpenAIProvider(AiProviderBase):
                 f"Create an execution plan for the following task, output as markdown:\n\n{prompt}",
             )
         elif run_type == AgentRunType.EXECUTE.value:
-            return (
-                base_system,
-                f"Generate a code change (as unified diff format) for the following requirement:\n\n{prompt}",
+            files_text = ""
+            if code_context and code_context.get("files"):
+                files_text = "\n\nHere are the relevant source files:\n"
+                for f in code_context["files"]:
+                    path = f.get("path", "unknown")
+                    lang = f.get("language", "") or "text"
+                    content = f.get("content", "")
+                    files_text += f"\n### File: {path}\n```{lang}\n{content}\n```\n"
+                files_text += "\nGenerate a unified diff (diff --git format) that modifies these files as needed. "
+                files_text += "Output ONLY the diff, no extra commentary."
+
+            user_prompt = (
+                f"Generate a code change (as unified diff format) "
+                f"for the following requirement:\n\n{prompt}"
             )
+            if files_text:
+                user_prompt += files_text
+            return (base_system, user_prompt)
         elif run_type == AgentRunType.REVIEW.value:
             return (
                 base_system,

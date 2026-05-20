@@ -50,7 +50,7 @@ async def _orch_step(client, task_id: int, agent_name: str, monkeypatch, mock_re
     """Full openai dispatch: setup → mock → orchestrate → return agent-run data."""
     await _openai_steps(client, task_id, agent_name)
     from app.services.openai_provider import OpenAIProvider
-    async def _mock_exec(self, _run):  # NOSONAR - must be async to replace async method
+    async def _mock_exec(self, _run, _code_context=None):  # NOSONAR - must be async to replace async method
         return mock_result
     monkeypatch.setattr(OpenAIProvider, "execute", _mock_exec)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")

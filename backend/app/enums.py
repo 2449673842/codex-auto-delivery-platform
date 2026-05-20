@@ -36,6 +36,13 @@ class ArtifactType(str, Enum):
     BROWSER_CONSOLE = "browser_console"
     NETWORK_LOG = "network_log"
     TEST_VIDEO = "test_video"
+    CODE_CONTEXT = "code_context"
+    CODE_CONTEXT_FILE = "code_context_file"
+    CODE_CONTEXT_BUNDLE = "code_context_bundle"
+    PATCH_APPLY_REPORT = "patch_apply_report"
+    CHANGED_FILES_SUMMARY = "changed_files_summary"
+    CHANGED_FILE_PREVIEW = "changed_file_preview"
+    SANDBOX_AFTER_FILE = "sandbox_after_file"
 
 
 class EventType(str, Enum):
@@ -69,6 +76,9 @@ class EventType(str, Enum):
     APPROVAL_AUTO_EVALUATED = "approval_auto_evaluated"
     APPROVAL_AUTO_APPLIED = "approval_auto_applied"
     REMEDIATION_STARTED = "remediation_started"
+    CODE_CONTEXT_UPLOADED = "code_context_uploaded"
+    PATCH_SANDBOX_APPLIED = "patch_sandbox_applied"
+    PATCH_SANDBOX_FAILED = "patch_sandbox_failed"
 
 
 class ReviewDecision(str, Enum):
