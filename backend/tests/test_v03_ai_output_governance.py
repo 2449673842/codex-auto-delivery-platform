@@ -4,7 +4,7 @@ import pytest
 from app.services.ai_output_governance_service import (
     validate_agent_run_result, validate_patch_diff,
     parse_review_result, check_risk_report, build_trace_json,
-    AiOutputValidationResult, PatchDiffCheck, ReviewResult, RiskReportCheck,
+    AiOutputValidationResult,
 )
 
 # ─── S3-1: AI 输出校验 ───
@@ -16,8 +16,7 @@ def test_empty_output_is_invalid():
 
 def test_valid_plan_output():
     r = validate_agent_run_result(
-        output_summary="My plan",
-        output_log="Step 1 done",
+        output_summary="My plan", output_log="Step 1 done",
         raw_result_json='{"plan_md": "# Plan"}',
         plan_md="# Plan\n1. Do thing",
     )
@@ -27,24 +26,23 @@ def test_valid_plan_output():
 
 def test_valid_patch_output():
     r = validate_agent_run_result(
-        output_summary="Patch created",
-        output_log="Code generated",
+        output_summary="Patch", output_log="done",
         raw_result_json='{"patch_diff": "diff --git a/x.py b/x.py"}',
         patch_diff="diff --git a/x.py b/x.py\n+print('hi')",
     )
     assert r.valid is True
     assert r.output_kind == "patch_diff"
 
-def test_malformed_json_handled():
+def test_malformed_json_is_invalid():
     r = validate_agent_run_result(
-        output_summary="bad",
-        output_log="bad",
+        output_summary="bad", output_log="bad",
         raw_result_json="not valid json",
     )
-    assert r.valid is True  # raw_result_json is just text, not validated as JSON
-    assert r.output_kind == "raw_result"
+    assert r.valid is False
+    assert r.requires_human is True
+    assert any("not valid JSON" in e for e in r.errors)
 
-# ─── S3-2: patch.diff 校验 ───
+# ─── S3-2: patch.diff 校验 (fnmatch) ───
 
 def test_valid_patch_diff_passes():
     d = validate_patch_diff("diff --git a/src/main.py b/src/main.py\n+print('hello')\n-def old()")
@@ -69,24 +67,42 @@ def test_patch_with_secret_fails():
     d = validate_patch_diff("diff --git a/x.py b/x.py\n+api_key = 'sk-12345abc'\n-def foo()")
     assert d.has_secret_pattern is True
 
-def test_patch_with_forbidden_env_path_fails():
-    d = validate_patch_diff("diff --git a/.env b/.env\n--- a/.env\n+++ b/.env\n+SECRET=value")
-    assert d.modifies_forbidden_path is True
-
 def test_patch_with_private_key_fails():
-    d = validate_patch_diff("diff --git a/key.pem b/key.pem\n+-----BEGIN PRIVATE KEY-----")
+    d = validate_patch_diff("diff --git a/x.py b/x.py\n+-----BEGIN PRIVATE KEY-----")
     assert d.has_secret_pattern is True
 
 def test_patch_with_token_fails():
     d = validate_patch_diff("diff --git a/config.py b/config.py\n+TOKEN='ghp_xxxxxxxxxxxx'")
     assert d.has_secret_pattern is True
 
-def test_large_patch_fails():
+def test_large_patch_detected():
     d = validate_patch_diff("diff --git a/big.py b/big.py\n" + ("+a\n" * 200_000))
     assert d.size_bytes > 500_000
     assert d.is_empty is False
 
-# ─── S3-3: review.md → AgentReview ───
+# ─── fnmatch forbidden path matching ───
+
+def test_forbidden_env_path_fails():
+    d = validate_patch_diff("diff --git a/.env b/.env\n--- a/.env\n+++ b/.env\n+SECRET=value")
+    assert d.modifies_forbidden_path is True
+
+def test_forbidden_migration_path_fnmatch():
+    d = validate_patch_diff("diff --git a/app/migrations/001_init.py b/app/migrations/001_init.py\n--- a/app/migrations/001_init.py\n+++ b/app/migrations/001_init.py")
+    assert d.modifies_forbidden_path is True, f"paths: {d.forbidden_paths}"
+
+def test_forbidden_pem_path_fnmatch():
+    d = validate_patch_diff("diff --git a/certs/priv.pem b/certs/priv.pem")
+    assert d.modifies_forbidden_path is True
+
+def test_forbidden_key_path_fnmatch():
+    d = validate_patch_diff("diff --git a/ssh/id_rsa b/ssh/id_rsa")
+    assert d.modifies_forbidden_path is True
+
+def test_safe_path_not_blocked():
+    d = validate_patch_diff("diff --git a/src/main.py b/src/main.py")
+    assert d.modifies_forbidden_path is False
+
+# ─── S3-3: review.md parsing ───
 
 def test_review_parsing_approved():
     r = parse_review_result("# Review\nDecision: approved\nRisk: low\nAll good.")
@@ -118,7 +134,7 @@ def test_malformed_review_not_parsed():
     r = parse_review_result("some random text without decision")
     assert r.parsed is False
 
-# ─── S3-5: risk_report.json 校验 ───
+# ─── S3-5: risk_report 校验 ───
 
 def test_low_risk_report():
     r = check_risk_report({"risk_level": "low"})
@@ -147,6 +163,36 @@ def test_empty_risk_report_not_parsed():
     r = check_risk_report({})
     assert r.parsed is False
 
+# ─── S3-5 integration: risk → human_required ───
+
+def test_low_risk_valid():
+    r = validate_agent_run_result(
+        output_summary="ok", output_log="ok", raw_result_json="{}",
+        risk_report={"risk_level": "low"},
+    )
+    assert r.valid is True
+
+def test_high_risk_integration():
+    r = validate_agent_run_result(
+        output_summary="ok", output_log="ok", raw_result_json="{}",
+        risk_report={"risk_level": "high"},
+    )
+    assert r.requires_human is True
+
+def test_critical_risk_integration():
+    r = validate_agent_run_result(
+        output_summary="ok", output_log="ok", raw_result_json="{}",
+        risk_report={"risk_level": "critical"},
+    )
+    assert r.requires_human is True
+
+def test_malformed_risk_integration():
+    r = validate_agent_run_result(
+        output_summary="ok", output_log="ok", raw_result_json="{}",
+        risk_report={"risk_level": "unknown"},
+    )
+    assert r.requires_human is True
+
 # ─── S3-6: AgentRun trace ───
 
 def test_trace_json_structure():
@@ -164,30 +210,23 @@ def test_trace_json_structure():
     assert data["validation"]["valid"] is True
     assert "artifacts" in data
 
-# ─── Integration: invalid patch → no auto approve ───
+# ─── Integration: invalid patch → prevent auto approve ───
 
 def test_invalid_patch_prevents_approve():
-    """Invalid patch (no diff header) should make validation fail"""
     r = validate_agent_run_result(
-        output_summary="patch",
-        output_log="gen",
-        raw_result_json="{}",
-        patch_diff="this is not a diff",
+        output_summary="patch", output_log="gen",
+        raw_result_json="{}", patch_diff="this is not a diff",
     )
     assert r.valid is False
     assert any("diff --git" in e for e in r.errors)
 
 def test_secret_in_patch_prevents_approve():
-    """Patch with secret should be invalid and requires human"""
     r = validate_agent_run_result(
-        output_summary="patch",
-        output_log="gen",
+        output_summary="patch", output_log="gen",
         raw_result_json="{}",
         patch_diff="diff --git a/x.py b/x.py\n+password = 'hunter2'",
     )
     assert r.requires_human is True
-
-# ─── Forbidden patch targets ───
 
 def test_forbidden_database_path_fails():
     d = validate_patch_diff("diff --git a/backend/app/database.py b/backend/app/database.py\n--- a/backend/app/database.py\n+++ b/backend/app/database.py\n+alter table")
@@ -200,9 +239,7 @@ def test_forbidden_ci_config_fails():
 # ─── review result doesn't auto-approve ───
 
 def test_review_result_not_auto_approve():
-    """Review parsing alone should not create an approved decision"""
     r = parse_review_result("Decision: approved. Risk: low.")
     assert r.parsed is True
     assert r.decision == "approved"
     assert r.risk_level == "low"
-    # This is only parsing — approving requires the full approval pipeline

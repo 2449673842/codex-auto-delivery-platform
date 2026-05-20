@@ -108,7 +108,55 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
         actor=actor, message=f"AgentRun #{run.id} succeeded: {result.output_summary[:80]}",
     )
 
-    # Step 4: Create artifacts from output
+    # Step 4: Governance validation
+    from app.services.ai_output_governance_service import (
+        validate_agent_run_result, parse_review_result,
+        create_agent_review_from_ai_output, build_trace_json,
+    )
+
+    # Parse risk_report from raw_result_json if possible
+    import json as _json
+    risk_report = None
+    if result.raw_result_json:
+        try:
+            parsed = _json.loads(result.raw_result_json)
+            if isinstance(parsed, dict):
+                risk_report = parsed.get("risk_report")
+        except (_json.JSONDecodeError, ValueError):
+            pass
+
+    validation = validate_agent_run_result(
+        output_summary=result.output_summary,
+        output_log=result.output_log,
+        raw_result_json=result.raw_result_json,
+        plan_md=result.plan_md,
+        patch_diff=result.patch_diff,
+        review_md=result.review_md,
+        risk_report=risk_report,
+    )
+
+    # Write validation result into raw_result_json trace
+    trace = build_trace_json(
+        provider=agent.provider if agent else "sandbox",
+        model=getattr(agent, "model_name", None),
+        run_type=run.run_type,
+        output_kind=validation.output_kind,
+        validation=validation,
+    )
+    run.raw_result_json = trace
+    await db.flush()
+
+    # Create AgentReview if review output exists
+    if result.review_md:
+        review_parsed = parse_review_result(result.review_md)
+        if review_parsed.parsed:
+            from app.services.ai_output_governance_service import create_agent_review_from_ai_output
+            await create_agent_review_from_ai_output(
+                db, run.task_id, run.agent_id, run.id,
+                review_parsed, actor,
+            )
+
+    # Step 5: Create artifacts from output
     await _create_artifacts_from_result(db, run, result)
 
     return run

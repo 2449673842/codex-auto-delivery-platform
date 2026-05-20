@@ -1,5 +1,9 @@
+import json
+import fnmatch
+import re
 from pydantic import BaseModel, Field
 from typing import Any
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class AiOutputValidationResult(BaseModel):
@@ -48,13 +52,39 @@ FORBIDDEN_DIFF_PATHS = [
     "**/*.pem", "**/*.key", "**/id_rsa*",
 ]
 
-MAX_PATCH_SIZE_BYTES = 500_000  # 500KB
+MAX_PATCH_SIZE_BYTES = 500_000
 FORBIDDEN_DIFF_TARGETS = [
-    "backend/app/database.py",
-    "backend/app/config.py",
+    "**/database.py", "**/config.py",
     "**/migrations/*",
     "**/ci.yml", "**/ci.yaml",
 ]
+
+
+def _extract_diff_path(line: str) -> str | None:
+    """Extract the file path from a diff line (+++, ---, or diff --git)."""
+    line = line.strip()
+    if line.startswith("diff --git"):
+        parts = line.split()
+        if len(parts) >= 3:
+            return parts[2][2:]
+    elif line.startswith("--- ") or line.startswith("+++ "):
+        path = line[4:].strip()
+        if path.startswith("a/") or path.startswith("b/"):
+            path = path[2:]
+        if path == "/dev/null":
+            return None
+        return path
+    return None
+
+
+def _matches_forbidden(path: str | None) -> bool:
+    """Check if a path matches any forbidden pattern using fnmatch."""
+    if not path:
+        return False
+    for pattern in FORBIDDEN_DIFF_PATHS + FORBIDDEN_DIFF_TARGETS:
+        if fnmatch.fnmatch(path, pattern):
+            return True
+    return False
 
 
 def validate_agent_run_result(
@@ -73,7 +103,6 @@ def validate_agent_run_result(
     requires_human = False
     output_kind = None
 
-    # Determine output kind
     if patch_diff:
         output_kind = "patch_diff"
     elif review_md:
@@ -83,56 +112,59 @@ def validate_agent_run_result(
     elif raw_result_json:
         output_kind = "raw_result"
 
-    # 1. Check for empty output
-    has_content = bool(
-        (output_summary or "").strip()
-        or (output_log or "").strip()
-        or (raw_result_json or "").strip()
-        or (plan_md or "").strip()
-        or (patch_diff or "").strip()
-        or (review_md or "").strip()
-        or risk_report
-    )
-    if not has_content:
+    if not any([
+        (output_summary or "").strip(),
+        (output_log or "").strip(),
+        (raw_result_json or "").strip(),
+        (plan_md or "").strip(),
+        (patch_diff or "").strip(),
+        (review_md or "").strip(),
+        risk_report,
+    ]):
         errors.append("Output is empty")
 
-    # 2. Validate patch.diff if present
-    if patch_diff:
-        diff_validation = validate_patch_diff(patch_diff)
-        if not diff_validation.has_diff_header:
-            errors.append("patch.diff missing diff --git header")
-        if diff_validation.is_empty:
-            errors.append("patch.diff is empty")
-        if diff_validation.size_bytes > MAX_PATCH_SIZE_BYTES:
-            errors.append(f"patch.diff exceeds {MAX_PATCH_SIZE_BYTES} bytes")
-            requires_human = True
-        if diff_validation.has_secret_pattern:
-            errors.append("patch.diff contains potential secret pattern")
-            requires_human = True
-            risk_level = "high"
-        if diff_validation.modifies_forbidden_path:
-            errors.append("patch.diff modifies forbidden path")
+    # raw_result_json must be valid JSON
+    if raw_result_json and raw_result_json.strip():
+        try:
+            json.loads(raw_result_json)
+        except (json.JSONDecodeError, ValueError):
+            errors.append("raw_result_json is not valid JSON")
             requires_human = True
             risk_level = "high"
 
-    # 3. Check raw_result_json size
     if raw_result_json and len(raw_result_json) > MAX_PATCH_SIZE_BYTES:
         errors.append("raw_result_json exceeds size limit")
         requires_human = True
 
-    # 4. Check risk_report if present
+    if patch_diff:
+        dv = validate_patch_diff(patch_diff)
+        if not dv.has_diff_header:
+            errors.append("patch.diff missing diff --git header")
+        if dv.is_empty:
+            errors.append("patch.diff is empty")
+        if dv.size_bytes > MAX_PATCH_SIZE_BYTES:
+            errors.append(f"patch.diff exceeds {MAX_PATCH_SIZE_BYTES} bytes")
+            requires_human = True
+        if dv.has_secret_pattern:
+            errors.append("patch.diff contains potential secret pattern")
+            requires_human = True
+            risk_level = "high"
+        if dv.modifies_forbidden_path:
+            errors.append("patch.diff modifies forbidden path")
+            requires_human = True
+            risk_level = "high"
+
     if risk_report:
-        risk_check = check_risk_report(risk_report)
-        if not risk_check.parsed:
-            warnings.append("risk_report could not be parsed")
+        rc = check_risk_report(risk_report)
+        if not rc.parsed:
+            errors.append("risk_report could not be parsed")
             requires_human = True
-        if risk_check.risk_level in ("high", "critical"):
+        if rc.risk_level in ("high", "critical"):
             requires_human = True
-            risk_level = risk_check.risk_level
-        if risk_check.requires_human:
+            risk_level = rc.risk_level
+        if rc.requires_human:
             requires_human = True
 
-    # 5. Determine final risk level
     if requires_human and risk_level == "low":
         risk_level = "medium"
 
@@ -147,7 +179,7 @@ def validate_agent_run_result(
 
 
 def validate_patch_diff(patch_diff: str) -> PatchDiffCheck:
-    """Validate a patch.diff string for governance rules."""
+    """Validate a patch.diff string for governance rules using fnmatch."""
     if not patch_diff or not patch_diff.strip():
         return PatchDiffCheck(is_empty=True)
 
@@ -157,32 +189,20 @@ def validate_patch_diff(patch_diff: str) -> PatchDiffCheck:
         size_bytes=len(patch_diff.encode("utf-8")),
     )
 
-    # Check secret patterns in diff content
-    for pattern in SECRET_PATTERNS:
-        for line in patch_diff.split("\n"):
-            if line.startswith("+") and pattern.lower() in line.lower():
-                check.has_secret_pattern = True
-                break
+    for line in patch_diff.split("\n"):
+        if line.startswith("+"):
+            for pattern in SECRET_PATTERNS:
+                if pattern.lower() in line.lower():
+                    check.has_secret_pattern = True
+                    break
         if check.has_secret_pattern:
             break
 
-    # Check forbidden paths
     for line in patch_diff.split("\n"):
-        if line.startswith("+++") or line.startswith("---"):
-            for forbidden in FORBIDDEN_DIFF_PATHS:
-                if forbidden.replace("**/", "") in line:
-                    check.modifies_forbidden_path = True
-                    check.forbidden_paths.append(forbidden)
-                    break
-
-    # Check forbidden targets
-    for line in patch_diff.split("\n"):
-        if line.startswith("+++") or line.startswith("---"):
-            for target in FORBIDDEN_DIFF_TARGETS:
-                if target.replace("**/", "") in line:
-                    check.modifies_forbidden_path = True
-                    check.forbidden_paths.append(target)
-                    break
+        path = _extract_diff_path(line)
+        if path and _matches_forbidden(path):
+            check.modifies_forbidden_path = True
+            check.forbidden_paths.append(path)
 
     return check
 
@@ -194,24 +214,18 @@ def parse_review_result(review_md: str) -> ReviewResult:
         return result
 
     lower = review_md.lower()
-
-    # Extract decision
     for keyword in ["approved", "rejected", "changes_requested", "changes requested"]:
         if keyword in lower:
             result.decision = keyword.replace(" ", "_")
             break
 
-    # Extract risk level
     for level in ["critical", "high", "medium", "low"]:
-        if f"risk" in lower and level in lower:
+        if "risk" in lower and level in lower:
             result.risk_level = level
             break
 
     result.parsed = result.decision is not None
-
-    # Mark confidence if found
-    import re as _re
-    conf_match = _re.search(r"confidence[:\s]*([0-9.]+)", lower)
+    conf_match = re.search(r"confidence[:\s]*([0-9.]+)", lower)
     if conf_match:
         try:
             result.confidence = float(conf_match.group(1))
@@ -243,14 +257,9 @@ def check_risk_report(risk_report: dict) -> RiskReportCheck:
 
 
 def build_trace_json(
-    provider: str,
-    model: str | None,
-    run_type: str,
-    output_kind: str | None,
-    validation: AiOutputValidationResult,
+    provider: str, model: str | None, run_type: str,
+    output_kind: str | None, validation: AiOutputValidationResult,
 ) -> str:
-    """Build standardized AgentRun raw_result_json trace."""
-    import json
     trace = {
         "provider": provider,
         "model": model or "unknown",
@@ -264,3 +273,33 @@ def build_trace_json(
         "artifacts": [],
     }
     return json.dumps(trace, ensure_ascii=False)
+
+
+async def create_agent_review_from_ai_output(
+    db: AsyncSession, task_id: int, agent_id: int, run_id: int,
+    review_result: ReviewResult, actor: str = "system",
+) -> Any:
+    """Create AgentReview from AI review output. Does NOT approve the task."""
+    from app.models.agent_review import AgentReview
+    from app.services.event_service import create_event
+
+    review = AgentReview(
+        task_id=task_id,
+        agent_id=agent_id,
+        agent_run_id=run_id,
+        decision=review_result.decision or "unknown",
+        risk_level=review_result.risk_level or "medium",
+        confidence_score=review_result.confidence,
+        comments=review_result.summary or "AI-generated review",
+        issues_json=json.dumps(review_result.findings, ensure_ascii=False) if review_result.findings else None,
+    )
+    db.add(review)
+    await db.flush()
+    await db.refresh(review)
+
+    await create_event(
+        db, task_id=task_id, event_type="agent_review_submitted",
+        actor=actor,
+        message=f"AI review #{review.id} recorded (decision={review_result.decision}, risk={review_result.risk_level})",
+    )
+    return review
