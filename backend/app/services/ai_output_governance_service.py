@@ -43,7 +43,7 @@ class RiskReportCheck(BaseModel):
 SECRET_PATTERNS = [
     "sk-", "pk-", "-----BEGIN", "ghp_", "gho_", "ghu_", "ghs_",
     "AKIA", "eyJ", "api_key", "apikey", "password", "PASSWORD",  # NOSONAR - intentional pattern for detecting leaked secrets
-    "SECRET", "secret", "token", "TOKEN",
+    "SECRET", "secret", "token", "TOKEN",  # NOSONAR - patterns for secret detection
 ]
 
 FORBIDDEN_DIFF_PATHS = [
@@ -286,8 +286,8 @@ SECRET_REDACT_PATTERNS: list[tuple[str, str]] = [
     (r'(AKIA)[A-Z0-9]{16,}', REDACTED_MARKER),
     (r'-----BEGIN\s*PRIVATE\s*KEY-----.*?-----END\s*PRIVATE\s*KEY-----', REDACTED_BLOCK_MARKER),
     (r'password\s*=\s*\S+', 'password=***REDACTED***'),  # NOSONAR - pattern for detecting leaked passwords
-    (r'token\s*=\s*\S+', 'token=***REDACTED***'),
-    (r'api_key\s*=\s*\S+', 'api_key=***REDACTED***'),
+    (r'token\s*=\s*\S+', 'token=***REDACTED***'),  # NOSONAR - pattern for detecting leaked tokens
+    (r'api_key\s*=\s*\S+', 'api_key=***REDACTED***'),  # NOSONAR - pattern for detecting leaked keys
 ]
 
 

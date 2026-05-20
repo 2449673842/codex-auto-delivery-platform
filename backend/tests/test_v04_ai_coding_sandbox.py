@@ -204,7 +204,7 @@ async def test_code_context_archived_forbidden(client, task):
 @pytest.mark.asyncio
 async def test_code_context_redacts_secrets(client, task):
     """Code context with secrets must be redacted in artifact storage."""
-    FAKE_SECRET = "sk-abc123def456ghi789jkl012"
+    FAKE_SECRET = "sk-abc123def456ghi789jkl012"  # NOSONAR - fake test key  # NOSONAR - fake test key
     code_with_secret = {
         "files": [
             {"path": "src/settings.py", "content": f"API_KEY={FAKE_SECRET}\n", "language": "python"},
@@ -320,7 +320,7 @@ async def test_openai_execute_prompt_built_with_code_context(client, task, opena
     monkeypatch.setattr(OpenAIProvider, "_call_openai", mock_call)
 
     # Also monkeypatch the __init__ to not require API key
-    monkeypatch.setattr(OpenAIProvider, "__init__", lambda self: setattr(self, "api_key", "mock-key"))
+    monkeypatch.setattr(OpenAIProvider, "__init__", lambda self: setattr(self, "api_key", "mock-key"))  # NOSONAR - mock for test
 
     await client.post(BASE + f"/tasks/{task['id']}/code-context", json=SAMPLE_CODE_CONTEXT)
     await _prepare_task_for_dispatch(client, task["id"])
@@ -355,9 +355,9 @@ async def test_openai_prompt_redacts_secrets(client, task, openai_agent, monkeyp
         return "diff --git a/src/config.py b/src/config.py\n+ noop\n"
 
     monkeypatch.setattr(OpenAIProvider, "_call_openai", mock_call)
-    monkeypatch.setattr(OpenAIProvider, "__init__", lambda self: setattr(self, "api_key", "mock-key"))
+    monkeypatch.setattr(OpenAIProvider, "__init__", lambda self: setattr(self, "api_key", "mock-key"))  # NOSONAR - mock for test
 
-    FAKE_SECRET = "sk-abc123def456ghi789jkl012"
+    FAKE_SECRET = "sk-abc123def456ghi789jkl012"  # NOSONAR - fake test key
     secret_context = {
         "files": [
             {"path": "src/config.py", "content": f"API_KEY={FAKE_SECRET}\n", "language": "python"},
@@ -549,7 +549,7 @@ async def test_apply_patch_oversized_fails(client, task, agent, db_session):
 async def test_apply_patch_forbidden_path_fails(client, task, agent, db_session):
     await client.post(
         BASE + f"/tasks/{task['id']}/code-context",
-        json={"files": [{"path": ".env", "content": "SECRET=x\n", "language": "text"}]},
+        json={"files": [{"path": ".env", "content": "SECRET=x\n", "language": "text"}]},  # NOSONAR - test data
     )
     await _prepare_task_for_dispatch(client, task["id"])
 
@@ -728,7 +728,7 @@ def test_sandbox_provider_still_secure():
 @pytest.mark.asyncio
 async def test_patch_apply_report_redacts_secrets(client, task, agent, db_session):
     """Secret patterns in patch addition lines must be redacted in sandbox artifacts."""
-    FAKE_SECRET = "sk-abc123def456ghi789jkl012"
+    FAKE_SECRET = "sk-abc123def456ghi789jkl012"  # NOSONAR - fake test key
     await client.post(BASE + f"/tasks/{task['id']}/code-context", json=SAMPLE_CODE_CONTEXT)
     await _prepare_task_for_dispatch(client, task["id"])
 

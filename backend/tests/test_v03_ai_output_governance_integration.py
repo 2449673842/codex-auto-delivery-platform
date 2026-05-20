@@ -53,7 +53,7 @@ async def _orch_step(client, task_id: int, agent_name: str, monkeypatch, mock_re
     async def _mock_exec(self, _run, _code_context=None):  # NOSONAR - must be async to replace async method
         return mock_result
     monkeypatch.setattr(OpenAIProvider, "execute", _mock_exec)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")  # NOSONAR - mock key for tests
     r = await client.post(BASE + f"/tasks/{task_id}/orchestration/step")
     assert r.status_code == 200, f"orchestration failed: {r.text}"
     rr = await client.get(BASE + f"/tasks/{task_id}/agent-runs")
