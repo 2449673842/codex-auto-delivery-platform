@@ -4,7 +4,7 @@ import pytest
 from app.services.ai_output_governance_service import (
     validate_agent_run_result, validate_patch_diff,
     parse_review_result, check_risk_report, build_trace_json,
-    AiOutputValidationResult,
+    AiOutputValidationResult, redact_secrets,
 )
 
 # ─── S3-1: AI 输出校验 ───
@@ -243,3 +243,67 @@ def test_review_result_not_auto_approve():
     assert r.parsed is True
     assert r.decision == "approved"
     assert r.risk_level == "low"
+
+# ─── Secret redaction ───
+
+def test_redact_sk_pattern():
+    text = "key = 'sk-abcdefghijklmnopqrstuvwxyz1234567890'"
+    out = redact_secrets(text)
+    assert "***REDACTED***" in out
+    assert "abcdefghijklmnopqrstuvwxyz" not in out
+
+def test_redact_ghp_pattern():
+    text = "token = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abc'"
+    out = redact_secrets(text)
+    assert "***REDACTED***" in out
+    assert "ABCDEFGHIJKLMNOPQRSTUVWXYZ" not in out
+
+def test_redact_gho_pattern():
+    text = "token = 'gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abc'"
+    out = redact_secrets(text)
+    assert "***REDACTED***" in out
+
+def test_redact_ghu_pattern():
+    text = "token = 'ghu_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abc'"
+    out = redact_secrets(text)
+    assert "***REDACTED***" in out
+
+def test_redact_ghs_pattern():
+    text = "token = 'ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abc'"
+    out = redact_secrets(text)
+    assert "***REDACTED***" in out
+
+def test_redact_akia_pattern():
+    text = "key = 'AKIAIOSFODNN7EXAMPLE'"
+    out = redact_secrets(text)
+    assert "***REDACTED***" in out
+    assert "IOSFODNN7EXAMPLE" not in out
+
+def test_redact_private_key_block():
+    text = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFA\n-----END PRIVATE KEY-----"
+    out = redact_secrets(text)
+    assert "***REDACTED***" in out
+    assert "MIIEvQIBADANBgkqhkiG9w0BAQEFA" not in out
+
+def test_redact_password_pattern():
+    text = "password = 'supersecret123'"
+    out = redact_secrets(text)
+    assert "***REDACTED***" in out
+    assert "supersecret123" not in out
+
+def test_redact_token_pattern():
+    text = "token = 'mysecrettoken'"
+    out = redact_secrets(text)
+    assert "***REDACTED***" in out
+    assert "mysecrettoken" not in out
+
+def test_redact_api_key_pattern():
+    text = "api_key = 'mykey12345'"
+    out = redact_secrets(text)
+    assert "***REDACTED***" in out
+    assert "mykey12345" not in out
+
+def test_redact_no_false_positive():
+    text = "This is a normal text with no secrets"
+    out = redact_secrets(text)
+    assert out == text

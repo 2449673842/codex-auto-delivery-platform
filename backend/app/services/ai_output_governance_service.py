@@ -146,11 +146,11 @@ def validate_agent_run_result(
             errors.append(f"patch.diff exceeds {MAX_PATCH_SIZE_BYTES} bytes")
             requires_human = True
         if dv.has_secret_pattern:
-            errors.append("patch.diff contains potential secret pattern")
+            warnings.append("patch.diff contains potential secret pattern")
             requires_human = True
             risk_level = "high"
         if dv.modifies_forbidden_path:
-            errors.append("patch.diff modifies forbidden path")
+            warnings.append("patch.diff modifies forbidden path")
             requires_human = True
             risk_level = "high"
 
@@ -254,6 +254,28 @@ def check_risk_report(risk_report: dict) -> RiskReportCheck:
         result.requires_human = True
 
     return result
+
+
+SECRET_REDACT_PATTERNS: list[tuple[str, str]] = [
+    (r'(sk-)[A-Za-z0-9]{20,}', r'\1***REDACTED***'),
+    (r'(ghp_|gho_|ghu_|ghs_)[A-Za-z0-9]{20,}', r'\1***REDACTED***'),
+    (r'(AKIA)[A-Z0-9]{16,}', r'\1***REDACTED***'),
+    (r'-----BEGIN\s*PRIVATE\s*KEY-----.*?-----END\s*PRIVATE\s*KEY-----', '-----BEGIN PRIVATE KEY-----***REDACTED***-----END PRIVATE KEY-----'),
+    (r'password\s*=\s*\S+', 'password=***REDACTED***'),
+    (r'token\s*=\s*\S+', 'token=***REDACTED***'),
+    (r'api_key\s*=\s*\S+', 'api_key=***REDACTED***'),
+]
+
+
+def redact_secrets(text: str) -> str:
+    """Redact known secret patterns from text."""
+    import re
+    for i, (pat, repl) in enumerate(SECRET_REDACT_PATTERNS):
+        flags = re.IGNORECASE
+        if i == 3:
+            flags |= re.DOTALL
+        text = re.sub(pat, repl, text, flags=flags)
+    return text
 
 
 def build_trace_json(

@@ -101,6 +101,7 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
     from app.services.ai_output_governance_service import (
         validate_agent_run_result, parse_review_result,
         create_agent_review_from_ai_output, build_trace_json,
+        redact_secrets,
     )
 
     _provider_raw = result.raw_result_json
@@ -132,21 +133,8 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
     )
 
     # Secret redaction for provider_raw (safe: never raise)
-    def _redact_secrets(text):
-        import re
-        for pat, repl in [
-            (r'(sk-)[A-Za-z0-9]{20,}', r'\1***REDACTED***'),
-            (r'(ghp_|gho_|ghu_|ghs_)[A-Za-z0-9]{20,}', r'\1***REDACTED***'),
-            (r'(AKIA)[A-Z0-9]{16,}', r'\1***REDACTED***'),
-            (r'-----BEGIN\s*PRIVATE\s*KEY-----.*?-----END\s*PRIVATE\s*KEY-----', '-----BEGIN PRIVATE KEY-----***REDACTED***-----END PRIVATE KEY-----'),
-            (r'password\s*=\s*\S+', 'password=***REDACTED***'),
-            (r'token\s*=\s*\S+', 'token=***REDACTED***'),
-            (r'api_key\s*=\s*\S+', 'api_key=***REDACTED***'),
-        ]:
-            text = re.sub(pat, repl, text, flags=re.IGNORECASE)
-        return text
     try:
-        _safe_raw = _redact_secrets(_provider_raw) if _provider_raw else None
+        _safe_raw = redact_secrets(_provider_raw) if _provider_raw else None
     except Exception:
         _safe_raw = _provider_raw
 
@@ -185,8 +173,8 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
             task_id=run.task_id,
             risk_level=validation.risk_level or "medium",
             auto_approve_allowed=False,
-            requires_human=True,
-            summary=f"Governance: {validation.risk_level} risk, requires human review",
+            human_required=True,
+            decision_reason=f"Governance: {validation.risk_level} risk, requires human review",
         )
         db.add(decision)
 
