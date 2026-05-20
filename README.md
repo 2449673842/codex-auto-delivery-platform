@@ -81,7 +81,7 @@ docker compose up --build -d
 │   │   ├── router/               # Vue Router
 │   │   ├── stores/               # Pinia 状态管理
 │   │   └── services/             # Axios API 封装
-│   │── index.html
+│   ├── index.html
 │   ├── vite.config.ts
 │   └── package.json
 ├── docs/
@@ -90,7 +90,7 @@ docker compose up --build -d
 │   │   ├── v0.2.0.md
 │   │   ├── v0.3.0.md
 │   │   └── v0.4.0.md
-│── docker-compose.yml
+├── docker-compose.yml
 └── README.md
 ```
 
@@ -116,7 +116,7 @@ docker compose up --build -d
 | **Code Context** | 上传代码上下文供 AI Provider 使用 |
 | **Patch Apply Sandbox** | 沙箱中验证 patch 合法性并预览变更 |
 | **Patch Results Display** | 前端展示沙箱变更文件摘要 |
-| **Sandbox Approval Gate** | 沙箱应用前安全检查（secret/禁止路径/风险/人工审批） |
+| **Sandbox Approval Gate** | 基于 Patch Apply Sandbox 结果的审批门禁，用于判断是否允许进入后续 PR Adapter 阶段 |
 | **Review Packet Preview API** | stateless PR review 预览（MockGitHub/MockSonar connector） |
 
 ---
