@@ -4,6 +4,7 @@ import type {
   AgentRun, AgentRunCreate, AgentRunUpdate, AgentRunSubmitResult,
   AgentReview, AgentReviewCreate,
   ApprovalPolicy, ApprovalPolicyCreate, ApprovalPolicyUpdate,
+  CodeContextResponse, PatchApplyResult, SandboxArtifactEntry,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -96,4 +97,21 @@ export async function deleteApprovalPolicy(id: number): Promise<void> {
 export async function fetchApprovalDecisions(taskId: number): Promise<any[]> {
   const { data } = await client.get(`/tasks/${taskId}/approval-decisions`)
   return data.data || data || []
+}
+
+// ── Code Context ──
+export async function fetchCodeContext(taskId: number): Promise<CodeContextResponse | null> {
+  const { data } = await client.get(`/tasks/${taskId}/code-context`)
+  return data.data || null
+}
+
+// ── Patch Sandbox ──
+export async function applyPatchInSandbox(taskId: number, runId: number): Promise<PatchApplyResult> {
+  const { data } = await client.post(`/tasks/${taskId}/agent-runs/${runId}/sandbox/apply-patch`)
+  return data.data
+}
+
+export async function fetchSandboxResults(taskId: number): Promise<SandboxArtifactEntry[]> {
+  const { data } = await client.get(`/tasks/${taskId}/sandbox/patch-results`)
+  return data.data || []
 }

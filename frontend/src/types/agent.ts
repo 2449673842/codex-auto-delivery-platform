@@ -197,6 +197,56 @@ export interface ApprovalPolicyCreate {
   forbid_auto_deploy_prod?: boolean
 }
 
+// ── Code Context ──
+export interface CodeContextFile {
+  path: string
+  content: string
+  language: string | null
+}
+
+export interface CodeContextResponse {
+  files: CodeContextFile[]
+  artifact_id: number | null
+  task_id: number
+  file_count: number
+  total_size_bytes: number
+}
+
+// ── Patch Sandbox ──
+export interface ChangedFileEntry {
+  path: string
+  status: string
+  additions: number
+  deletions: number
+  before_sha256: string | null
+  after_sha256: string | null
+}
+
+export interface PatchApplyReport {
+  applied: boolean
+  changed_files: ChangedFileEntry[]
+  warnings: string[]
+  errors: string[]
+}
+
+export interface PatchApplyResult {
+  success: boolean
+  report: PatchApplyReport
+  message: string
+  before_after_previews: Record<string, { before: string; after: string }>
+}
+
+export interface SandboxArtifactEntry {
+  id: number
+  artifact_type: string
+  filename: string
+  content: string | null
+  size_bytes: number | null
+  sha256: string | null
+  metadata_json: string | null
+  created_at: string | null
+}
+
 export interface ApprovalPolicyUpdate {
   name?: string
   project_id?: number | null
