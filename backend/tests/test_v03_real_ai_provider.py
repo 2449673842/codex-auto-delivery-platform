@@ -96,7 +96,7 @@ async def test_openai_mocked_plan(client, task, monkeypatch):
     """OpenAI provider with mocked API should produce plan.md"""
     from app.services.openai_provider import OpenAIProvider
     monkeypatch.setattr(OpenAIProvider, "_call_openai", _mock_openai_call)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")  # NOSONAR - mock key for tests
 
     r = await client.post(BASE + "/agents", json={"name": "mock-plan", "agent_type": "executor", "provider": "openai"})
     agent = r.json()["data"]
@@ -116,7 +116,7 @@ async def test_openai_mocked_creates_artifacts(client, task, monkeypatch):
     """OpenAI provider should create artifacts from AI output"""
     from app.services.openai_provider import OpenAIProvider
     monkeypatch.setattr(OpenAIProvider, "_call_openai", _mock_openai_call)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")  # NOSONAR - mock key for tests
 
     r = await client.post(BASE + "/agents", json={"name": "mock-art", "agent_type": "executor", "provider": "openai"})
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
@@ -137,12 +137,16 @@ async def test_openai_execute_saves_patch_diff(client, task, monkeypatch):
     """OpenAI execute run_type should save patch.diff artifact"""
     from app.services.openai_provider import OpenAIProvider
     monkeypatch.setattr(OpenAIProvider, "_call_openai", _mock_openai_patch)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")  # NOSONAR - mock key for tests
 
     r = await client.post(BASE + "/agents", json={"name": "exec-diff", "agent_type": "executor", "provider": "openai"})
     agent = r.json()["data"]
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
     await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    # v0.4 S1: execute requires code context
+    await client.post(BASE + f"/tasks/{task['id']}/code-context", json={
+        "files": [{"path": "src/example.py", "content": "# placeholder\n", "language": "python"}]
+    })
     # Create AgentRun with execute type directly via API
     r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "execute", "input_prompt": "add a function"})
     rid = r.json()["data"]["id"]
@@ -173,7 +177,7 @@ async def test_openai_key_not_in_logs(client, task, monkeypatch):
     """API key must NOT appear in any persistent field"""
     from app.services.openai_provider import OpenAIProvider
     monkeypatch.setattr(OpenAIProvider, "_call_openai", _mock_openai_call)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret-key-12345")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret-key-12345")  # NOSONAR - mock key for test
 
     r = await client.post(BASE + "/agents", json={"name": "key-test", "agent_type": "executor", "provider": "openai"})
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
@@ -194,9 +198,9 @@ async def test_openai_err_message_no_key(client, task, monkeypatch):
     """Error message from OpenAI failure must not contain API key"""
     from app.services.openai_provider import OpenAIProvider
     async def failing_with_key(self, sys_prompt, user_prompt):
-        raise RuntimeError("API call failed: sk-test-secret-key-123")
+        raise RuntimeError("API call failed: sk-test-secret-key-123")  # NOSONAR - fake key in error
     monkeypatch.setattr(OpenAIProvider, "_call_openai", failing_with_key)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret-key-123")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret-key-123")  # NOSONAR - mock key for test
 
     r = await client.post(BASE + "/agents", json={"name": "fail-key", "agent_type": "executor", "provider": "openai"})
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
@@ -218,7 +222,7 @@ async def test_malformed_openai_agent_failed(client, task, monkeypatch):
     """Empty AI response should fail the AgentRun (not succeed)"""
     from app.services.openai_provider import OpenAIProvider
     monkeypatch.setattr(OpenAIProvider, "_call_openai", _mock_openai_empty)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")  # NOSONAR - mock key for tests
 
     r = await client.post(BASE + "/agents", json={"name": "empty-test", "agent_type": "executor", "provider": "openai"})
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
@@ -251,7 +255,7 @@ async def test_malformed_response_no_auto_approve(client, task, monkeypatch):
     """After AI response, approval is still required"""
     from app.services.openai_provider import OpenAIProvider
     monkeypatch.setattr(OpenAIProvider, "_call_openai", _mock_openai_call)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")  # NOSONAR - mock key for tests
 
     r = await client.post(BASE + "/agents", json={"name": "no-auto", "agent_type": "executor", "provider": "openai"})
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)

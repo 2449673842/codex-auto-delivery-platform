@@ -19,7 +19,7 @@ from app.services.agent_run_service import update_agent_run
 from app.services.sandbox_provider import SandboxProvider
 from app.services.event_service import create_event
 from app.models.agent_profile import AgentProfile
-from app.enums import AgentRunStatus
+from app.enums import AgentRunStatus, EventType
 import hashlib
 
 from app.services.ai_output_governance_service import redact_secrets
@@ -33,15 +33,24 @@ async def _fail_run(db, run, task_id, error_message, actor):
     await create_event(db, task_id=task_id, event_type="agent_run_failed",
                         actor=actor, message=f"AgentRun #{run.id} failed")
 
-async def _execute_with_provider(agent, run: AgentRun) -> AgentRunResult:
-    """Select and execute the appropriate AI provider."""
+async def _execute_with_provider(db: AsyncSession, agent, run: AgentRun) -> AgentRunResult:
+    """Select and execute the appropriate AI provider.
+    
+    v0.4 S1: Loads code context from TaskArtifacts for execute runs
+    and passes it to the provider.
+    """
+    code_context = None
+    if run.run_type == "execute":
+        from app.services.code_context_service import load_code_context_dict
+        code_context = await load_code_context_dict(db, run.task_id)
+
     agent_provider = agent.provider if agent else ""
     if agent_provider == "openai":
         from app.services.openai_provider import OpenAIProvider
         provider = OpenAIProvider()
-        return await provider.execute(run)
+        return await provider.execute(run, code_context)
     provider = SandboxProvider()
-    return await provider.execute(run)
+    return await provider.execute(run, code_context)
 
 async def _apply_governance(db, run, agent, result, actor):
     """Validate, redact, record governance decisions. Returns validation result."""
@@ -120,8 +129,21 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
                         actor=actor, message=f"AgentRun #{run.id} started by {actor}")
 
     agent = await db.get(AgentProfile, run.agent_id)
+
+    # v0.4 S1: execute 必须有 code context，否则直接失败
+    if run.run_type == "execute":
+        from app.services.code_context_service import load_code_context_dict
+        cc_check = await load_code_context_dict(db, run.task_id)
+        if cc_check is None:
+            await _fail_run(db, run, run.task_id,
+                            "Execute requires code context; none found for task", actor)
+            raise HTTPException(
+                status_code=422,
+                detail=f"Execute requires code context; none found for task {run.task_id}"
+            )
+
     try:
-        result = await _execute_with_provider(agent, run)
+        result = await _execute_with_provider(db, agent, run)
     except RuntimeError:
         await _fail_run(db, run, run.task_id, "AI provider initialization failed (check API key)", actor)
         raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} failed: Provider init error")
