@@ -1,6 +1,13 @@
-"""Sandbox Approval Gate tests (v0.4 S3)."""
-import json, pytest
+"""Tests for Sandbox Approval Gate (v0.4 S3).
+
+Covers all gate conditions, plus integration via real sandbox apply API.
+"""
+
+import json
+
+import pytest
 from httpx import ASGITransport, AsyncClient
+
 from app.main import app
 from app.database import Base, get_engine, get_session_factory
 from app.models.task import Task
@@ -8,322 +15,329 @@ from app.models.agent_run import AgentRun
 from app.models.task_artifact import TaskArtifact
 from app.models.approval_decision import ApprovalDecision
 
+BASE = "/api"
+
 
 @pytest.fixture(autouse=True)
 async def _reset_db():
     engine = get_engine()
-    async with engine.begin() as c:
-        await c.run_sync(Base.metadata.drop_all)
-        await c.run_sync(Base.metadata.create_all)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
     yield
-    async with engine.begin() as c:
-        await c.run_sync(Base.metadata.drop_all)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
 
 
 @pytest.fixture
-async def cli():
-    t = ASGITransport(app=app)
-    async with AsyncClient(transport=t, base_url="https://x") as ac:
+async def client():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://test.local") as ac:
         yield ac
 
 
 @pytest.fixture
-async def db():
+async def db_session():
     factory = get_session_factory()
-    async with factory() as s:
-        yield s
-        await s.rollback()
+    async with factory() as session:
+        yield session
+        await session.rollback()
 
 
-@pytest.mark.asyncio
-async def test_passed(cli, db):
-    r0 = await cli.post("/api/projects", json={"name": "p0", "root_path": "/p0"})
-    pid = r0.json()["data"]["id"]
-    r1 = await cli.post("/api/agents", json={"name": "a0", "agent_type": "executor", "provider": "local"})
-    aid = r1.json()["data"]["id"]
-    r2 = await cli.post("/api/tasks", json={"project_id": pid, "title": "passed"})
-    tid = r2.json()["data"]["id"]
-    r3 = await cli.post(f"/api/tasks/{tid}/agent-runs", json={"agent_id": aid, "run_type": "execute", "input_prompt": "test"})
-    rid = r3.json()["data"]["id"]
-    art = TaskArtifact(task_id=tid, artifact_type="patch_apply_report",
-                       content=json.dumps({"applied": True, "changed_files": [{"path": "a.py", "status": "modified", "additions": 1, "deletions": 0}], "warnings": [], "errors": []}),
-                       filename=f"patch_apply_report_run_{rid}.json")
-    db.add(art)
-    await db.commit()
-    d = (await cli.get(f"/api/tasks/{tid}/sandbox/gate")).json()["data"]
-    assert d["passed"] is True
-    assert len(d["blocked_reasons"]) == 0
+def make_report_content(applied: bool = True, changed_files: list[dict] | None = None) -> str:
+    if changed_files is None:
+        changed_files = [{"path": "src/test.py", "status": "modified", "additions": 3, "deletions": 1}]
+    report = {"applied": applied, "changed_files": changed_files, "warnings": [], "errors": []}
+    return json.dumps(report, ensure_ascii=False)
 
 
-@pytest.mark.asyncio
-async def test_archived(cli, db):
-    r0 = await cli.post("/api/projects", json={"name": "p1", "root_path": "/p1"})
-    pid = r0.json()["data"]["id"]
-    r1 = await cli.post("/api/tasks", json={"project_id": pid, "title": "archived"})
-    t = await db.get(Task, r1.json()["data"]["id"])
-    t.status = "archived"
-    r2 = await cli.post("/api/agents", json={"name": "a1", "agent_type": "executor", "provider": "local"})
-    aid = r2.json()["data"]["id"]
-    r3 = await cli.post(f"/api/tasks/{t.id}/agent-runs", json={"agent_id": aid, "run_type": "execute", "input_prompt": "test"})
-    rid = r3.json()["data"]["id"]
-    db.add(TaskArtifact(task_id=t.id, artifact_type="patch_apply_report",
-           content=json.dumps({"applied": True, "changed_files": [{"path": "b.py", "status": "modified", "additions": 2, "deletions": 1}], "warnings": [], "errors": []}),
-           filename=f"patch_apply_report_run_{rid}.json"))
-    await db.commit()
-    reasons = [r["reason"] for r in (await cli.get(f"/api/tasks/{t.id}/sandbox/gate")).json()["data"]["blocked_reasons"]]
-    assert "archived_task" in reasons
+@pytest.fixture
+async def project(client) -> dict:
+    r = await client.post(BASE + "/projects", json={"name": "gate-test", "root_path": "/gate"})
+    return r.json()["data"]
 
 
-@pytest.mark.asyncio
-async def test_no_result(cli):
-    r0 = await cli.post("/api/projects", json={"name": "p2", "root_path": "/p2"})
-    pid = r0.json()["data"]["id"]
-    r1 = await cli.post("/api/tasks", json={"project_id": pid, "title": "no-result"})
-    tid = r1.json()["data"]["id"]
-    reasons = [r["reason"] for r in (await cli.get(f"/api/tasks/{tid}/sandbox/gate")).json()["data"]["blocked_reasons"]]
-    assert "no_sandbox_result" in reasons
+@pytest.fixture
+async def agent(client) -> dict:
+    r = await client.post(BASE + "/agents", json={
+        "name": "gate-agent", "agent_type": "executor", "provider": "local",
+    })
+    return r.json()["data"]
 
 
-@pytest.mark.asyncio
-async def test_not_applied(cli, db):
-    r0 = await cli.post("/api/projects", json={"name": "p3", "root_path": "/p3"})
-    pid = r0.json()["data"]["id"]
-    r1 = await cli.post("/api/agents", json={"name": "a2", "agent_type": "executor", "provider": "local"})
-    aid = r1.json()["data"]["id"]
-    r2 = await cli.post("/api/tasks", json={"project_id": pid, "title": "not-applied"})
-    tid = r2.json()["data"]["id"]
-    r3 = await cli.post(f"/api/tasks/{tid}/agent-runs", json={"agent_id": aid, "run_type": "execute", "input_prompt": "test"})
-    rid = r3.json()["data"]["id"]
-    db.add(TaskArtifact(task_id=tid, artifact_type="patch_apply_report",
-           content=json.dumps({"applied": False, "changed_files": [], "warnings": [], "errors": ["failed"]}),
-           filename=f"patch_apply_report_run_{rid}.json"))
-    await db.commit()
-    reasons = [r["reason"] for r in (await cli.get(f"/api/tasks/{tid}/sandbox/gate")).json()["data"]["blocked_reasons"]]
-    assert "sandbox_not_applied" in reasons
+@pytest.fixture
+async def task(client, project) -> dict:
+    r = await client.post(BASE + "/tasks", json={"project_id": project["id"], "title": "gate-task"})
+    return r.json()["data"]
 
 
-@pytest.mark.asyncio
-async def test_no_files(cli, db):
-    r0 = await cli.post("/api/projects", json={"name": "p4", "root_path": "/p4"})
-    pid = r0.json()["data"]["id"]
-    r1 = await cli.post("/api/agents", json={"name": "a3", "agent_type": "executor", "provider": "local"})
-    aid = r1.json()["data"]["id"]
-    r2 = await cli.post("/api/tasks", json={"project_id": pid, "title": "no-files"})
-    tid = r2.json()["data"]["id"]
-    r3 = await cli.post(f"/api/tasks/{tid}/agent-runs", json={"agent_id": aid, "run_type": "execute", "input_prompt": "test"})
-    rid = r3.json()["data"]["id"]
-    db.add(TaskArtifact(task_id=tid, artifact_type="patch_apply_report",
-           content=json.dumps({"applied": True, "changed_files": [], "warnings": [], "errors": []}),
-           filename=f"patch_apply_report_run_{rid}.json"))
-    await db.commit()
-    reasons = [r["reason"] for r in (await cli.get(f"/api/tasks/{tid}/sandbox/gate")).json()["data"]["blocked_reasons"]]
-    assert "no_changed_files" in reasons
+@pytest.fixture
+async def run(client, task, agent) -> dict:
+    r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs", json={
+        "agent_id": agent["id"], "run_type": "execute", "input_prompt": "test",
+    })
+    return r.json()["data"]
 
 
-@pytest.mark.asyncio
-async def test_forbidden_path(cli, db):
-    r0 = await cli.post("/api/projects", json={"name": "p5", "root_path": "/p5"})
-    pid = r0.json()["data"]["id"]
-    r1 = await cli.post("/api/tasks", json={"project_id": pid, "title": "forbidden"})
-    tid = r1.json()["data"]["id"]
-    r2 = await cli.post("/api/agents", json={"name": "a4", "agent_type": "executor", "provider": "local"})
-    aid = r2.json()["data"]["id"]
-    r3 = await cli.post(f"/api/tasks/{tid}/agent-runs", json={"agent_id": aid, "run_type": "execute", "input_prompt": "test"})
-    rid = r3.json()["data"]["id"]
-    db.add(TaskArtifact(task_id=tid, artifact_type="patch_apply_report",
-           content=json.dumps({"applied": True, "changed_files": [{"path": ".env", "status": "modified"}], "warnings": [], "errors": []}),
-           filename=f"patch_apply_report_run_{rid}.json"))
-    await db.commit()
-    reasons = [r["reason"] for r in (await cli.get(f"/api/tasks/{tid}/sandbox/gate")).json()["data"]["blocked_reasons"]]
-    assert "forbidden_path" in reasons
+async def _add_report(db_session, task_id, run_id, **kw):
+    art = TaskArtifact(
+        task_id=task_id, artifact_type="patch_apply_report",
+        content=make_report_content(**kw),
+        filename=f"patch_apply_report_run_{run_id}.json",
+    )
+    db_session.add(art)
+    await db_session.commit()
 
 
-@pytest.mark.asyncio
-async def test_secret(cli, db):
-    r0 = await cli.post("/api/projects", json={"name": "p6", "root_path": "/p6"})
-    pid = r0.json()["data"]["id"]
-    r1 = await cli.post("/api/tasks", json={"project_id": pid, "title": "secret"})
-    tid = r1.json()["data"]["id"]
-    r2 = await cli.post("/api/agents", json={"name": "a5", "agent_type": "executor", "provider": "local"})
-    aid = r2.json()["data"]["id"]
-    r3 = await cli.post(f"/api/tasks/{tid}/agent-runs", json={"agent_id": aid, "run_type": "execute", "input_prompt": "test"})
-    rid = r3.json()["data"]["id"]
-    db.add(TaskArtifact(task_id=tid, artifact_type="patch_apply_report",
-           content=json.dumps({"applied": True, "redacted": "***REDACTED***", "changed_files": [{"path": "x.py", "status": "modified"}], "warnings": [], "errors": []}),
-           filename=f"patch_apply_report_run_{rid}.json"))
-    await db.commit()
-    reasons = [r["reason"] for r in (await cli.get(f"/api/tasks/{tid}/sandbox/gate")).json()["data"]["blocked_reasons"]]
-    assert "secret_detected" in reasons
+class TestSandboxGateUnit:
+    """Unit tests — test each gate condition via direct artifact creation."""
+
+    # ── passed ──
+    @pytest.mark.asyncio
+    async def test_gate_passed(self, client, task, run, db_session):
+        await _add_report(db_session, task["id"], run["id"])
+        data = (await client.get(f"/api/tasks/{task['id']}/sandbox/gate")).json()["data"]
+        assert data["passed"] is True
+        assert data["can_prepare_pr"] is True
+        assert len(data["blocked_reasons"]) == 0
+
+    # ── blocked: archived ──
+    @pytest.mark.asyncio
+    async def test_blocked_archived_task(self, client, task, run, db_session):
+        t = await db_session.get(Task, task["id"])
+        t.status = "archived"
+        await _add_report(db_session, task["id"], run["id"])
+        data = (await client.get(f"/api/tasks/{task['id']}/sandbox/gate")).json()["data"]
+        assert "archived_task" in [r["reason"] for r in data["blocked_reasons"]]
+
+    # ── blocked: no result ──
+    @pytest.mark.asyncio
+    async def test_blocked_no_sandbox_result(self, client, task):
+        data = (await client.get(f"/api/tasks/{task['id']}/sandbox/gate")).json()["data"]
+        assert "no_sandbox_result" in [r["reason"] for r in data["blocked_reasons"]]
+
+    # ── blocked: report-level conditions (parametrized) ──
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("kw,expect", [
+        ({"applied": False}, "sandbox_not_applied"),
+        ({"changed_files": []}, "no_changed_files"),
+        ({"changed_files": [{"path": ".env", "status": "modified"}]}, "forbidden_path"),
+    ])
+    async def test_blocked_report_conditions(self, client, task, run, db_session, kw, expect):
+        await _add_report(db_session, task["id"], run["id"], **kw)
+        g = await client.get(f"/api/tasks/{task['id']}/sandbox/gate")
+        reasons = [r["reason"] for r in g.json()["data"]["blocked_reasons"]]
+        assert expect in reasons
+
+    # ── blocked: secret detected ──
+    @pytest.mark.asyncio
+    async def test_blocked_secret_detected(self, client, task, run, db_session):
+        content = json.dumps({
+            "applied": True, "redacted": "***REDACTED***",
+            "changed_files": [{"path": "src/test.py", "status": "modified"}],
+            "warnings": [], "errors": [],
+        }, ensure_ascii=False)
+        art = TaskArtifact(task_id=task["id"], artifact_type="patch_apply_report",
+                           content=content, filename=f"patch_apply_report_run_{run['id']}.json")
+        db_session.add(art)
+        await db_session.commit()
+        data = (await client.get(f"/api/tasks/{task['id']}/sandbox/gate")).json()["data"]
+        assert "secret_detected" in [r["reason"] for r in data["blocked_reasons"]]
+
+    # ── blocked: same-run summary/preview does NOT trigger stale ──
+    @pytest.mark.asyncio
+    async def test_same_run_artifacts_not_stale(self, client, task, run, db_session):
+        """Same-run changed_files_summary and changed_file_preview must not
+        trigger false-positive stale_sandbox_result."""
+        report = TaskArtifact(task_id=task["id"], artifact_type="patch_apply_report",
+                              content=make_report_content(), filename=f"patch_apply_report_run_{run['id']}.json")
+        db_session.add(report)
+        await db_session.flush()
+        summary = TaskArtifact(task_id=task["id"], artifact_type="changed_files_summary",
+                               content=make_report_content(), filename=f"changed_files_summary_run_{run['id']}.json")
+        db_session.add(summary)
+        preview = TaskArtifact(task_id=task["id"], artifact_type="changed_file_preview",
+                               content=make_report_content(), filename=f"changed_file_preview_run_{run['id']}.json")
+        db_session.add(preview)
+        await db_session.commit()
+        data = (await client.get(f"/api/tasks/{task['id']}/sandbox/gate")).json()["data"]
+        assert data["passed"] is True
+        assert "stale_sandbox_result" not in [r["reason"] for r in data["blocked_reasons"]]
+
+    # ── blocked: agent_run_unknown (no run_id in filename) ──
+    @pytest.mark.asyncio
+    async def test_blocked_agent_run_unknown(self, client, task, db_session):
+        art = TaskArtifact(task_id=task["id"], artifact_type="patch_apply_report",
+                           content=make_report_content(), filename="patch_apply_report.json")
+        db_session.add(art)
+        await db_session.commit()
+        data = (await client.get(f"/api/tasks/{task['id']}/sandbox/gate")).json()["data"]
+        assert data["passed"] is False
+        assert "agent_run_unknown" in [r["reason"] for r in data["blocked_reasons"]]
+
+    # ── blocked: agent run not in task ──
+    @pytest.mark.asyncio
+    async def test_blocked_agent_run_not_in_task(self, client, task, db_session, project, agent):
+        r2 = await client.post(BASE + "/tasks", json={"project_id": project["id"], "title": "other"})
+        other_task = r2.json()["data"]
+        ar = await client.post(BASE + f"/tasks/{other_task['id']}/agent-runs", json={
+            "agent_id": agent["id"], "run_type": "execute", "input_prompt": "test",
+        })
+        other_run = ar.json()["data"]
+        await _add_report(db_session, task["id"], other_run["id"])
+        data = (await client.get(f"/api/tasks/{task['id']}/sandbox/gate")).json()["data"]
+        assert "agent_run_not_in_task" in [r["reason"] for r in data["blocked_reasons"]]
+
+    # ── blocked: risk too high ──
+    @pytest.mark.asyncio
+    async def test_blocked_risk_too_high(self, client, task, run, db_session):
+        run_model = await db_session.get(AgentRun, run["id"])
+        run_model.risk_level = "high"
+        await _add_report(db_session, task["id"], run["id"])
+        data = (await client.get(f"/api/tasks/{task['id']}/sandbox/gate")).json()["data"]
+        assert "risk_too_high" in [r["reason"] for r in data["blocked_reasons"]]
+
+    # ── blocked: human required ──
+    @pytest.mark.asyncio
+    async def test_blocked_human_required(self, client, task, run, db_session):
+        await _add_report(db_session, task["id"], run["id"])
+        decision = ApprovalDecision(task_id=task["id"], human_required=True,
+                                    auto_approve_allowed=False, risk_level="low")
+        db_session.add(decision)
+        await db_session.commit()
+        data = (await client.get(f"/api/tasks/{task['id']}/sandbox/gate")).json()["data"]
+        assert "human_required" in [r["reason"] for r in data["blocked_reasons"]]
+
+    # ── blocked: multiple reasons ──
+    @pytest.mark.asyncio
+    async def test_blocked_multiple_reasons(self, client, task, run, db_session):
+        t = await db_session.get(Task, task["id"])
+        t.status = "archived"
+        run_model = await db_session.get(AgentRun, run["id"])
+        run_model.risk_level = "critical"
+        content = json.dumps({
+            "applied": True, "redacted": "***REDACTED***",
+            "changed_files": [{"path": "src/test.py", "status": "modified"}],
+            "warnings": [], "errors": [],
+        }, ensure_ascii=False)
+        art = TaskArtifact(task_id=task["id"], artifact_type="patch_apply_report",
+                           content=content, filename=f"patch_apply_report_run_{run['id']}.json")
+        db_session.add(art)
+        decision = ApprovalDecision(task_id=task["id"], human_required=True,
+                                    auto_approve_allowed=False, risk_level="low")
+        db_session.add(decision)
+        await db_session.commit()
+        data = (await client.get(f"/api/tasks/{task['id']}/sandbox/gate")).json()["data"]
+        reasons = [r["reason"] for r in data["blocked_reasons"]]
+        assert "archived_task" in reasons
+        assert "risk_too_high" in reasons
+        assert "secret_detected" in reasons
+        assert "human_required" in reasons
+
+    # ── 404 ──
+    @pytest.mark.asyncio
+    async def test_gate_404(self, client):
+        assert (await client.get("/api/tasks/99999/sandbox/gate")).status_code == 404
 
 
-@pytest.mark.asyncio
-async def test_same_run_not_stale(cli, db):
-    r0 = await cli.post("/api/projects", json={"name": "p7", "root_path": "/p7"})
-    pid = r0.json()["data"]["id"]
-    r1 = await cli.post("/api/tasks", json={"project_id": pid, "title": "not-stale"})
-    tid = r1.json()["data"]["id"]
-    r2 = await cli.post("/api/agents", json={"name": "a6", "agent_type": "executor", "provider": "local"})
-    aid = r2.json()["data"]["id"]
-    r3 = await cli.post(f"/api/tasks/{tid}/agent-runs", json={"agent_id": aid, "run_type": "execute", "input_prompt": "test"})
-    rid = r3.json()["data"]["id"]
-    for a_type in ("patch_apply_report", "changed_files_summary", "changed_file_preview"):
-        db.add(TaskArtifact(task_id=tid, artifact_type=a_type,
-               content=json.dumps({"applied": True, "changed_files": [{"path": "y.py", "status": "modified", "additions": 1, "deletions": 0}], "warnings": [], "errors": []}),
-               filename=f"{a_type}_run_{rid}.json"))
-    await db.commit()
-    data = (await cli.get(f"/api/tasks/{tid}/sandbox/gate")).json()["data"]
-    assert data["passed"] is True
-    assert "stale_sandbox_result" not in [r["reason"] for r in data["blocked_reasons"]]
+class TestSandboxGateIntegration:
+    """Integration tests — uses real sandbox apply API to generate artifacts."""
 
+    @pytest.mark.asyncio
+    async def test_gate_passed_after_sandbox_apply(self, client, project, agent):
+        """Real sandbox apply + gate check — gate must pass, no stale."""
+        # Create task, code context, dispatch
+        r = await client.post(BASE + "/tasks", json={
+            "project_id": project["id"], "title": "sandbox-gate-int",
+        })
+        task_data = r.json()["data"]
+        task_id = task_data["id"]
 
-@pytest.mark.asyncio
-async def test_run_unknown(cli, db):
-    r0 = await cli.post("/api/projects", json={"name": "p8", "root_path": "/p8"})
-    pid = r0.json()["data"]["id"]
-    r1 = await cli.post("/api/tasks", json={"project_id": pid, "title": "unknown"})
-    tid = r1.json()["data"]["id"]
-    db.add(TaskArtifact(task_id=tid, artifact_type="patch_apply_report",
-           content=json.dumps({"applied": True, "changed_files": [], "warnings": [], "errors": []}),
-           filename="patch_apply_report.json"))
-    await db.commit()
-    reasons = [r["reason"] for r in (await cli.get(f"/api/tasks/{tid}/sandbox/gate")).json()["data"]["blocked_reasons"]]
-    assert "agent_run_unknown" in reasons
+        # Code context
+        await client.post(BASE + f"/tasks/{task_id}/code-context", json={
+            "files": [{"path": "src/greeting.py",
+                       "content": "def greet(name: str) -> str:\n    return f\"Hello, {name}!\"\n",
+                       "language": "python"}]
+        })
 
+        # Generate ticket & dispatch
+        actor = {"actor": "test"}
+        await client.post(BASE + f"/tasks/{task_id}/generate-ticket", json=actor)
+        await client.post(BASE + f"/tasks/{task_id}/dispatch", json=actor)
 
-@pytest.mark.asyncio
-async def test_wrong_task(cli, db):
-    r0 = await cli.post("/api/projects", json={"name": "p9", "root_path": "/p9"})
-    pid = r0.json()["data"]["id"]
-    r1 = await cli.post("/api/tasks", json={"project_id": pid, "title": "main"})
-    main_tid = r1.json()["data"]["id"]
-    r2 = await cli.post("/api/tasks", json={"project_id": pid, "title": "other"})
-    other_tid = r2.json()["data"]["id"]
-    r3 = await cli.post("/api/agents", json={"name": "a7", "agent_type": "executor", "provider": "local"})
-    aid = r3.json()["data"]["id"]
-    r4 = await cli.post(f"/api/tasks/{main_tid}/agent-runs", json={"agent_id": aid, "run_type": "execute", "input_prompt": "test"})
-    cross_rid = r4.json()["data"]["id"]
-    db.add(TaskArtifact(task_id=other_tid, artifact_type="patch_apply_report",
-           content=json.dumps({"applied": True, "changed_files": [{"path": "z.py", "status": "modified", "additions": 3, "deletions": 0}], "warnings": [], "errors": []}),
-           filename=f"patch_apply_report_run_{cross_rid}.json"))
-    await db.commit()
-    reasons = [r["reason"] for r in (await cli.get(f"/api/tasks/{other_tid}/sandbox/gate")).json()["data"]["blocked_reasons"]]
-    assert "agent_run_not_in_task" in reasons
+        # Create AgentRun
+        r = await client.post(BASE + f"/tasks/{task_id}/agent-runs", json={
+            "agent_id": agent["id"], "run_type": "execute", "input_prompt": "Add i18n support",
+        })
+        run = r.json()["data"]
+        run_id = run["id"]
+        await client.patch(BASE + f"/tasks/{task_id}/agent-runs/{run_id}", json={"status": "running"})
+        await client.post(BASE + f"/tasks/{task_id}/agent-runs/{run_id}/submit-result", json={
+            "status": "succeeded", "output_summary": "ok", "output_log": "ok",
+            "output_diff": (
+                "diff --git a/src/greeting.py b/src/greeting.py\n"
+                "--- a/src/greeting.py\n"
+                "+++ b/src/greeting.py\n"
+                "@@ -1,2 +1,5 @@\n"
+                " def greet(name: str) -> str:\n"
+                "+    if name:\n"
+                "     return f\"Hello, {name}!\"\n"
+                "+    return \"Hello, World!\"\n"
+            ),
+        })
 
+        # Sandbox apply
+        r = await client.post(BASE + f"/tasks/{task_id}/agent-runs/{run_id}/sandbox/apply-patch")
+        assert r.status_code == 200, f"sandbox apply failed: {r.json()}"
 
-@pytest.mark.asyncio
-async def test_high_risk(cli, db):
-    r0 = await cli.post("/api/projects", json={"name": "pa", "root_path": "/pa"})
-    pid = r0.json()["data"]["id"]
-    r1 = await cli.post("/api/tasks", json={"project_id": pid, "title": "high-risk"})
-    tid = r1.json()["data"]["id"]
-    r2 = await cli.post("/api/agents", json={"name": "a8", "agent_type": "executor", "provider": "local"})
-    aid = r2.json()["data"]["id"]
-    r3 = await cli.post(f"/api/tasks/{tid}/agent-runs", json={"agent_id": aid, "run_type": "execute", "input_prompt": "test"})
-    rid = r3.json()["data"]["id"]
-    (await db.get(AgentRun, rid)).risk_level = "high"
-    db.add(TaskArtifact(task_id=tid, artifact_type="patch_apply_report",
-           content=json.dumps({"applied": True, "changed_files": [{"path": "w.py", "status": "modified", "additions": 5, "deletions": 2}], "warnings": [], "errors": []}),
-           filename=f"patch_apply_report_run_{rid}.json"))
-    await db.commit()
-    reasons = [r["reason"] for r in (await cli.get(f"/api/tasks/{tid}/sandbox/gate")).json()["data"]["blocked_reasons"]]
-    assert "risk_too_high" in reasons
+        # Gate check — read-only GET
+        data = (await client.get(f"/api/tasks/{task_id}/sandbox/gate")).json()["data"]
+        reasons = [r["reason"] for r in data["blocked_reasons"]]
+        assert data["passed"] is True, f"gate blocked by: {reasons}"
+        assert "stale_sandbox_result" not in reasons, \
+            "same-run summary/preview incorrectly flagged as stale"
 
+    @pytest.mark.asyncio
+    async def test_gate_passed_via_post(self, client, project, agent):
+        """POST /evaluate-gate writes event and returns the same result."""
+        r = await client.post(BASE + "/tasks", json={
+            "project_id": project["id"], "title": "sandbox-gate-post",
+        })
+        task_data = r.json()["data"]
+        task_id = task_data["id"]
+        await client.post(BASE + f"/tasks/{task_id}/code-context", json={
+            "files": [{"path": "src/util.py",
+                       "content": "def util() -> str:\n    return \"ok\"\n",
+                       "language": "python"}]
+        })
+        actor = {"actor": "test"}
+        await client.post(BASE + f"/tasks/{task_id}/generate-ticket", json=actor)
+        await client.post(BASE + f"/tasks/{task_id}/dispatch", json=actor)
+        r = await client.post(BASE + f"/tasks/{task_id}/agent-runs", json={
+            "agent_id": agent["id"], "run_type": "execute", "input_prompt": "test",
+        })
+        run = r.json()["data"]
+        await client.patch(BASE + f"/tasks/{task_id}/agent-runs/{run['id']}", json={"status": "running"})
+        await client.post(BASE + f"/tasks/{task_id}/agent-runs/{run['id']}/submit-result", json={
+            "status": "succeeded", "output_summary": "ok", "output_log": "ok",
+            "output_diff": (
+                "diff --git a/src/util.py b/src/util.py\n"
+                "--- a/src/util.py\n"
+                "+++ b/src/util.py\n"
+                "@@ -1,2 +1,3 @@\n"
+                " def util() -> str:\n"
+                "+    # updated\n"
+                "     return \"ok\"\n"
+            ),
+        })
+        r = await client.post(BASE + f"/tasks/{task_id}/agent-runs/{run['id']}/sandbox/apply-patch")
+        assert r.status_code == 200
 
-@pytest.mark.asyncio
-async def test_human_review(cli, db):
-    r0 = await cli.post("/api/projects", json={"name": "pb", "root_path": "/pb"})
-    pid = r0.json()["data"]["id"]
-    r1 = await cli.post("/api/tasks", json={"project_id": pid, "title": "human"})
-    tid = r1.json()["data"]["id"]
-    r2 = await cli.post("/api/agents", json={"name": "a9", "agent_type": "executor", "provider": "local"})
-    aid = r2.json()["data"]["id"]
-    r3 = await cli.post(f"/api/tasks/{tid}/agent-runs", json={"agent_id": aid, "run_type": "execute", "input_prompt": "test"})
-    rid = r3.json()["data"]["id"]
-    db.add(TaskArtifact(task_id=tid, artifact_type="patch_apply_report",
-           content=json.dumps({"applied": True, "changed_files": [{"path": "v.py", "status": "modified", "additions": 0, "deletions": 1}], "warnings": [], "errors": []}),
-           filename=f"patch_apply_report_run_{rid}.json"))
-    db.add(ApprovalDecision(task_id=tid, human_required=True, auto_approve_allowed=False, risk_level="low"))
-    await db.commit()
-    reasons = [r["reason"] for r in (await cli.get(f"/api/tasks/{tid}/sandbox/gate")).json()["data"]["blocked_reasons"]]
-    assert "human_required" in reasons
+        # POST endpoint — should write event
+        data = (await client.post(f"/api/tasks/{task_id}/sandbox/evaluate-gate")).json()["data"]
+        assert data["passed"] is True
 
-
-@pytest.mark.asyncio
-async def test_multiple_blocks(cli, db):
-    r0 = await cli.post("/api/projects", json={"name": "pc", "root_path": "/pc"})
-    pid = r0.json()["data"]["id"]
-    r1 = await cli.post("/api/tasks", json={"project_id": pid, "title": "multi"})
-    t = await db.get(Task, r1.json()["data"]["id"])
-    t.status = "archived"
-    r2 = await cli.post("/api/agents", json={"name": "aa", "agent_type": "executor", "provider": "local"})
-    aid = r2.json()["data"]["id"]
-    r3 = await cli.post(f"/api/tasks/{t.id}/agent-runs", json={"agent_id": aid, "run_type": "execute", "input_prompt": "test"})
-    rid = r3.json()["data"]["id"]
-    (await db.get(AgentRun, rid)).risk_level = "critical"
-    db.add(TaskArtifact(task_id=t.id, artifact_type="patch_apply_report",
-           content=json.dumps({"applied": True, "redacted": "***REDACTED***", "changed_files": [{"path": "u.py", "status": "modified"}], "warnings": [], "errors": []}),
-           filename=f"patch_apply_report_run_{rid}.json"))
-    db.add(ApprovalDecision(task_id=t.id, human_required=True, auto_approve_allowed=False, risk_level="low"))
-    await db.commit()
-    reasons = [r["reason"] for r in (await cli.get(f"/api/tasks/{t.id}/sandbox/gate")).json()["data"]["blocked_reasons"]]
-    for want in ("archived_task", "risk_too_high", "secret_detected", "human_required"):
-        assert want in reasons
-
-
-@pytest.mark.asyncio
-async def test_404(cli):
-    assert (await cli.get("/api/tasks/99999/sandbox/gate")).status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_sandbox_integration(cli):
-    r0 = await cli.post("/api/projects", json={"name": "pd", "root_path": "/pd"})
-    pid = r0.json()["data"]["id"]
-    r1 = await cli.post("/api/tasks", json={"project_id": pid, "title": "sandbox-int"})
-    tid = r1.json()["data"]["id"]
-    r2 = await cli.post("/api/agents", json={"name": "ab", "agent_type": "executor", "provider": "local"})
-    aid = r2.json()["data"]["id"]
-    await cli.post(f"/api/tasks/{tid}/code-context", json={
-        "files": [{"path": "src/util.py", "content": "def f() -> int:\n    return 1\n", "language": "python"}]})
-    await cli.post(f"/api/tasks/{tid}/generate-ticket", json={"actor": "test"})
-    await cli.post(f"/api/tasks/{tid}/dispatch", json={"actor": "test"})
-    r3 = await cli.post(f"/api/tasks/{tid}/agent-runs", json={"agent_id": aid, "run_type": "execute", "input_prompt": "test"})
-    rid = r3.json()["data"]["id"]
-    await cli.patch(f"/api/tasks/{tid}/agent-runs/{rid}", json={"status": "running"})
-    await cli.post(f"/api/tasks/{tid}/agent-runs/{rid}/submit-result", json={
-        "status": "succeeded", "output_summary": "ok", "output_log": "ok",
-        "output_diff": ("diff --git a/src/util.py b/src/util.py\n"
-                        "--- a/src/util.py\n+++ b/src/util.py\n"
-                        "@@ -1,2 +1,3 @@\n def f() -> int:\n+    # updated\n     return 1\n")})
-    r4 = await cli.post(f"/api/tasks/{tid}/agent-runs/{rid}/sandbox/apply-patch")
-    assert r4.status_code == 200
-    data = (await cli.get(f"/api/tasks/{tid}/sandbox/gate")).json()["data"]
-    assert data["passed"] is True
-
-
-@pytest.mark.asyncio
-async def test_post_evaluate(cli):
-    r0 = await cli.post("/api/projects", json={"name": "pe", "root_path": "/pe"})
-    pid = r0.json()["data"]["id"]
-    r1 = await cli.post("/api/tasks", json={"project_id": pid, "title": "post-gate"})
-    tid = r1.json()["data"]["id"]
-    r2 = await cli.post("/api/agents", json={"name": "ac", "agent_type": "executor", "provider": "local"})
-    aid = r2.json()["data"]["id"]
-    await cli.post(f"/api/tasks/{tid}/code-context", json={
-        "files": [{"path": "src/util.py", "content": "def f() -> int:\n    return 1\n", "language": "python"}]})
-    await cli.post(f"/api/tasks/{tid}/generate-ticket", json={"actor": "test"})
-    await cli.post(f"/api/tasks/{tid}/dispatch", json={"actor": "test"})
-    r3 = await cli.post(f"/api/tasks/{tid}/agent-runs", json={"agent_id": aid, "run_type": "execute", "input_prompt": "test"})
-    rid = r3.json()["data"]["id"]
-    await cli.patch(f"/api/tasks/{tid}/agent-runs/{rid}", json={"status": "running"})
-    await cli.post(f"/api/tasks/{tid}/agent-runs/{rid}/submit-result", json={
-        "status": "succeeded", "output_summary": "ok", "output_log": "ok",
-        "output_diff": ("diff --git a/src/util.py b/src/util.py\n"
-                        "--- a/src/util.py\n+++ b/src/util.py\n"
-                        "@@ -1,2 +1,3 @@\n def f() -> int:\n+    # updated\n     return 1\n")})
-    r4 = await cli.post(f"/api/tasks/{tid}/agent-runs/{rid}/sandbox/apply-patch")
-    assert r4.status_code == 200
-    d = (await cli.post(f"/api/tasks/{tid}/sandbox/evaluate-gate")).json()["data"]
-    assert d["passed"] is True
-    ev = (await cli.get(f"/api/tasks/{tid}/events")).json()["data"]
-    assert any(e["event_type"].startswith("sandbox_gate_") for e in ev)
+        # Verify event was written
+        events = (await client.get(BASE + f"/tasks/{task_id}/events")).json()["data"]
+        gate_events = [e for e in events if e["event_type"].startswith("sandbox_gate_")]
+        assert len(gate_events) >= 1
