@@ -33,13 +33,54 @@ async def task(client) -> dict:
 
 t_actor = {"actor": "test"}
 
+async def _do_steps(client, task_id: int, agent_name: str):
+    """Setup agent + generate-ticket + dispatch for tests."""
+    r = await client.post(BASE + "/agents", json={"name": agent_name, "agent_type": "executor", "provider": "sandbox"})
+    await client.post(BASE + f"/tasks/{task_id}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task_id}/dispatch", json=t_actor)
+    return r.json()["data"]["id"]
+
+async def _openai_steps(client, task_id: int, agent_name: str):
+    """Setup openai agent + generate-ticket + dispatch."""
+    r = await client.post(BASE + "/agents", json={"name": agent_name, "agent_type": "executor", "provider": "openai"})
+    await client.post(BASE + f"/tasks/{task_id}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task_id}/dispatch", json=t_actor)
+    ag = r.json()["data"]
+
+async def _run_openai_dispatch(client, task_id: int, monkeypatch, mock_result: AgentRunResult) -> dict:
+    """Setup OpenAI agent, apply mock, dispatch orchestration step, return agent run."""
+    from app.services.openai_provider import OpenAIProvider
+    async def _mock_exec(self, run):
+        return mock_result
+    monkeypatch.setattr(OpenAIProvider, "execute", _mock_exec)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")
+    r = await client.post(BASE + "/orchestration/step")
+    return r
+
+async def _orch_step(client, task_id: int, agent_name: str, monkeypatch, mock_result: AgentRunResult):
+    """Full openai dispatch: setup → mock → orchestrate → return agent-run data."""
+    await _openai_steps(client, task_id, agent_name)
+    from app.services.openai_provider import OpenAIProvider
+    async def _mock_exec(self, run):
+        return mock_result
+    monkeypatch.setattr(OpenAIProvider, "execute", _mock_exec)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")
+    r = await client.post(BASE + f"/tasks/{task_id}/orchestration/step")
+    assert r.status_code == 200, f"orchestration failed: {r.text}"
+    rr = await client.get(BASE + f"/tasks/{task_id}/agent-runs")
+    return rr.json()["data"][0]
+
+def _get_tail(resp_json: dict) -> dict:
+    """Extract last approval decision from response."""
+    decisions = resp_json.get("data", resp_json.get("data", []))
+    items = decisions if isinstance(decisions, list) else []
+    return items[-1] if items else {}
+
 
 @pytest.mark.asyncio
 async def test_sandbox_valid(client, task):
-    """Sandbox provider executes successfully through full dispatch flow."""
-    r = await client.post(BASE + "/agents", json={"name": "a1", "agent_type": "executor", "provider": "sandbox"})
-    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
-    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    """Sandbox provider executes through full dispatch flow."""
+    await _do_steps(client, task["id"], "a1")
     r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
     assert r.status_code == 200
     rr = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
@@ -48,15 +89,12 @@ async def test_sandbox_valid(client, task):
 
 @pytest.mark.asyncio
 async def test_governance_trace_with_sandbox(client, task):
-    """Sandbox provider execution produces governance trace in raw_result_json."""
-    r = await client.post(BASE + "/agents", json={"name": "a2", "agent_type": "executor", "provider": "sandbox"})
-    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
-    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    """Sandbox execution produces governance trace in raw_result_json."""
+    await _do_steps(client, task["id"], "a2")
     r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
     assert r.status_code == 200
     rr = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
-    raw = rr.json()["data"][0]["raw_result_json"]
-    data = json.loads(raw)
+    data = json.loads(rr.json()["data"][0]["raw_result_json"])
     assert "provider_raw" in data
     assert "governance" in data
     assert "valid" in data["governance"]
@@ -64,179 +102,98 @@ async def test_governance_trace_with_sandbox(client, task):
 
 
 @pytest.mark.asyncio
-async def test_sandbox_no_secret_in_provider_raw(client, task):
-    """Sandbox provider output contains no secrets (safe by design)."""
-    r = await client.post(BASE + "/agents", json={"name": "a3", "agent_type": "executor", "provider": "sandbox"})
-    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
-    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+async def test_sandbox_no_secret(client, task):
+    """Sandbox output contains no secrets."""
+    await _do_steps(client, task["id"], "a3")
     r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
     assert r.status_code == 200
     rr = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
-    raw = rr.json()["data"][0]["raw_result_json"]
-    data = json.loads(raw)
-    provider_raw = data.get("provider_raw", "")
-    assert "sk-" not in provider_raw
-    assert "ghp_" not in provider_raw
-    assert "password=" not in provider_raw
+    prov = json.loads(rr.json()["data"][0]["raw_result_json"]).get("provider_raw", "")
+    assert "sk-" not in prov
+    assert "ghp_" not in prov
+    assert "password=" not in prov
 
 
 @pytest.mark.asyncio
-async def test_requires_human_high_risk_approval_decision(client, task, monkeypatch):
-    """High risk report triggers ApprovalDecision with requires_human."""
-    async def _mock_execute(self, run):
-        return AgentRunResult(
-            output_summary="High risk output",
-            output_log="Generated",
-            raw_result_json=json.dumps({"risk_report": {"risk_level": "high", "summary": "SQL injection"}}),
-        )
-    from app.services.openai_provider import OpenAIProvider
-    monkeypatch.setattr(OpenAIProvider, "execute", _mock_execute)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")
-    r = await client.post(BASE + "/agents", json={"name": "a4", "agent_type": "executor", "provider": "openai"})
-    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
-    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
-    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
-    assert r.status_code == 200
-    rr = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
-    ar = rr.json()["data"][0]
+async def test_high_risk_approval_decision(client, task, monkeypatch):
+    """High risk triggers ApprovalDecision with human_required."""
+    ar = await _orch_step(client, task["id"], "a4", monkeypatch, AgentRunResult(
+        output_summary="High risk output", output_log="Generated",
+        raw_result_json=json.dumps({"risk_report": {"risk_level": "high", "summary": "SQL injection"}}),
+    ))
     assert ar["status"] == "succeeded"
     data = json.loads(ar["raw_result_json"])
     assert data["governance"]["requires_human"] is True
     assert data["governance"]["risk_level"] == "high"
     dr = await client.get(BASE + f"/tasks/{task['id']}/approval-decisions")
-    resp_data = dr.json()
-    decisions = resp_data.get("data", resp_data.get("data", []))
-    decisions_list = decisions if isinstance(decisions, list) else []
-    assert len(decisions_list) >= 1
-    latest = decisions_list[-1]
-    assert latest["human_required"] is True
-    assert latest["auto_approve_allowed"] is False
+    last = _get_tail(dr.json())
+    assert last.get("human_required") is True
+    assert last.get("auto_approve_allowed") is False
 
 
 @pytest.mark.asyncio
-async def test_requires_human_secret_pattern_in_patch(client, task, monkeypatch):
-    """Patch with secret pattern triggers requires_human + ApprovalDecision."""
-    async def _mock_execute(self, run):
-        return AgentRunResult(
-            output_summary="Patch with secret",
-            output_log="Generated",
-            raw_result_json=json.dumps({"patch_diff": "diff --git a/config.py b/config.py\n--- a/config.py\n+++ b/config.py\n+password = 'hunter2'\n+DEBUG=True"}),
-            patch_diff="diff --git a/config.py b/config.py\n--- a/config.py\n+++ b/config.py\n+password = 'hunter2'\n+DEBUG=True",
-        )
-    from app.services.openai_provider import OpenAIProvider
-    monkeypatch.setattr(OpenAIProvider, "execute", _mock_execute)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")
-    r = await client.post(BASE + "/agents", json={"name": "a5", "agent_type": "executor", "provider": "openai"})
-    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
-    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
-    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
-    assert r.status_code == 200
-    rr = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
-    ar = rr.json()["data"][0]
+async def test_secret_patch_approval_decision(client, task, monkeypatch):
+    """Secret patch triggers ApprovalDecision."""
+    patch = "diff --git a/config.py b/config.py\n--- a/config.py\n+++ b/config.py\n+password = 'hunter2'\n+DEBUG=True"
+    ar = await _orch_step(client, task["id"], "a5", monkeypatch, AgentRunResult(
+        output_summary="Patch with secret", output_log="Generated",
+        raw_result_json=json.dumps({"patch_diff": patch}), patch_diff=patch,
+    ))
     assert ar["status"] == "succeeded"
-    data = json.loads(ar["raw_result_json"])
-    assert data["governance"]["requires_human"] is True
+    assert json.loads(ar["raw_result_json"])["governance"]["requires_human"] is True
     dr = await client.get(BASE + f"/tasks/{task['id']}/approval-decisions")
-    resp_data = dr.json()
-    decisions = resp_data.get("data", resp_data.get("data", []))
-    decisions_list = decisions if isinstance(decisions, list) else []
-    assert len(decisions_list) >= 1
-    latest = decisions_list[-1]
-    assert latest["human_required"] is True
-    assert latest["auto_approve_allowed"] is False
+    last = _get_tail(dr.json())
+    assert last.get("human_required") is True
+    assert last.get("auto_approve_allowed") is False
 
 
 @pytest.mark.asyncio
-async def test_requires_human_forbidden_path(client, task, monkeypatch):
-    """Forbidden path modification triggers requires_human + ApprovalDecision."""
-    async def _mock_execute(self, run):
-        return AgentRunResult(
-            output_summary="Forbidden path",
-            output_log="Generated",
-            raw_result_json=json.dumps({"patch_diff": "diff --git a/.env b/.env\n--- a/.env\n+++ b/.env\n+SECRET=value"}),
-            patch_diff="diff --git a/.env b/.env\n--- a/.env\n+++ b/.env\n+SECRET=value",
-        )
-    from app.services.openai_provider import OpenAIProvider
-    monkeypatch.setattr(OpenAIProvider, "execute", _mock_execute)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")
-    r = await client.post(BASE + "/agents", json={"name": "a6", "agent_type": "executor", "provider": "openai"})
-    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
-    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
-    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
-    assert r.status_code == 200
-    rr = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
-    ar = rr.json()["data"][0]
+async def test_forbidden_path_approval_decision(client, task, monkeypatch):
+    """Forbidden path modification triggers ApprovalDecision."""
+    patch = "diff --git a/.env b/.env\n--- a/.env\n+++ b/.env\n+SECRET=value"
+    ar = await _orch_step(client, task["id"], "a6", monkeypatch, AgentRunResult(
+        output_summary="Forbidden path", output_log="Generated",
+        raw_result_json=json.dumps({"patch_diff": patch}), patch_diff=patch,
+    ))
     assert ar["status"] == "succeeded"
-    data = json.loads(ar["raw_result_json"])
-    assert data["governance"]["requires_human"] is True
+    assert json.loads(ar["raw_result_json"])["governance"]["requires_human"] is True
     dr = await client.get(BASE + f"/tasks/{task['id']}/approval-decisions")
-    resp_data = dr.json()
-    decisions = resp_data.get("data", resp_data.get("data", []))
-    decisions_list = decisions if isinstance(decisions, list) else []
-    assert len(decisions_list) >= 1
-    latest = decisions_list[-1]
-    assert latest["human_required"] is True
-    assert latest["auto_approve_allowed"] is False
+    last = _get_tail(dr.json())
+    assert last.get("human_required") is True
+    assert last.get("auto_approve_allowed") is False
 
 
 @pytest.mark.asyncio
-async def test_task_not_auto_approved_for_human_required(client, task, monkeypatch):
-    """Task with human_required is NOT auto-approved by orchestration."""
-    async def _mock_execute(self, run):
-        return AgentRunResult(
-            output_summary="Critical risk",
-            output_log="Generated",
-            raw_result_json=json.dumps({"risk_report": {"risk_level": "critical", "summary": "RCE"}}),
-        )
-    from app.services.openai_provider import OpenAIProvider
-    monkeypatch.setattr(OpenAIProvider, "execute", _mock_execute)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")
-    r = await client.post(BASE + "/agents", json={"name": "a7", "agent_type": "executor", "provider": "openai"})
-    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
-    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
-    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
-    assert r.status_code == 200
+async def test_human_required_not_auto_approved(client, task, monkeypatch):
+    """human_required task not auto-approved by orchestration."""
+    await _orch_step(client, task["id"], "a7", monkeypatch, AgentRunResult(
+        output_summary="Critical risk", output_log="Generated",
+        raw_result_json=json.dumps({"risk_report": {"risk_level": "critical", "summary": "RCE"}}),
+    ))
     tr = await client.get(BASE + f"/tasks/{task['id']}")
-    resp_data = tr.json()
-    task_data = resp_data.get("data", resp_data.get("data", {}))
-    status = task_data.get("status", "") if isinstance(task_data, dict) else ""
-    assert status != "approved", "orchestration must not auto-approve human_required tasks"
+    td = tr.json().get("data", tr.json().get("data", {}))
+    status = td.get("status", "") if isinstance(td, dict) else ""
+    assert status != "approved", "must not auto-approve human_required"
 
 
 @pytest.mark.asyncio
 async def test_artifact_secret_redaction(client, task, monkeypatch):
-    """Artifact content is redacted for secrets before storage."""
-    fake_secret_plan = "#Plan\napi_key = 'sk-abcdefghijklmnopqrstuvwxyz1234567890'\npassword = 'secret123'"
-    async def _mock_execute(self, run):
-        return AgentRunResult(
-            output_summary="Plan with secrets",
-            output_log="Generated",
-            raw_result_json=json.dumps({"plan_md": fake_secret_plan}),
-            plan_md=fake_secret_plan,
-        )
-    from app.services.openai_provider import OpenAIProvider
-    monkeypatch.setattr(OpenAIProvider, "execute", _mock_execute)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")
-    r = await client.post(BASE + "/agents", json={"name": "a8", "agent_type": "executor", "provider": "openai"})
-    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
-    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
-    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
-    assert r.status_code == 200
-    rr = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
-    ar = rr.json()["data"][0]
+    """Artifact content is redacted for secrets."""
+    secret_plan = "#Plan\napi_key = 'sk-abcdefghijklmnopqrstuvwxyz1234567890'\npassword = 'secret123'"
+    ar = await _orch_step(client, task["id"], "a8", monkeypatch, AgentRunResult(
+        output_summary="Plan with secrets", output_log="Generated",
+        raw_result_json=json.dumps({"plan_md": secret_plan}), plan_md=secret_plan,
+    ))
     assert ar["status"] == "succeeded"
     raw = json.loads(ar["raw_result_json"])
     assert "sk-abcdefghijklmnopqrstuvwxyz1234567890" not in raw.get("provider_raw", "")
     assert "***REDACTED***" in raw.get("provider_raw", "")
     ar_resp = await client.get(BASE + f"/tasks/{task['id']}/artifacts")
-    artifacts_data = ar_resp.json()
-    items = artifacts_data.get("data", artifacts_data.get("data", []))
-    art_items = items if isinstance(items, list) else []
-    found_plan = False
-    for art in art_items:
-        if "plan.md" in art.get("filename", ""):
-            found_plan = True
-            assert "sk-abcdefghijklmnopqrstuvwxyz1234567890" not in art.get("content", "")
-            assert "***REDACTED***" in art.get("content", "")
-            assert "secret123" not in art.get("content", "")
-    assert found_plan, "plan artifact should exist"
+    items = ar_resp.json().get("data", ar_resp.json().get("data", []))
+    arts = items if isinstance(items, list) else []
+    plan_arts = [a for a in arts if "plan.md" in a.get("filename", "")]
+    assert len(plan_arts) >= 1, "plan artifact should exist"
+    for a in plan_arts:
+        assert "sk-abcdefghijklmnopqrstuvwxyz1234567890" not in a.get("content", "")
+        assert "***REDACTED***" in a.get("content", "")
+        assert "secret123" not in a.get("content", "")
