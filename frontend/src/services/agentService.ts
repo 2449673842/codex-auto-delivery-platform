@@ -101,8 +101,12 @@ export async function fetchApprovalDecisions(taskId: number): Promise<any[]> {
 
 // ── Code Context ──
 export async function fetchCodeContext(taskId: number): Promise<CodeContextResponse | null> {
-  const { data } = await client.get(`/tasks/${taskId}/code-context`)
-  return data.data || null
+  try {
+    const { data } = await client.get(`/tasks/${taskId}/code-context`)
+    return data.data || null
+  } catch {
+    return null
+  }
 }
 
 // ── Patch Sandbox ──

@@ -42,15 +42,22 @@ function apiGet(path) { // NOSONAR
   }))
 }
 
+function apiPatch(path, body) { // NOSONAR - test harness
+  return new Promise((resolve, reject) => {
+    const u = new URL(`${BE}/api${path}`)
+    const req = http.request({ hostname: u.hostname, port: u.port, path: u.pathname, method: 'PATCH', headers: { 'Content-Type': 'application/json' } },  // NOSONAR - test harness
+      res => { let d = ''; res.on('data', c => d += c); res.on('end', () => resolve({ status: res.statusCode, body: d })) })
+    req.on('error', reject); req.write(JSON.stringify(body)); req.end()
+  })
+}
+
 async function seedData() {
   const proj = await apiPost('/projects', { name: `s4-proj-${Date.now()}`, root_path: '/s4' })
-  if (!proj.data) { console.log('  [DBG] proj response:', JSON.stringify(proj).substring(0, 200)) }
-  const projId = proj.data?.id || proj.data?.project?.id || proj.data?.project_id
-  if (!projId) { console.log('  [DBG] Missing project id, data:', JSON.stringify(proj.data).substring(0, 200)); throw new Error('no project id') }
+  const projId = proj.data?.id
+  if (!projId) throw new Error('no project id')
   const task = await apiPost('/tasks', { project_id: projId, title: 'S4 display test', planner: 'test', description: 'Test governance display' })
-  if (!task.data) { console.log('  [DBG] task response:', JSON.stringify(task).substring(0, 200)) }
   const taskId = task.data?.id
-  if (!taskId) { console.log('  [DBG] Missing task id, data:', JSON.stringify(task.data).substring(0, 200)); throw new Error('no task id') }
+  if (!taskId) throw new Error('no task id')
   await apiPost('/agents', { name: 's4-agent', agent_type: 'executor', provider: 'sandbox' })
   return task.data
 }
@@ -77,21 +84,30 @@ async function orchestrateSteps(taskId) {
   await apiPost(`/tasks/${taskId}/orchestration/step`, {}) // NOSONAR
   await apiPost(`/tasks/${taskId}/orchestration/step`, {}) // NOSONAR
   await apiPost(`/tasks/${taskId}/orchestration/step`, {}) // NOSONAR
-  // Create a succeeded execute run for sandbox apply
+  // Create a succeeded execute run for sandbox apply with a valid unified diff
   const agents = await apiGet('/agents')
   const agentId = agents.data?.[0]?.id
   if (agentId) {
+    // Diff: modify src/main.py — replace second line, add two new lines
+    const patchDiff = [
+      'diff --git a/src/main.py b/src/main.py',
+      '--- a/src/main.py',
+      '+++ b/src/main.py',
+      '@@ -1,2 +1,4 @@',
+      ' def hello():',
+      '-    print("hello")',
+      '+    print("hello world")',
+      '+def world():',
+      '+    print("world")',
+    ].join('\n')
     const run = await apiPost(`/tasks/${taskId}/agent-runs`, { agent_id: agentId, run_type: 'execute', input_prompt: 'test execute' })
     const runId = run.data?.id
     if (runId) {
-      // Must transition queued -> running (PATCH) -> succeeded (submit-result)
-      const res1 = await fetch(`${BE}/api/tasks/${taskId}/agent-runs/${runId}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'running' })
-      })
-      const res2 = await fetch(`${BE}/api/tasks/${taskId}/agent-runs/${runId}/submit-result`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'succeeded', output_summary: 'test sandbox output' })
+      await apiPatch(`/tasks/${taskId}/agent-runs/${runId}`, { status: 'running' })
+      await apiPost(`/tasks/${taskId}/agent-runs/${runId}/submit-result`, {
+        status: 'succeeded',
+        output_summary: 'test sandbox output',
+        output_diff: patchDiff,
       })
     }
   }
@@ -199,15 +215,17 @@ async function testSandboxSection(page) {
   await checkT(page, 'No PR created', 'G4 No PR created label')
 }
 
+async function testNoCodeContext(page, taskId) {
+  log('\n========== I. No Code Context — 404 Recovery ==========')
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(1000)
+  await checkT(page, '代码上下文', 'I1 Section title')
+  await checkT(page, '暂无代码上下文数据', 'I2 Empty state message')
+  pass('I3 TaskDetail loads without code context (no 404 crash)')
+}
+
 async function testSandboxApply(page) {
   log('\n========== H. Sandbox Apply & Result ==========')
-  const optSel = await page.locator('.sandbox-run-select select').count()
-  if (optSel === 0) {
-    const bodyText = await page.locator('body').textContent()
-    log(`  [DBG] Page excerpt: ${(bodyText || '').substring(2000, 3500)}`)
-    fail('H1 No succeeded runs to select', '')
-    return
-  }
   const sel = page.locator('.sandbox-run-select select')
   const optCount = await sel.locator('option').count()
   if (optCount <= 1) { fail('H1 No succeeded runs to select', ''); return }
@@ -216,24 +234,19 @@ async function testSandboxApply(page) {
   await page.waitForTimeout(200)
   await page.locator('button:has-text("Apply in Sandbox")').click()
   await page.waitForTimeout(2000)
-  await checkEl(page, '.sandbox-result', 'H2 Sandbox result')
-  await checkEl(page, '.sandbox-result-header', 'H3 Result header')
+  await checkEl(page, '.sandbox-result', 'H2 Sandbox result present')
+  await checkEl(page, '.sandbox-result-header', 'H3 Result header present')
   const statusBadge = await page.locator('.sandbox-result-header .run-status-badge').count()
   if (statusBadge > 0) pass('H4 Status badge present')
   else fail('H4 Status badge missing', '')
-  // changed files, previews, artifacts are conditionally rendered; note if absent
-  const cf = await page.locator('.sandbox-changed-files').count()
-  if (cf > 0) pass('H5 Changed files section present')
-  else log('  [INFO] H5 sandbox-changed-files not rendered (no file changes in test sandbox)')
-  const tbl = await page.locator('.sandbox-table').count()
-  if (tbl > 0) pass('H6 Changed files table present')
-  else log('  [INFO] H6 sandbox-table not rendered')
-  const prev = await page.locator('.sandbox-previews').count()
-  if (prev > 0) pass('H7 Before/after previews present')
-  else log('  [INFO] H7 sandbox-previews not rendered')
-  const art = await page.locator('.sandbox-artifacts').count()
-  if (art > 0) pass('H8 Sandbox artifacts present')
-  else log('  [INFO] H8 sandbox-artifacts not rendered')
+  await checkEl(page, '.sandbox-changed-files', 'H5 Changed files section')
+  await checkEl(page, '.sandbox-table', 'H6 Changed files table')
+  await checkT(page, 'src/main.py', 'H6b Changed file path visible')
+  await checkEl(page, '.sandbox-previews', 'H7 Before/after previews')
+  await checkT(page, 'Before', 'H7b Before label')
+  await checkT(page, 'After', 'H7c After label')
+  await checkEl(page, '.sandbox-artifacts', 'H8 Sandbox artifacts')
+  await checkEl(page, '.sandbox-artifact-item', 'H8b Artifact items')
 }
 
 function printSummary(ce) {
@@ -284,6 +297,12 @@ async function main() {
   await testApprovals(page)
   await testHumanRequired(page)
   await testSandboxApply(page)
+  // Create a separate task without code context for 404 test
+  const bareTask = await apiPost('/tasks', { project_id: task.project_id, title: 'S4 no-ctx test', planner: 'test', description: 'No code context' })
+  if (bareTask.data?.id) await testNoCodeContext(page, bareTask.data.id)
+  // Navigate back to main task
+  await page.goto(`${FE}/tasks/${task.id}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
   printSummary(consoleErrors)
   await browser.close()
 }

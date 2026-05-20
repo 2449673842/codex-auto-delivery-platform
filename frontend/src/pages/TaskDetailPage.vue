@@ -216,7 +216,7 @@
         <h2>补丁沙箱</h2>
         <p class="section-note">在内存沙箱中验证 AI 生成的补丁，不提交至真实仓库。</p>
 
-        <div v-if="!isArchived && agentRuns.filter(r => r.status === 'succeeded' && r.run_type === 'execute').length > 0" class="sandbox-apply-area">
+        <div v-if="!isArchived && agentRuns.some(r => r.status === 'succeeded' && r.run_type === 'execute')" class="sandbox-apply-area">
           <div class="sandbox-label-bar">
             <span class="label-badge label-applied">Sandbox only</span>
             <span class="label-badge label-merged">Not committed</span>
