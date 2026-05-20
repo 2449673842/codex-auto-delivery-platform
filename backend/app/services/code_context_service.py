@@ -19,6 +19,7 @@ from app.models.task import Task
 from app.models.task_artifact import TaskArtifact
 from app.schemas.code_context import CodeContextCreateRequest, CodeContextResponse, CodeContextFile
 from app.services.event_service import create_event
+from app.services.ai_output_governance_service import redact_secrets
 
 
 async def set_code_context(
@@ -39,7 +40,7 @@ async def set_code_context(
 
     bundle = {
         "files": [
-            {"path": f.path, "content": f.content, "language": f.language}
+            {"path": f.path, "content": redact_secrets(f.content), "language": f.language}
             for f in data.files
         ]
     }

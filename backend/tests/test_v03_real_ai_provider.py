@@ -143,6 +143,10 @@ async def test_openai_execute_saves_patch_diff(client, task, monkeypatch):
     agent = r.json()["data"]
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
     await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    # v0.4 S1: execute requires code context
+    await client.post(BASE + f"/tasks/{task['id']}/code-context", json={
+        "files": [{"path": "src/example.py", "content": "# placeholder\n", "language": "python"}]
+    })
     # Create AgentRun with execute type directly via API
     r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "execute", "input_prompt": "add a function"})
     rid = r.json()["data"]["id"]

@@ -112,50 +112,41 @@ def _load_file_content(files: list[dict], path: str) -> str | None:
 
 
 def _apply_hunk(content_lines: list[str], hunk: Hunk) -> list[str]:
-    """Apply a single hunk to content lines, returning new lines."""
+    """Apply a single hunk to content lines. Raises ValueError on context/deletion mismatch."""
     result = list(content_lines)
 
-    # Build a map of old content for context matching
-    old_lines = []
-    for hl in hunk.lines:
-        if hl.line_type in (" ", "-"):
-            old_lines.append(hl.content)
-
-    # Find matching position in content (1-indexed)
-    pos = hunk.old_start - 1  # convert to 0-indexed
+    pos = hunk.old_start - 1  # 0-indexed
     if pos < 0:
         pos = 0
     if pos > len(result):
         pos = len(result)
 
-    # Remove old lines and add new lines
-    # Work through the hunk: process context, deletions, additions
     result_final = list(result[:pos])
-    hunk_idx = 0
     content_idx = pos
-    while hunk_idx < len(hunk.lines):
-        hl = hunk.lines[hunk_idx]
+
+    for hl in hunk.lines:
         if hl.line_type == " ":
-            # Context line: should match existing content
             if content_idx < len(result) and result[content_idx] == hl.content:
                 result_final.append(result[content_idx])
                 content_idx += 1
             else:
-                result_final.append(hl.content)
-            hunk_idx += 1
+                actual = result[content_idx] if content_idx < len(result) else "EOF"
+                raise ValueError(
+                    f"Context mismatch at line {content_idx}: "
+                    f"expected '{hl.content}', got '{actual}'"
+                )
         elif hl.line_type == "-":
-            # Deletion: skip matching line in content
             if content_idx < len(result) and result[content_idx] == hl.content:
                 content_idx += 1
-            hunk_idx += 1
+            else:
+                actual = result[content_idx] if content_idx < len(result) else "EOF"
+                raise ValueError(
+                    f"Deletion mismatch at line {content_idx}: "
+                    f"expected '{hl.content}', got '{actual}'"
+                )
         elif hl.line_type == "+":
-            # Addition: add the new line
             result_final.append(hl.content)
-            hunk_idx += 1
-        else:
-            hunk_idx += 1
 
-    # Append remaining content after hunk
     result_final.extend(result[content_idx:])
     return result_final
 
@@ -198,6 +189,11 @@ async def apply_patch_in_sandbox(
     # Load patch.diff from the agent run's artifacts
     patch_diff = await _load_patch_diff(db, run)
     if not patch_diff:
+        await create_event(
+            db, task_id=task_id, event_type="patch_sandbox_failed",
+            actor=f"patch_sandbox:run_{run_id}",
+            message="No patch.diff found in AgentRun artifacts",
+        )
         return PatchApplyResult(
             success=False,
             report=PatchApplyReport(
@@ -214,6 +210,11 @@ async def apply_patch_in_sandbox(
         patch_diff=patch_diff,
     )
     if not validation.valid:
+        await create_event(
+            db, task_id=task_id, event_type="patch_sandbox_failed",
+            actor=f"patch_sandbox:run_{run_id}",
+            message="Patch failed governance validation",
+        )
         return PatchApplyResult(
             success=False,
             report=PatchApplyReport(
@@ -223,6 +224,11 @@ async def apply_patch_in_sandbox(
         )
 
     if len(patch_diff.encode("utf-8")) > MAX_PATCH_SIZE_BYTES:
+        await create_event(
+            db, task_id=task_id, event_type="patch_sandbox_failed",
+            actor=f"patch_sandbox:run_{run_id}",
+            message="Patch too large",
+        )
         return PatchApplyResult(
             success=False,
             report=PatchApplyReport(
@@ -261,6 +267,11 @@ async def apply_patch_in_sandbox(
     try:
         diff_files = parse_unified_diff(patch_diff)
     except Exception:
+        await create_event(
+            db, task_id=task_id, event_type="patch_sandbox_failed",
+            actor=f"patch_sandbox:run_{run_id}",
+            message="Malformed patch.diff",
+        )
         return PatchApplyResult(
             success=False,
             report=PatchApplyReport(
@@ -270,6 +281,11 @@ async def apply_patch_in_sandbox(
         )
 
     if not diff_files:
+        await create_event(
+            db, task_id=task_id, event_type="patch_sandbox_failed",
+            actor=f"patch_sandbox:run_{run_id}",
+            message="No file diffs found in patch",
+        )
         return PatchApplyResult(
             success=False,
             report=PatchApplyReport(
@@ -302,19 +318,20 @@ async def apply_patch_in_sandbox(
 
         # Apply all hunks for this file
         working_lines = list(orig_lines) if orig_lines else []
-        hunk_applied = False
+        all_hunks_applied = True
         for hunk in df.hunks:
             try:
                 working_lines = _apply_hunk(working_lines, hunk)
-                hunk_applied = True
-            except Exception:
+            except Exception as e:
+                all_hunks_applied = False
                 apply_warnings.append(
                     f"Hunk @@ -{hunk.old_start},{hunk.old_count} +{hunk.new_start},{hunk.new_count} @@ "
-                    f"failed to apply to {target_path}"
+                    f"failed to apply to {target_path}: {e}"
                 )
+                break
 
-        if not hunk_applied and orig_content:
-            apply_errors.append(f"No hunks applied to {target_path}; context mismatch or file not found")
+        if not all_hunks_applied:
+            apply_errors.append(f"Hunk application failed for {target_path}")
             continue
 
         new_content = "\n".join(working_lines) if working_lines else ""
@@ -342,6 +359,11 @@ async def apply_patch_in_sandbox(
         }
 
     if not changed_files:
+        await create_event(
+            db, task_id=task_id, event_type="patch_sandbox_failed",
+            actor=f"patch_sandbox:run_{run_id}",
+            message="No changes applied in sandbox",
+        )
         return PatchApplyResult(
             success=False,
             report=PatchApplyReport(
@@ -358,15 +380,16 @@ async def apply_patch_in_sandbox(
         errors=apply_errors,
     )
 
-    # Create artifacts
+    # Create artifacts — sha256/size_bytes 基于 redacted content
     report_content = json.dumps(report.model_dump(), ensure_ascii=False, indent=2)
-    report_sha = _sha256_of_text(report_content)
+    redacted_report = redact_secrets(report_content)
+    report_sha = _sha256_of_text(redacted_report)
 
     art_report = TaskArtifact(
         task_id=task_id, artifact_type="patch_apply_report",
-        content=redact_secrets(report_content),
+        content=redacted_report,
         filename=f"patch_apply_report_run_{run_id}.json",
-        size_bytes=len(report_content.encode("utf-8")), sha256=report_sha,
+        size_bytes=len(redacted_report.encode("utf-8")), sha256=report_sha,
     )
     db.add(art_report)
 
@@ -381,12 +404,13 @@ async def apply_patch_in_sandbox(
         "total_additions": sum(cf.additions for cf in changed_files),
         "total_deletions": sum(cf.deletions for cf in changed_files),
     }, ensure_ascii=False)
+    redacted_summary = redact_secrets(summary_json)
     art_summary = TaskArtifact(
         task_id=task_id, artifact_type="changed_files_summary",
-        content=redact_secrets(summary_json),
+        content=redacted_summary,
         filename=f"changed_files_summary_run_{run_id}.json",
-        size_bytes=len(summary_json.encode("utf-8")),
-        sha256=_sha256_of_text(summary_json),
+        size_bytes=len(redacted_summary.encode("utf-8")),
+        sha256=_sha256_of_text(redacted_summary),
     )
     db.add(art_summary)
 
@@ -395,19 +419,20 @@ async def apply_patch_in_sandbox(
         if path in before_after_previews:
             preview = before_after_previews[path]
             preview_content = json.dumps(preview, ensure_ascii=False)
+            redacted_preview = redact_secrets(preview_content)
             art_preview = TaskArtifact(
                 task_id=task_id, artifact_type="changed_file_preview",
-                content=redact_secrets(preview_content),
+                content=redacted_preview,
                 filename=f"changed_file_preview_{path.replace('/', '_')}_run_{run_id}.json",
-                size_bytes=len(preview_content.encode("utf-8")),
-                sha256=_sha256_of_text(preview_content),
+                size_bytes=len(redacted_preview.encode("utf-8")),
+                sha256=_sha256_of_text(redacted_preview),
                 metadata_json=json.dumps({"file_path": path, "status": cf.status}),
             )
             db.add(art_preview)
 
     await db.flush()
     await create_event(
-        db, task_id=task_id, event_type="artifact_uploaded",
+        db, task_id=task_id, event_type="patch_sandbox_applied",
         actor=f"patch_sandbox:run_{run_id}",
         message=f"Patch sandbox applied: {len(changed_files)} file(s) changed",
     )

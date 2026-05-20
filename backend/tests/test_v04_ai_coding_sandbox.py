@@ -201,6 +201,27 @@ async def test_code_context_archived_forbidden(client, task):
     assert r.status_code == 409
 
 
+@pytest.mark.asyncio
+async def test_code_context_redacts_secrets(client, task):
+    """Code context with secrets must be redacted in artifact storage."""
+    FAKE_SECRET = "sk-abc123def456ghi789jkl012"
+    code_with_secret = {
+        "files": [
+            {"path": "src/settings.py", "content": f"API_KEY={FAKE_SECRET}\n", "language": "python"},
+        ]
+    }
+    r = await client.post(BASE + f"/tasks/{task['id']}/code-context", json=code_with_secret)
+    assert r.status_code == 201
+    art_id = r.json()["data"]["artifact_id"]
+
+    r2 = await client.get(BASE + f"/tasks/{task['id']}/artifacts")
+    for art in r2.json()["data"]:
+        if art.get("id") == art_id:
+            content = art.get("content") or ""
+            assert FAKE_SECRET not in content, "Code context artifact contains plaintext secret"
+            assert "***REDACTED***" in content, "Code context artifact missing redaction marker"
+
+
 # ═══════════════════════════════════════════════════════
 # 2. AI Patch Generation with Code Context
 # ═══════════════════════════════════════════════════════
@@ -232,7 +253,7 @@ async def test_execute_with_code_context_sandbox(client, task, agent, db_session
 
 @pytest.mark.asyncio
 async def test_execute_artifact_contains_diff(client, task, agent, db_session):
-    """Execute run creates agent_output_diff artifact."""
+    """Execute run creates agent_output_diff artifact with correct sha256."""
     await client.post(BASE + f"/tasks/{task['id']}/code-context", json=SAMPLE_CODE_CONTEXT)
     await _prepare_task_for_dispatch(client, task["id"])
 
@@ -247,13 +268,21 @@ async def test_execute_artifact_contains_diff(client, task, agent, db_session):
     await db_session.commit()
 
     r = await client.get(BASE + f"/tasks/{task['id']}/artifacts")
-    types = [a["artifact_type"] for a in r.json()["data"]]
-    assert "agent_output_diff" in types
+    artifacts = r.json()["data"]
+    diff_arts = [a for a in artifacts if a["artifact_type"] == "agent_output_diff"]
+    assert len(diff_arts) >= 1
+    diff_art = diff_arts[0]
+    assert diff_art["filename"].startswith("agent_run_")
+    assert diff_art["filename"].endswith("_patch.diff")
+    content = diff_art.get("content", "")
+    assert content.startswith("diff --git")
+    expected_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    assert diff_art["sha256"] == expected_sha
 
 
 @pytest.mark.asyncio
-async def test_execute_no_code_context_fallback(client, task, agent, db_session):
-    """Without code context, sandbox provider still succeeds with default template."""
+async def test_execute_no_code_context_fails(client, task, agent, db_session):
+    """Without code context, execute run must fail (not succeed with default template)."""
     await _prepare_task_for_dispatch(client, task["id"])
 
     r = await client.post(
@@ -263,14 +292,17 @@ async def test_execute_no_code_context_fallback(client, task, agent, db_session)
     run = r.json()["data"]
 
     from app.services.ai_provider_service import dispatch_agent_run
-    await dispatch_agent_run(db_session, run["id"], "test")
-    await db_session.commit()
+    from fastapi import HTTPException
 
-    r = await client.get(BASE + f"/tasks/{task['id']}/agent-runs/{run['id']}")
-    run_data = r.json()["data"]
-    assert run_data["status"] == "succeeded"
-    raw = run_data.get("raw_result_json") or ""
-    assert "src/example.py" in raw
+    with pytest.raises(HTTPException) as exc:
+        await dispatch_agent_run(db_session, run["id"], "test")
+    await db_session.commit()
+    assert exc.value.status_code == 422
+
+    r2 = await client.get(BASE + f"/tasks/{task['id']}/agent-runs/{run['id']}")
+    run_data = r2.json()["data"]
+    assert run_data["status"] == "failed", f"Expected failed, got {run_data['status']}"
+    assert "code context" in (run_data.get("error_message") or "").lower()
 
 
 @pytest.mark.asyncio
@@ -311,6 +343,49 @@ async def test_openai_execute_prompt_built_with_code_context(client, task, opena
     assert "def greet" in captured["user"]
 
 
+@pytest.mark.asyncio
+async def test_openai_prompt_redacts_secrets(client, task, openai_agent, monkeypatch):
+    """OpenAI execute prompt must not contain plaintext secrets from code context."""
+    from app.services.openai_provider import OpenAIProvider
+
+    captured = {}
+    async def mock_call(self, system_prompt, user_prompt):
+        captured["system"] = system_prompt
+        captured["user"] = user_prompt
+        return "diff --git a/src/config.py b/src/config.py\n+ noop\n"
+
+    monkeypatch.setattr(OpenAIProvider, "_call_openai", mock_call)
+    monkeypatch.setattr(OpenAIProvider, "__init__", lambda self: setattr(self, "api_key", "mock-key"))
+
+    FAKE_SECRET = "sk-abc123def456ghi789jkl012"
+    secret_context = {
+        "files": [
+            {"path": "src/config.py", "content": f"API_KEY={FAKE_SECRET}\n", "language": "python"},
+        ]
+    }
+    await client.post(BASE + f"/tasks/{task['id']}/code-context", json=secret_context)
+    await _prepare_task_for_dispatch(client, task["id"])
+
+    r = await client.post(
+        BASE + f"/tasks/{task['id']}/agent-runs",
+        json={"agent_id": openai_agent["id"], "run_type": "execute", "input_prompt": "Update config"},
+    )
+    run = r.json()["data"]
+
+    from app.services.ai_provider_service import dispatch_agent_run
+    from app.database import get_session_factory
+    factory = get_session_factory()
+    async with factory() as db:
+        await dispatch_agent_run(db, run["id"], "test")
+        await db.commit()
+
+    assert "user" in captured
+    user_prompt = captured["user"]
+    assert FAKE_SECRET not in user_prompt, "OpenAI prompt leaked plaintext secret"
+    assert "API_KEY=***REDACTED***" in user_prompt or "***REDACTED***" in user_prompt, \
+        "OpenAI prompt missing redaction marker"
+
+
 # ═══════════════════════════════════════════════════════
 # 3. Patch Apply Sandbox — Core
 # ═══════════════════════════════════════════════════════
@@ -329,6 +404,10 @@ async def test_apply_patch_valid(client, task, agent, db_session):
     assert data["report"]["applied"] is True
     assert len(data["report"]["changed_files"]) == 1
     assert data["report"]["changed_files"][0]["path"] == "src/greeting.py"
+
+    r2 = await client.get(BASE + f"/tasks/{task['id']}/events")
+    event_types = [e["event_type"] for e in r2.json()["data"]]
+    assert "patch_sandbox_applied" in event_types
 
 
 @pytest.mark.asyncio
@@ -515,6 +594,57 @@ async def test_apply_patch_run_not_succeeded(client, task, agent):
     assert r.status_code == 409
 
 
+@pytest.mark.asyncio
+async def test_apply_patch_context_mismatch_fails(client, task, agent, db_session):
+    """Context line mismatch must fail, not pseudo-succeed."""
+    await client.post(BASE + f"/tasks/{task['id']}/code-context", json=SAMPLE_CODE_CONTEXT)
+    await _prepare_task_for_dispatch(client, task["id"])
+
+    mismatch_patch = (
+        "diff --git a/src/greeting.py b/src/greeting.py\n"
+        "--- a/src/greeting.py\n"
+        "+++ b/src/greeting.py\n"
+        "@@ -1,2 +1,3 @@\n"
+        " NONEXISTENT_CONTEXT_LINE\n"
+        "+def new_func():\n"
+        "     return f\"Hello, {name}!\"\n"
+    )
+    run_id = await _create_succeeded_run_with_diff(client, task["id"], agent["id"], mismatch_patch, db_session)
+
+    r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs/{run_id}/sandbox/apply-patch")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["success"] is False, f"Expected failure on context mismatch, got: {data}"
+
+    r2 = await client.get(BASE + f"/tasks/{task['id']}/artifacts")
+    for art in r2.json()["data"]:
+        assert art["artifact_type"] not in ("changed_file_preview",), \
+            f"Should not create preview artifact on context mismatch: {art['filename']}"
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_deletion_mismatch_fails(client, task, agent, db_session):
+    """Deletion line mismatch must fail."""
+    await client.post(BASE + f"/tasks/{task['id']}/code-context", json=SAMPLE_CODE_CONTEXT)
+    await _prepare_task_for_dispatch(client, task["id"])
+
+    mismatch_patch = (
+        "diff --git a/src/greeting.py b/src/greeting.py\n"
+        "--- a/src/greeting.py\n"
+        "+++ b/src/greeting.py\n"
+        "@@ -1,2 +1,2 @@\n"
+        " def greet(name: str) -> str:\n"
+        "-LINE_THAT_DOES_NOT_EXIST\n"
+        "+REPLACEMENT_LINE\n"
+    )
+    run_id = await _create_succeeded_run_with_diff(client, task["id"], agent["id"], mismatch_patch, db_session)
+
+    r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs/{run_id}/sandbox/apply-patch")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["success"] is False, f"Expected failure on deletion mismatch, got: {data}"
+
+
 # ═══════════════════════════════════════════════════════
 # 5. Security Boundaries (Static Analysis)
 # ═══════════════════════════════════════════════════════
@@ -597,27 +727,53 @@ def test_sandbox_provider_still_secure():
 
 @pytest.mark.asyncio
 async def test_patch_apply_report_redacts_secrets(client, task, agent, db_session):
-    """Secret patterns in patch content should be redacted in artifacts."""
-    await client.post(
-        BASE + f"/tasks/{task['id']}/code-context",
-        json={"files": [{"path": "src/config.py", "content": "TOKEN=old\n", "language": "python"}]},
-    )
+    """Secret patterns in patch addition lines must be redacted in sandbox artifacts."""
+    FAKE_SECRET = "sk-abc123def456ghi789jkl012"
+    await client.post(BASE + f"/tasks/{task['id']}/code-context", json=SAMPLE_CODE_CONTEXT)
     await _prepare_task_for_dispatch(client, task["id"])
 
+    # Patch adds a line containing FAKE_SECRET as an addition (not context line)
     patch_diff = (
-        "diff --git a/src/config.py b/src/config.py\n"
-        "--- a/src/config.py\n"
-        "+++ b/src/config.py\n"
-        "@@ -1 +1,2 @@\n"
-        " TOKEN=old\n"
-        "+# comment\n"
+        "diff --git a/src/greeting.py b/src/greeting.py\n"
+        "--- a/src/greeting.py\n"
+        "+++ b/src/greeting.py\n"
+        "@@ -1,2 +1,3 @@\n"
+        " def greet(name: str) -> str:\n"
+        f"+    # API key: {FAKE_SECRET}\n"
+        "     return f\"Hello, {name}!\"\n"
     )
     run_id = await _create_succeeded_run_with_diff(client, task["id"], agent["id"], patch_diff, db_session)
 
     r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs/{run_id}/sandbox/apply-patch")
     data = r.json()["data"]
-    if data["success"]:
-        r2 = await client.get(BASE + f"/tasks/{task['id']}/artifacts")
-        for art in r2.json()["data"]:
-            if art["artifact_type"] == "patch_apply_report":
-                assert "TOKEN" not in (art.get("content") or "***REDACTED***") or "REDACTED" in (art.get("content") or "")
+    assert data["success"] is True, f"Expected success, got: {data}"
+
+    r2 = await client.get(BASE + f"/tasks/{task['id']}/artifacts")
+    sandbox_artifacts = [
+        a for a in r2.json()["data"]
+        if a["artifact_type"] in ("patch_apply_report", "changed_files_summary", "changed_file_preview")
+    ]
+    assert len(sandbox_artifacts) >= 1, "No sandbox artifacts found"
+
+    for art in sandbox_artifacts:
+        content = art.get("content") or ""
+        assert FAKE_SECRET not in content, \
+            f"Artifact {art['artifact_type']} ({art['filename']}) contains plaintext secret"
+        if art["artifact_type"] == "changed_file_preview":
+            assert "***REDACTED***" in content, \
+                f"Preview artifact missing redaction marker: {art['filename']}"
+        expected_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        assert art["sha256"] == expected_sha, \
+            f"sha256 mismatch for {art['artifact_type']}"
+
+    # Verify event does not contain plaintext secret
+    r3 = await client.get(BASE + f"/tasks/{task['id']}/events")
+    for evt in r3.json()["data"]:
+        msg = evt.get("message") or ""
+        assert FAKE_SECRET not in msg, f"Event contains plaintext secret: {evt['event_type']}"
+
+    # Verify raw_result_json on the run does not contain plaintext secret
+    r4 = await client.get(BASE + f"/tasks/{task['id']}/agent-runs/{run_id}")
+    run_data = r4.json()["data"]
+    raw = run_data.get("raw_result_json") or ""
+    assert FAKE_SECRET not in raw, "raw_result_json contains plaintext secret"

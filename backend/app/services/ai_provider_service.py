@@ -19,7 +19,7 @@ from app.services.agent_run_service import update_agent_run
 from app.services.sandbox_provider import SandboxProvider
 from app.services.event_service import create_event
 from app.models.agent_profile import AgentProfile
-from app.enums import AgentRunStatus
+from app.enums import AgentRunStatus, EventType
 import hashlib
 
 from app.services.ai_output_governance_service import redact_secrets
@@ -129,6 +129,19 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
                         actor=actor, message=f"AgentRun #{run.id} started by {actor}")
 
     agent = await db.get(AgentProfile, run.agent_id)
+
+    # v0.4 S1: execute 必须有 code context，否则直接失败
+    if run.run_type == "execute":
+        from app.services.code_context_service import load_code_context_dict
+        cc_check = await load_code_context_dict(db, run.task_id)
+        if cc_check is None:
+            await _fail_run(db, run, run.task_id,
+                            "Execute requires code context; none found for task", actor)
+            raise HTTPException(
+                status_code=422,
+                detail=f"Execute requires code context; none found for task {run.task_id}"
+            )
+
     try:
         result = await _execute_with_provider(db, agent, run)
     except RuntimeError:

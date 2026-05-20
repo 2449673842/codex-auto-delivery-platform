@@ -68,55 +68,40 @@ class SandboxProvider(AiProviderBase):
 
     def _execute_result(self, prompt: str, title: str, agent: str, ts: str,
                         code_context: dict | None = None) -> AgentRunResult:
-        if code_context and code_context.get("files"):
-            files = code_context["files"]
-            file_list = [f["path"] for f in files]
-            patch_diff_lines = []
-            for f in files:
-                path = f.get("path", "unknown.py")
-                lang = f.get("language", "python")
-                content_lines = f.get("content", "").split("\n")
-                patch_diff_lines.append(
-                    f"diff --git a/{path} b/{path}\n"
-                    f"--- a/{path}\n"
-                    f"+++ b/{path}\n"
-                    f"@@ -1,{len(content_lines)} +1,{len(content_lines)} @@\n"
-                )
-                for line in content_lines[:20]:
-                    patch_diff_lines.append(f" {line}")
-                patch_diff_lines.append(
-                    f"+# Sandbox-simulated change for: {path}\n"
-                    f"+# Generated at {ts}\n"
-                )
-            patch_diff = "\n".join(patch_diff_lines)
-            raw_info = json.dumps({
-                "patch_diff": patch_diff,
-                "files_changed": file_list,
-                "code_context_files": len(file_list),
-            }, ensure_ascii=False)
-            return AgentRunResult(
-                output_summary=f"Execution with {len(file_list)} code context file(s): {prompt[:60]}",
-                output_log="[v0.4 S1] Loaded code context...\n"
-                           f"[v0.4 S1] Files in context: {len(file_list)}\n"
-                           "[Step 3/5] Code generated with code context.",
-                raw_result_json=raw_info,
-                patch_diff=patch_diff,
-            )
+        if not code_context or not code_context.get("files"):
+            raise RuntimeError("Execute requires code context; none provided")
 
-        patch_diff = (
-            "diff --git a/src/example.py b/src/example.py\n"
-            "new file mode 100644\n"
-            "--- /dev/null\n"
-            "+++ b/src/example.py\n"
-            "@@ -0,0 +1,10 @@\n"
-            "+def add(a: int, b: int) -> int:\n"
-            "+    \"\"\"Add two numbers.\"\"\"\n"
-            "+    return a + b\n"
-        )
+        files = code_context["files"]
+        file_list = [f["path"] for f in files]
+        patch_diff_lines = []
+        for f in files:
+            path = f.get("path", "unknown.py")
+            lang = f.get("language", "python")
+            content_lines = f.get("content", "").split("\n")
+            patch_diff_lines.append(
+                f"diff --git a/{path} b/{path}\n"
+                f"--- a/{path}\n"
+                f"+++ b/{path}\n"
+                f"@@ -1,{len(content_lines)} +1,{len(content_lines)} @@\n"
+            )
+            for line in content_lines[:20]:
+                patch_diff_lines.append(f" {line}")
+            patch_diff_lines.append(
+                f"+# Sandbox-simulated change for: {path}\n"
+                f"+# Generated at {ts}\n"
+            )
+        patch_diff = "\n".join(patch_diff_lines)
+        raw_info = json.dumps({
+            "patch_diff": patch_diff,
+            "files_changed": file_list,
+            "code_context_files": len(file_list),
+        }, ensure_ascii=False)
         return AgentRunResult(
-            output_summary=f"Execution completed: {prompt[:60]}",
-            output_log="[Step 1/5] Setting up environment...\n[Step 2/5] Writing code...\n[Step 3/5] Code written successfully.",
-            raw_result_json=json.dumps({"patch_diff": patch_diff, "files_changed": ["src/example.py"]}, ensure_ascii=False),
+            output_summary=f"Execution with {len(file_list)} code context file(s): {prompt[:60]}",
+            output_log="[v0.4 S1] Loaded code context...\n"
+                       f"[v0.4 S1] Files in context: {len(file_list)}\n"
+                       "[Step 3/5] Code generated with code context.",
+            raw_result_json=raw_info,
             patch_diff=patch_diff,
         )
 
