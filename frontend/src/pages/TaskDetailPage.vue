@@ -190,6 +190,119 @@
         </div>
       </section>
 
+      <!-- Code Context -->
+      <section class="card">
+        <h2>代码上下文</h2>
+        <div v-if="!codeContext" class="empty-state"><p>暂无代码上下文数据</p></div>
+        <div v-else>
+          <div class="context-meta">
+            <span class="label-badge label-ai">API-provided context</span>
+            <span class="label-badge label-redacted">Redacted</span>
+            <span class="label-badge label-applied">Not read from repository</span>
+            <span class="context-stat">{{ codeContext.file_count }} 文件 · {{ codeContext.total_size_bytes }} 字节</span>
+          </div>
+          <div v-for="f in codeContext.files" :key="f.path" class="context-file-item">
+            <div class="context-file-header">
+              <strong>{{ f.path }}</strong>
+              <span class="context-lang">{{ f.language || 'text' }}</span>
+            </div>
+            <pre class="context-file-preview">{{ f.content.substring(0, 300) }}{{ f.content.length > 300 ? '...' : '' }}</pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- Patch Sandbox -->
+      <section class="card">
+        <h2>补丁沙箱</h2>
+        <p class="section-note">在内存沙箱中验证 AI 生成的补丁，不提交至真实仓库。</p>
+
+        <div v-if="!isArchived && agentRuns.some(r => r.status === 'succeeded' && r.run_type === 'execute')" class="sandbox-apply-area">
+          <div class="sandbox-label-bar">
+            <span class="label-badge label-applied">Sandbox only</span>
+            <span class="label-badge label-merged">Not committed</span>
+            <span class="label-badge label-exec">No PR created</span>
+          </div>
+          <div class="sandbox-run-select">
+            <label>
+              选择已成功的 Execute AgentRun：
+              <select v-model="selectedSandboxRunId">
+                <option value="">请选择</option>
+                <option v-for="r in agentRuns.filter(x => x.status === 'succeeded' && x.run_type === 'execute')" :key="r.id" :value="r.id">
+                  #{{ r.id }} · {{ r.output_summary?.substring(0, 60) || '无摘要' }}
+                </option>
+              </select>
+            </label>
+            <button class="btn btn-sm btn-primary" :disabled="!selectedSandboxRunId || sandboxLoading" @click="handleSandboxApply(selectedSandboxRunId!)">
+              {{ sandboxLoading ? '应用中...' : 'Apply in Sandbox' }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="isArchived" class="sandbox-archived-note">任务已归档，无法执行沙箱操作。</div>
+
+        <!-- Apply result -->
+        <div v-if="applyResult" class="sandbox-result">
+          <div class="sandbox-result-header">
+            <span class="run-status-badge" :class="applyResult.success ? 'succeeded' : 'failed'">
+              {{ applyResult.success ? '已应用' : '失败' }}
+            </span>
+            <span>{{ applyResult.message }}</span>
+          </div>
+          <p v-if="applyResult.report.errors?.length" class="sandbox-errors">
+            <span v-for="e in applyResult.report.errors" class="sandbox-error-item">{{ e }}</span>
+          </p>
+          <p v-if="applyResult.report.warnings?.length" class="sandbox-warnings">
+            <span v-for="w in applyResult.report.warnings" class="sandbox-warn-item">{{ w }}</span>
+          </p>
+
+          <!-- Changed files -->
+          <div v-if="applyResult.report.changed_files?.length" class="sandbox-changed-files">
+            <h3>变更文件</h3>
+            <table class="sandbox-table">
+              <thead><tr><th>文件路径</th><th>状态</th><th>增</th><th>删</th><th>Before SHA256</th><th>After SHA256</th></tr></thead>
+              <tbody>
+                <tr v-for="cf in applyResult.report.changed_files" :key="cf.path">
+                  <td class="cf-path">{{ cf.path }}</td>
+                  <td><span class="run-status-badge" :class="cf.status === 'added' ? 'succeeded' : 'running'">{{ cf.status }}</span></td>
+                  <td class="cf-num cf-add">+{{ cf.additions }}</td>
+                  <td class="cf-num cf-del">-{{ cf.deletions }}</td>
+                  <td class="cf-sha"><code>{{ cf.before_sha256?.substring(0, 12) || '-' }}</code></td>
+                  <td class="cf-sha"><code>{{ cf.after_sha256?.substring(0, 12) || '-' }}</code></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Before/after previews -->
+          <div v-if="applyResult.before_after_previews && Object.keys(applyResult.before_after_previews).length" class="sandbox-previews">
+            <h3>Before / After 预览</h3>
+            <div v-for="(preview, path) in applyResult.before_after_previews" :key="path" class="sandbox-preview-pair">
+              <div class="preview-col">
+                <span class="preview-label">Before</span>
+                <pre class="preview-code">{{ preview.before || '(空文件)' }}</pre>
+              </div>
+              <div class="preview-col">
+                <span class="preview-label">After</span>
+                <pre class="preview-code">{{ preview.after || '(空文件)' }}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sandbox result artifacts -->
+        <div v-if="sandboxResults.length" class="sandbox-artifacts">
+          <h3>沙箱产物</h3>
+          <div v-for="art in sandboxResults" :key="art.id" class="sandbox-artifact-item">
+            <div class="sandbox-artifact-header">
+              <span class="label-badge label-ai">{{ art.artifact_type }}</span>
+              <span class="sandbox-artifact-meta">{{ art.filename }} · {{ art.size_bytes }} 字节</span>
+              <code class="sandbox-artifact-sha">{{ art.sha256?.substring(0, 16) || '' }}</code>
+            </div>
+            <pre v-if="art.content" class="sandbox-artifact-content">{{ art.content.substring(0, 500) }}{{ art.content.length > 500 ? '...' : '' }}</pre>
+          </div>
+        </div>
+      </section>
+
       <!-- Agent Review -->
       <section class="card">
         <div class="section-header">
@@ -350,8 +463,10 @@ import {
   fetchAgentRuns, createAgentRun, updateAgentRun, submitAgentRunResult,
   fetchAgentReviews, createAgentReview,
   fetchApprovalDecisions,
+  fetchCodeContext,
+  applyPatchInSandbox, fetchSandboxResults,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -371,6 +486,11 @@ const agents = ref<AgentProfile[]>([])
 const agentRuns = ref<AgentRun[]>([])
 const agentReviews = ref<AgentReview[]>([])
 const approvalDecisions = ref<ApprovalDecision[]>([])
+const codeContext = ref<CodeContextResponse | null>(null)
+const sandboxResults = ref<SandboxArtifactEntry[]>([])
+const applyResult = ref<PatchApplyResult | null>(null)
+const sandboxLoading = ref(false)
+const selectedSandboxRunId = ref<number | null>(null)
 const showAgentRunForm = ref(false)
 const showAgentReviewForm = ref(false)
 const submitFormRunId = ref<number | null>(null)
@@ -427,6 +547,9 @@ async function refresh() {
   agentRuns.value = await fetchAgentRuns(id)
   agentReviews.value = await fetchAgentReviews(id)
   approvalDecisions.value = await fetchApprovalDecisions(id)
+  codeContext.value = await fetchCodeContext(id)
+  sandboxResults.value = await fetchSandboxResults(id)
+  applyResult.value = null
 }
 
 function parseGovernance(r: any): any {
@@ -528,6 +651,21 @@ async function confirmSubmitRunResult(r: AgentRun) {
     alert(e.message)
   } finally {
     actionLoading.value = false
+  }
+}
+
+// Sandbox actions
+async function handleSandboxApply(runId: number) {
+  if (sandboxLoading.value) return
+  sandboxLoading.value = true
+  applyResult.value = null
+  try {
+    applyResult.value = await applyPatchInSandbox(task.value.id, runId)
+    sandboxResults.value = await fetchSandboxResults(task.value.id)
+  } catch (e: any) {
+    applyResult.value = { success: false, message: e.message, report: { applied: false, changed_files: [], warnings: [], errors: [e.message] }, before_after_previews: {} }
+  } finally {
+    sandboxLoading.value = false
   }
 }
 
@@ -652,6 +790,48 @@ async function handleCreateAgentReview() {
 .approval-decision-item:last-child { border-bottom: none; }
 .approval-decision-header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
 .artifact-note { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--color-border); }
+
+/* Code Context */
+.context-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.context-stat { font-size: 12px; color: var(--color-text-secondary); margin-left: auto; }
+.context-file-item { padding: 8px; margin-bottom: 8px; border: 1px solid var(--color-border); border-radius: var(--radius); }
+.context-file-header { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
+.context-lang { font-size: 11px; color: var(--color-text-secondary); background: #f5f5f5; padding: 2px 8px; border-radius: 8px; }
+.context-file-preview { background: #f5f5f5; padding: 8px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 150px; overflow-y: auto; }
+
+/* Patch Sandbox */
+.sandbox-apply-area { margin: 12px 0; padding: 12px; background: #fafafa; border: 1px solid var(--color-border); border-radius: var(--radius); }
+.sandbox-label-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.sandbox-run-select { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.sandbox-run-select label { font-size: 13px; }
+.sandbox-run-select select { padding: 6px; border: 1px solid var(--color-border); border-radius: var(--radius); font-size: 13px; min-width: 280px; }
+.sandbox-archived-note { font-size: 12px; color: var(--color-text-secondary); font-style: italic; margin-top: 8px; }
+.sandbox-result { margin-top: 12px; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius); }
+.sandbox-result-header { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; font-size: 14px; }
+.sandbox-errors { margin: 4px 0; }
+.sandbox-error-item { display: block; font-size: 12px; color: #c62828; padding: 2px 0; }
+.sandbox-warnings { margin: 4px 0; }
+.sandbox-warn-item { display: block; font-size: 12px; color: #e65100; padding: 2px 0; }
+.sandbox-changed-files h3, .sandbox-previews h3, .sandbox-artifacts h3 { font-size: 14px; font-weight: 600; margin: 12px 0 8px; }
+.sandbox-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.sandbox-table th, .sandbox-table td { padding: 6px 8px; border: 1px solid var(--color-border); text-align: left; }
+.sandbox-table th { background: #f5f5f5; font-weight: 600; }
+.cf-path { font-family: monospace; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cf-num { font-family: monospace; text-align: right; }
+.cf-add { color: #2e7d32; }
+.cf-del { color: #c62828; }
+.cf-sha { font-family: monospace; font-size: 11px; }
+.sandbox-previews { margin-top: 12px; }
+.sandbox-preview-pair { display: flex; gap: 12px; margin-bottom: 12px; }
+.preview-col { flex: 1; }
+.preview-label { display: block; font-size: 11px; font-weight: 600; color: var(--color-text-secondary); margin-bottom: 4px; text-transform: uppercase; }
+.preview-code { background: #f5f5f5; padding: 8px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
+.sandbox-artifacts { margin-top: 12px; }
+.sandbox-artifact-item { padding: 8px; margin-bottom: 8px; border: 1px solid var(--color-border); border-radius: var(--radius); }
+.sandbox-artifact-header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.sandbox-artifact-meta { font-size: 11px; color: var(--color-text-secondary); }
+.sandbox-artifact-sha { font-size: 10px; color: var(--color-text-secondary); }
+.sandbox-artifact-content { background: #f5f5f5; padding: 8px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; margin-top: 4px; }
 .btn-primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
 .btn-approve { background: #4caf50; color: #fff; border-color: #4caf50; }
 .btn-reject { background: #f44336; color: #fff; border-color: #f44336; }

@@ -8,7 +8,7 @@ const { chromium } = require('playwright')
 const http = require('node:http')
 
 const FE = 'http://127.0.0.1:9700'
-const BE = 'http://127.0.0.1:5697'
+const BE = 'http://127.0.0.1:8700'
 
 const t_actor = { actor: 'test' }
 const r = { passed: 0, failed: 0, errors: [], networkFailures: [], details: [] }
@@ -42,15 +42,38 @@ function apiGet(path) { // NOSONAR
   }))
 }
 
+function apiPatch(path, body) { // NOSONAR - test harness
+  return new Promise((resolve, reject) => {
+    const u = new URL(`${BE}/api${path}`)
+    const req = http.request({ hostname: u.hostname, port: u.port, path: u.pathname, method: 'PATCH', headers: { 'Content-Type': 'application/json' } },  // NOSONAR - test harness
+      res => { let d = ''; res.on('data', c => d += c); res.on('end', () => resolve({ status: res.statusCode, body: d })) })
+    req.on('error', reject); req.write(JSON.stringify(body)); req.end()
+  })
+}
+
 async function seedData() {
   const proj = await apiPost('/projects', { name: `s4-proj-${Date.now()}`, root_path: '/s4' })
-  const task = await apiPost('/tasks', { project_id: proj.data.id, title: 'S4 display test', planner: 'test', description: 'Test governance display' })
+  const projId = proj.data?.id
+  if (!projId) throw new Error('no project id')
+  const task = await apiPost('/tasks', { project_id: projId, title: 'S4 display test', planner: 'test', description: 'Test governance display' })
+  const taskId = task.data?.id
+  if (!taskId) throw new Error('no task id')
   await apiPost('/agents', { name: 's4-agent', agent_type: 'executor', provider: 'sandbox' })
   return task.data
 }
 
 async function seedApprovalDecision(taskId) {
   const r2 = await apiPost(`/tasks/${taskId}/evaluate-approval`, {}) // NOSONAR
+  return r2
+}
+
+async function seedCodeContext(taskId) {
+  const ctx = { files: [
+    { path: 'src/main.py', content: 'def hello():\n    print("hello")\n', language: 'python' },
+    { path: 'src/utils.ts', content: 'export function greet(n: string) { return `Hi ${n}`; }', language: 'typescript' },
+    { path: 'README.md', content: '# Test Project\nThis is a sample.', language: 'markdown' },
+  ] }
+  const r2 = await apiPost(`/tasks/${taskId}/code-context`, ctx)
   return r2
 }
 
@@ -61,10 +84,37 @@ async function orchestrateSteps(taskId) {
   await apiPost(`/tasks/${taskId}/orchestration/step`, {}) // NOSONAR
   await apiPost(`/tasks/${taskId}/orchestration/step`, {}) // NOSONAR
   await apiPost(`/tasks/${taskId}/orchestration/step`, {}) // NOSONAR
+  // Create a succeeded execute run for sandbox apply with a valid unified diff
+  const agents = await apiGet('/agents')
+  const agentId = agents.data?.[0]?.id
+  if (agentId) {
+    // Diff: modify src/main.py — replace second line, add two new lines
+    const patchDiff = [
+      'diff --git a/src/main.py b/src/main.py',
+      '--- a/src/main.py',
+      '+++ b/src/main.py',
+      '@@ -1,2 +1,4 @@',
+      ' def hello():',
+      '-    print("hello")',
+      '+    print("hello world")',
+      '+def world():',
+      '+    print("world")',
+    ].join('\n')
+    const run = await apiPost(`/tasks/${taskId}/agent-runs`, { agent_id: agentId, run_type: 'execute', input_prompt: 'test execute' })
+    const runId = run.data?.id
+    if (runId) {
+      await apiPatch(`/tasks/${taskId}/agent-runs/${runId}`, { status: 'running' })
+      await apiPost(`/tasks/${taskId}/agent-runs/${runId}/submit-result`, {
+        status: 'succeeded',
+        output_summary: 'test sandbox output',
+        output_diff: patchDiff,
+      })
+    }
+  }
 }
 
 async function launchBrowser() {
-  const b = await chromium.launch({ headless: true })
+  const b = await chromium.launch({ headless: true, channel: 'chrome' })
   const c = await b.newContext({ ignoreHTTPSErrors: true })
   const p = await c.newPage()
   const ce = []
@@ -144,6 +194,61 @@ async function testHumanRequired(page) {
   else fail('E3 Reject button missing', '')
 }
 
+async function testCodeContext(page) {
+  log('\n========== F. Code Context Display ==========')
+  await checkT(page, '代码上下文', 'F1 Section')
+  await checkT(page, 'API-provided context', 'F2 API-provided label')
+  await checkT(page, 'Redacted', 'F3 Redacted label')
+  await checkT(page, 'Not read from repository', 'F4 Not-read label')
+  await checkT(page, 'src/main.py', 'F5 File path 1')
+  await checkT(page, 'src/utils.ts', 'F6 File path 2')
+  const n = await page.locator('.context-file-item').count()
+  if (n >= 2) pass(`F7 ${n} context file items`)
+  else fail(`F7 ${n} context files < 2`, '')
+}
+
+async function testSandboxSection(page) {
+  log('\n========== G. Patch Sandbox Section ==========')
+  await checkT(page, '补丁沙箱', 'G1 Section')
+  await checkT(page, 'Sandbox only', 'G2 Sandbox only label')
+  await checkT(page, 'Not committed', 'G3 Not committed label')
+  await checkT(page, 'No PR created', 'G4 No PR created label')
+}
+
+async function testNoCodeContext(page, taskId) {
+  log('\n========== I. No Code Context — 404 Recovery ==========')
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(1000)
+  await checkT(page, '代码上下文', 'I1 Section title')
+  await checkT(page, '暂无代码上下文数据', 'I2 Empty state message')
+  pass('I3 TaskDetail loads without code context (no 404 crash)')
+}
+
+async function testSandboxApply(page) {
+  log('\n========== H. Sandbox Apply & Result ==========')
+  const sel = page.locator('.sandbox-run-select select')
+  const optCount = await sel.locator('option').count()
+  if (optCount <= 1) { fail('H1 No succeeded runs to select', ''); return }
+  pass(`H1 ${optCount - 1} options found`)
+  await sel.selectOption({ index: 1 })
+  await page.waitForTimeout(200)
+  await page.locator('button:has-text("Apply in Sandbox")').click()
+  await page.waitForTimeout(2000)
+  await checkEl(page, '.sandbox-result', 'H2 Sandbox result present')
+  await checkEl(page, '.sandbox-result-header', 'H3 Result header present')
+  const statusBadge = await page.locator('.sandbox-result-header .run-status-badge').count()
+  if (statusBadge > 0) pass('H4 Status badge present')
+  else fail('H4 Status badge missing', '')
+  await checkEl(page, '.sandbox-changed-files', 'H5 Changed files section')
+  await checkEl(page, '.sandbox-table', 'H6 Changed files table')
+  await checkT(page, 'src/main.py', 'H6b Changed file path visible')
+  await checkEl(page, '.sandbox-previews', 'H7 Before/after previews')
+  await checkT(page, 'Before', 'H7b Before label')
+  await checkT(page, 'After', 'H7c After label')
+  await checkEl(page, '.sandbox-artifacts', 'H8 Sandbox artifacts')
+  await checkEl(page, '.sandbox-artifact-item', 'H8b Artifact items')
+}
+
 function printSummary(ce) {
   console.log('\n========== SUMMARY ==========')
   ce.forEach(e => log(`  [ERR] ${e}`))
@@ -161,6 +266,8 @@ async function main() {
   log('--- API Seed ---')
   const task = await seedData()
   pass(`Task #${task.id} seeded`)
+  await seedCodeContext(task.id)
+  pass('CodeContext seeded')
   await seedApprovalDecision(task.id)
   pass('ApprovalDecision seeded')
   await orchestrateSteps(task.id)
@@ -185,8 +292,17 @@ async function main() {
   await testGovernance(page)
   await testLabels(page)
   await testArtifacts(page)
+  await testCodeContext(page)
+  await testSandboxSection(page)
   await testApprovals(page)
   await testHumanRequired(page)
+  await testSandboxApply(page)
+  // Create a separate task without code context for 404 test
+  const bareTask = await apiPost('/tasks', { project_id: task.project_id, title: 'S4 no-ctx test', planner: 'test', description: 'No code context' })
+  if (bareTask.data?.id) await testNoCodeContext(page, bareTask.data.id)
+  // Navigate back to main task
+  await page.goto(`${FE}/tasks/${task.id}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
   printSummary(consoleErrors)
   await browser.close()
 }
