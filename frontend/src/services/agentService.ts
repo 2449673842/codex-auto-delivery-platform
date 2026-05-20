@@ -126,3 +126,8 @@ export async function fetchSandboxGate(taskId: number): Promise<SandboxGateDecis
   const { data } = await client.get(`/tasks/${taskId}/sandbox/gate`)
   return data.data
 }
+
+export async function evaluateSandboxGate(taskId: number): Promise<SandboxGateDecision> {
+  const { data } = await client.post(`/tasks/${taskId}/sandbox/evaluate-gate`)
+  return data.data
+}

@@ -21,7 +21,7 @@ import json
 import re
 
 from fastapi import HTTPException
-from sqlalchemy import select, desc, func as sa_func
+from sqlalchemy import select, desc, func as sa_func, not_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.task import Task
@@ -38,6 +38,7 @@ _RUN_ID_FROM_FILENAME = re.compile(r"run_(\d+)")
 
 
 async def evaluate_sandbox_gate(db: AsyncSession, task_id: int) -> SandboxGateDecision:
+    """Evaluate the sandbox gate for a task. Read-only, no event is written."""
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -79,13 +80,15 @@ async def evaluate_sandbox_gate(db: AsyncSession, task_id: int) -> SandboxGateDe
             if "***REDACTED***" in report_artifact.content:
                 blocked.append(SandboxGateBlockedReason(reason="secret_detected", detail="Secret or credential pattern detected in sandbox result"))
 
-        # 7. Check stale artifact
+        # 7. Check stale artifact — a newer patch_apply_report from a different run
         if not await _is_latest_sandbox_result(db, task_id, report_artifact):
-            blocked.append(SandboxGateBlockedReason(reason="stale_sandbox_result", detail="A newer sandbox apply result exists"))
+            blocked.append(SandboxGateBlockedReason(reason="stale_sandbox_result", detail="A newer sandbox apply result from another run exists"))
 
         # 8. Extract run_id from filename and check AgentRun
         run_id = _extract_run_id(report_artifact)
-        if run_id is not None:
+        if run_id is None:
+            blocked.append(SandboxGateBlockedReason(reason="agent_run_unknown", detail="Cannot determine AgentRun from sandbox result filename"))
+        else:
             run = await db.get(AgentRun, run_id)
             if not run or run.task_id != task_id:
                 blocked.append(SandboxGateBlockedReason(reason="agent_run_not_in_task", detail="AgentRun does not belong to this task"))
@@ -100,18 +103,7 @@ async def evaluate_sandbox_gate(db: AsyncSession, task_id: int) -> SandboxGateDe
         blocked.append(SandboxGateBlockedReason(reason="human_required", detail="Approval decision requires human intervention"))
 
     passed = len(blocked) == 0
-    event_type = EVENT_TYPE_PASSED if passed else EVENT_TYPE_BLOCKED
     message = "All sandbox approval checks passed" if passed else f"Sandbox gate blocked: {len(blocked)} reason(s)"
-
-    await create_event(
-        db, task_id=task_id, event_type=event_type,
-        actor=f"sandbox_gate:task_{task_id}",
-        message=message,
-        payload_json=json.dumps({
-            "passed": passed,
-            "blocked_reasons": [b.model_dump() for b in blocked],
-        }, ensure_ascii=False),
-    )
 
     return SandboxGateDecision(
         passed=passed,
@@ -119,6 +111,24 @@ async def evaluate_sandbox_gate(db: AsyncSession, task_id: int) -> SandboxGateDe
         can_prepare_pr=passed,
         message=message,
     )
+
+
+async def evaluate_and_record_gate(db: AsyncSession, task_id: int) -> SandboxGateDecision:
+    """Evaluate the sandbox gate AND write a TaskEvent."""
+    decision = await evaluate_sandbox_gate(db, task_id)
+    event_type = EVENT_TYPE_PASSED if decision.passed else EVENT_TYPE_BLOCKED
+
+    await create_event(
+        db, task_id=task_id, event_type=event_type,
+        actor=f"sandbox_gate:task_{task_id}",
+        message=decision.message,
+        payload_json=json.dumps({
+            "passed": decision.passed,
+            "blocked_reasons": [b.model_dump() for b in decision.blocked_reasons],
+        }, ensure_ascii=False),
+    )
+
+    return decision
 
 
 async def _get_latest_report_artifact(db: AsyncSession, task_id: int) -> TaskArtifact | None:
@@ -153,12 +163,17 @@ def _extract_run_id(artifact: TaskArtifact) -> int | None:
 
 
 async def _is_latest_sandbox_result(db: AsyncSession, task_id: int, artifact: TaskArtifact) -> bool:
+    """Check if there is a newer patch_apply_report from a different run."""
+    current_run_id = _extract_run_id(artifact)
+    if current_run_id is None:
+        return True
     result = await db.execute(
         select(sa_func.count(TaskArtifact.id))
         .where(
             TaskArtifact.task_id == task_id,
-            TaskArtifact.artifact_type.in_(["patch_apply_report", "changed_files_summary"]),
+            TaskArtifact.artifact_type == "patch_apply_report",
             TaskArtifact.created_at > artifact.created_at,
+            not_(TaskArtifact.filename.like(f"%run_{current_run_id}%")),
         )
     )
     count = result.scalar() or 0

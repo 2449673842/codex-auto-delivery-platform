@@ -1,7 +1,8 @@
 """Sandbox Gate API Router — evaluates sandbox apply approval gate.
 
 This router:
-- GET /api/tasks/{task_id}/sandbox/gate — evaluate and return gate decision
+- GET  /api/tasks/{task_id}/sandbox/gate          — read-only evaluation
+- POST /api/tasks/{task_id}/sandbox/evaluate-gate — evaluate + write TaskEvent
 - No writes to real file system
 - No repository changes or PRs
 - No external API calls (CI, Sonar, Deploy)
@@ -23,6 +24,18 @@ async def get_sandbox_gate(
     db: AsyncSession = Depends(get_session),
 ):
     decision = await sandbox_approval_gate_service.evaluate_sandbox_gate(db, task_id)
+    return ApiEnvelope(
+        data=decision.model_dump(),
+        message=decision.message,
+    )
+
+
+@router.post("/api/tasks/{task_id}/sandbox/evaluate-gate")
+async def evaluate_sandbox_gate(
+    task_id: int,
+    db: AsyncSession = Depends(get_session),
+):
+    decision = await sandbox_approval_gate_service.evaluate_and_record_gate(db, task_id)
     return ApiEnvelope(
         data=decision.model_dump(),
         message=decision.message,

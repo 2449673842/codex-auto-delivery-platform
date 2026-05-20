@@ -493,7 +493,7 @@ import {
   fetchAgentReviews, createAgentReview,
   fetchApprovalDecisions,
   fetchCodeContext,
-  applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate,
+  applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate, evaluateSandboxGate,
 } from '../services/agentService'
 import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
@@ -581,18 +581,27 @@ async function refresh() {
   codeContext.value = await fetchCodeContext(id)
   sandboxResults.value = await fetchSandboxResults(id)
   applyResult.value = null
-  await refreshSandboxGate()
+  await loadSandboxGate()
 }
 
 async function refreshSandboxGate() {
   const id = Number(route.params.id)
   sandboxGateLoading.value = true
   try {
-    sandboxGate.value = await fetchSandboxGate(id)
+    sandboxGate.value = await evaluateSandboxGate(id)
   } catch {
     sandboxGate.value = null
   } finally {
     sandboxGateLoading.value = false
+  }
+}
+
+async function loadSandboxGate() {
+  const id = Number(route.params.id)
+  try {
+    sandboxGate.value = await fetchSandboxGate(id)
+  } catch {
+    sandboxGate.value = null
   }
 }
 
