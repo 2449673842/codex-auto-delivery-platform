@@ -48,15 +48,14 @@ class OpenAIProvider(AiProviderBase):
         except Exception as e:
             raise RuntimeError(f"OpenAI API call failed: {str(e)}") from e
 
+        # Validate response is not empty - empty responses fail the AgentRun
+        if not response_text or not response_text.strip():
+            raise RuntimeError("AI returned empty response")
+
         try:
             result = self._parse_response(run_type, response_text, ts)
-        except Exception as e:
-            # Malformed response: mark as human_required risk, don't auto-approve
-            return AgentRunResult(
-                output_summary="AI response could not be parsed",
-                output_log=f"Failed to parse AI response: {str(e)}",
-                raw_result_json=json.dumps({"error": str(e), "raw": response_text[:1000]}, ensure_ascii=False),
-            )
+        except Exception:
+            raise RuntimeError("Failed to parse AI response")
 
         return result
 
