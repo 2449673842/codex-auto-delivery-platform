@@ -627,7 +627,7 @@ async function handleCreateAgentReview() {
 .gov-fail { background: #ffebee; color: #c62828; }
 .gov-human { background: #fce4ec; color: #c62828; }
 .gov-risk-low { background: #e8f5e9; color: #2e7d32; }
-.gov-risk-medium { background: #fff3e0; color: #e65100; }
+.gov-risk-medium { background: #ffe0b2; color: #bf360c; }
 .gov-risk-high { background: #ffebee; color: #c62828; }
 .gov-risk-critical { background: #fce4ec; color: #b71c1c; }
 .gov-info { background: #e3f2fd; color: #1565c0; }
