@@ -11,7 +11,7 @@ router = APIRouter(tags=["review_packet"])
 
 @router.post("/api/review-packets/preview")
 async def preview_review_packet(body: ReviewPacketRequest):
-    decision = review_packet_service.generate_review_packet(
+    result = review_packet_service.generate_review_packet_preview(
         repo=body.repo,
         pr_number=body.pr_number,
         reported_head=body.reported_head,
@@ -19,8 +19,9 @@ async def preview_review_packet(body: ReviewPacketRequest):
         reported_compileall=body.reported_compileall,
         reported_npm_build=body.reported_npm_build,
         reported_playwright=body.reported_playwright,
+        reported_changed_file_count=body.reported_changed_file_count,
     )
     return ApiEnvelope(
-        data=decision.model_dump(),
+        data=result.model_dump(),
         message="Review packet generated",
     )
