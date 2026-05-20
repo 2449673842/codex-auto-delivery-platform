@@ -120,7 +120,6 @@ def _check_risk(risk_report: dict | None, requires_human: list):
     if rc.risk_level in ("high", "critical") or rc.requires_human:
         requires_human.append(True)
     return rc.risk_level
-    return rc.risk_level
 
 
 def _extract_diff_path(line: str) -> str | None:
