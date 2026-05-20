@@ -42,20 +42,9 @@ async def _do_steps(client, task_id: int, agent_name: str):
 
 async def _openai_steps(client, task_id: int, agent_name: str):
     """Setup openai agent + generate-ticket + dispatch."""
-    r = await client.post(BASE + "/agents", json={"name": agent_name, "agent_type": "executor", "provider": "openai"})
+    await client.post(BASE + "/agents", json={"name": agent_name, "agent_type": "executor", "provider": "openai"})
     await client.post(BASE + f"/tasks/{task_id}/generate-ticket", json=t_actor)
     await client.post(BASE + f"/tasks/{task_id}/dispatch", json=t_actor)
-    ag = r.json()["data"]
-
-async def _run_openai_dispatch(client, task_id: int, monkeypatch, mock_result: AgentRunResult) -> dict:
-    """Setup OpenAI agent, apply mock, dispatch orchestration step, return agent run."""
-    from app.services.openai_provider import OpenAIProvider
-    async def _mock_exec(self, run):
-        return mock_result
-    monkeypatch.setattr(OpenAIProvider, "execute", _mock_exec)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")
-    r = await client.post(BASE + "/orchestration/step")
-    return r
 
 async def _orch_step(client, task_id: int, agent_name: str, monkeypatch, mock_result: AgentRunResult):
     """Full openai dispatch: setup → mock → orchestrate → return agent-run data."""

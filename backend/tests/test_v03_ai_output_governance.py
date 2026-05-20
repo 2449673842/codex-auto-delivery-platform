@@ -123,7 +123,7 @@ def test_review_parsing_changes_requested():
 
 def test_review_confidence_extracted():
     r = parse_review_result("Decision: approved. Confidence: 0.85")
-    assert r.confidence == 0.85
+    assert r.confidence is not None and abs(r.confidence - 0.85) < 0.001
 
 def test_empty_review_not_parsed():
     r = parse_review_result("")

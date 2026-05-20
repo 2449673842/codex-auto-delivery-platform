@@ -53,11 +53,78 @@ FORBIDDEN_DIFF_PATHS = [
 ]
 
 MAX_PATCH_SIZE_BYTES = 500_000
+REDACTED_MARKER = r'\1***REDACTED***'
+REDACTED_BLOCK_MARKER = '-----BEGIN PRIVATE KEY-----***REDACTED***-----END PRIVATE KEY-----'
 FORBIDDEN_DIFF_TARGETS = [
     "**/database.py", "**/config.py",
     "**/migrations/*",
     "**/ci.yml", "**/ci.yaml",
 ]
+
+
+def _determine_output_kind(patch_diff, review_md, plan_md, raw_result_json):
+    if patch_diff:
+        return "patch_diff"
+    if review_md:
+        return "review"
+    if plan_md:
+        return "plan"
+    if raw_result_json:
+        return "raw_result"
+    return None
+
+def _has_any_content(output_summary, output_log, raw_result_json, plan_md, patch_diff, review_md, risk_report):
+    return any([
+        (output_summary or "").strip(),
+        (output_log or "").strip(),
+        (raw_result_json or "").strip(),
+        (plan_md or "").strip(),
+        (patch_diff or "").strip(),
+        (review_md or "").strip(),
+        risk_report,
+    ])
+
+def _check_raw_json(raw_result_json: str | None, errors: list, requires_human: list):
+    if not raw_result_json or not raw_result_json.strip():
+        return
+    try:
+        json.loads(raw_result_json)
+    except json.JSONDecodeError:
+        errors.append("raw_result_json is not valid JSON")
+        requires_human.append(True)
+        return
+    if len(raw_result_json) > MAX_PATCH_SIZE_BYTES:
+        errors.append("raw_result_json exceeds size limit")
+        requires_human.append(True)
+
+def _check_patch_diff(patch_diff: str, errors: list, warnings: list, requires_human: list):
+    dv = validate_patch_diff(patch_diff)
+    if not dv.has_diff_header:
+        errors.append("patch.diff missing diff --git header")
+    if dv.is_empty:
+        errors.append("patch.diff is empty")
+    if dv.size_bytes > MAX_PATCH_SIZE_BYTES:
+        errors.append(f"patch.diff exceeds {MAX_PATCH_SIZE_BYTES} bytes")
+        requires_human.append(True)
+    if dv.has_secret_pattern:
+        warnings.append("patch.diff contains potential secret pattern")
+        requires_human.append(True)
+    if dv.modifies_forbidden_path:
+        warnings.append("patch.diff modifies forbidden path")
+        requires_human.append(True)
+
+def _check_risk(risk_report: dict | None, errors: list, requires_human: list):
+    if not risk_report:
+        return
+    rc = check_risk_report(risk_report)
+    if not rc.parsed:
+        errors.append("risk_report could not be parsed")
+        requires_human.append(True)
+    if rc.risk_level in ("high", "critical"):
+        requires_human.append(True)
+    if rc.requires_human:
+        requires_human.append(True)
+    return rc.risk_level
 
 
 def _extract_diff_path(line: str) -> str | None:
@@ -67,9 +134,9 @@ def _extract_diff_path(line: str) -> str | None:
         parts = line.split()
         if len(parts) >= 3:
             return parts[2][2:]
-    elif line.startswith("--- ") or line.startswith("+++ "):
+    if line.startswith(("--- ", "+++ ")):
         path = line[4:].strip()
-        if path.startswith("a/") or path.startswith("b/"):
+        if path.startswith(("a/", "b/")):
             path = path[2:]
         if path == "/dev/null":
             return None
@@ -99,71 +166,31 @@ def validate_agent_run_result(
     """Validate AI provider output for governance compliance."""
     errors = []
     warnings = []
+    requires_human_flags = []
     risk_level = "low"
-    requires_human = False
-    output_kind = None
 
-    if patch_diff:
-        output_kind = "patch_diff"
-    elif review_md:
-        output_kind = "review"
-    elif plan_md:
-        output_kind = "plan"
-    elif raw_result_json:
-        output_kind = "raw_result"
+    output_kind = _determine_output_kind(patch_diff, review_md, plan_md, raw_result_json)
 
-    if not any([
-        (output_summary or "").strip(),
-        (output_log or "").strip(),
-        (raw_result_json or "").strip(),
-        (plan_md or "").strip(),
-        (patch_diff or "").strip(),
-        (review_md or "").strip(),
-        risk_report,
-    ]):
+    if not _has_any_content(output_summary, output_log, raw_result_json, plan_md, patch_diff, review_md, risk_report):
         errors.append("Output is empty")
 
-    # raw_result_json must be valid JSON
-    if raw_result_json and raw_result_json.strip():
-        try:
-            json.loads(raw_result_json)
-        except (json.JSONDecodeError, ValueError):
-            errors.append("raw_result_json is not valid JSON")
-            requires_human = True
-            risk_level = "high"
+    _check_raw_json(raw_result_json, errors, requires_human_flags)
 
-    if raw_result_json and len(raw_result_json) > MAX_PATCH_SIZE_BYTES:
-        errors.append("raw_result_json exceeds size limit")
-        requires_human = True
+    requires_human = any(requires_human_flags)
 
     if patch_diff:
-        dv = validate_patch_diff(patch_diff)
-        if not dv.has_diff_header:
-            errors.append("patch.diff missing diff --git header")
-        if dv.is_empty:
-            errors.append("patch.diff is empty")
-        if dv.size_bytes > MAX_PATCH_SIZE_BYTES:
-            errors.append(f"patch.diff exceeds {MAX_PATCH_SIZE_BYTES} bytes")
-            requires_human = True
-        if dv.has_secret_pattern:
-            warnings.append("patch.diff contains potential secret pattern")
-            requires_human = True
-            risk_level = "high"
-        if dv.modifies_forbidden_path:
-            warnings.append("patch.diff modifies forbidden path")
-            requires_human = True
-            risk_level = "high"
+        _check_patch_diff(patch_diff, errors, warnings, requires_human_flags)
 
+    risk_level_from_risk = None
     if risk_report:
-        rc = check_risk_report(risk_report)
-        if not rc.parsed:
-            errors.append("risk_report could not be parsed")
-            requires_human = True
-        if rc.risk_level in ("high", "critical"):
-            requires_human = True
-            risk_level = rc.risk_level
-        if rc.requires_human:
-            requires_human = True
+        risk_level_from_risk = _check_risk(risk_report, errors, requires_human_flags)
+
+    requires_human = any(requires_human_flags)
+
+    if risk_level_from_risk:
+        risk_level = risk_level_from_risk
+    elif any(e for e in errors if "secret" in e or "forbidden" in e):
+        risk_level = "high"
 
     if requires_human and risk_level == "low":
         risk_level = "medium"
@@ -178,6 +205,23 @@ def validate_agent_run_result(
     )
 
 
+def _detect_secret_pattern(patch_diff: str) -> bool:
+    for line in patch_diff.split("\n"):
+        if line.startswith("+"):
+            for pattern in SECRET_PATTERNS:
+                if pattern.lower() in line.lower():
+                    return True
+    return False
+
+def _find_forbidden_paths(patch_diff: str) -> list[str]:
+    paths = []
+    for line in patch_diff.split("\n"):
+        path = _extract_diff_path(line)
+        if path and _matches_forbidden(path):
+            paths.append(path)
+    return paths
+
+
 def validate_patch_diff(patch_diff: str) -> PatchDiffCheck:
     """Validate a patch.diff string for governance rules using fnmatch."""
     if not patch_diff or not patch_diff.strip():
@@ -188,22 +232,9 @@ def validate_patch_diff(patch_diff: str) -> PatchDiffCheck:
         is_empty=False,
         size_bytes=len(patch_diff.encode("utf-8")),
     )
-
-    for line in patch_diff.split("\n"):
-        if line.startswith("+"):
-            for pattern in SECRET_PATTERNS:
-                if pattern.lower() in line.lower():
-                    check.has_secret_pattern = True
-                    break
-        if check.has_secret_pattern:
-            break
-
-    for line in patch_diff.split("\n"):
-        path = _extract_diff_path(line)
-        if path and _matches_forbidden(path):
-            check.modifies_forbidden_path = True
-            check.forbidden_paths.append(path)
-
+    check.has_secret_pattern = _detect_secret_pattern(patch_diff)
+    check.forbidden_paths = _find_forbidden_paths(patch_diff)
+    check.modifies_forbidden_path = len(check.forbidden_paths) > 0
     return check
 
 
@@ -257,10 +288,10 @@ def check_risk_report(risk_report: dict) -> RiskReportCheck:
 
 
 SECRET_REDACT_PATTERNS: list[tuple[str, str]] = [
-    (r'(sk-)[A-Za-z0-9]{20,}', r'\1***REDACTED***'),
-    (r'(ghp_|gho_|ghu_|ghs_)[A-Za-z0-9]{20,}', r'\1***REDACTED***'),
-    (r'(AKIA)[A-Z0-9]{16,}', r'\1***REDACTED***'),
-    (r'-----BEGIN\s*PRIVATE\s*KEY-----.*?-----END\s*PRIVATE\s*KEY-----', '-----BEGIN PRIVATE KEY-----***REDACTED***-----END PRIVATE KEY-----'),
+    (r'(sk-)[A-Za-z0-9]{20,}', REDACTED_MARKER),
+    (r'(ghp_|gho_|ghu_|ghs_)[A-Za-z0-9]{20,}', REDACTED_MARKER),
+    (r'(AKIA)[A-Z0-9]{16,}', REDACTED_MARKER),
+    (r'-----BEGIN\s*PRIVATE\s*KEY-----.*?-----END\s*PRIVATE\s*KEY-----', REDACTED_BLOCK_MARKER),
     (r'password\s*=\s*\S+', 'password=***REDACTED***'),
     (r'token\s*=\s*\S+', 'token=***REDACTED***'),
     (r'api_key\s*=\s*\S+', 'api_key=***REDACTED***'),
