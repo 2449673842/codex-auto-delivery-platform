@@ -79,6 +79,8 @@ class EventType(str, Enum):
     CODE_CONTEXT_UPLOADED = "code_context_uploaded"
     PATCH_SANDBOX_APPLIED = "patch_sandbox_applied"
     PATCH_SANDBOX_FAILED = "patch_sandbox_failed"
+    SANDBOX_GATE_PASSED = "sandbox_gate_passed"
+    SANDBOX_GATE_BLOCKED = "sandbox_gate_blocked"
 
 
 class ReviewDecision(str, Enum):

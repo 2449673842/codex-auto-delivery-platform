@@ -247,6 +247,18 @@ export interface SandboxArtifactEntry {
   created_at: string | null
 }
 
+export interface SandboxGateBlockedReason {
+  reason: string
+  detail: string | null
+}
+
+export interface SandboxGateDecision {
+  passed: boolean
+  blocked_reasons: SandboxGateBlockedReason[]
+  can_prepare_pr: boolean
+  message: string
+}
+
 export interface ApprovalPolicyUpdate {
   name?: string
   project_id?: number | null

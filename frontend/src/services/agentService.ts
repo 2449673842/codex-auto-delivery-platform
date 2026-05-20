@@ -5,6 +5,7 @@ import type {
   AgentReview, AgentReviewCreate,
   ApprovalPolicy, ApprovalPolicyCreate, ApprovalPolicyUpdate,
   CodeContextResponse, PatchApplyResult, SandboxArtifactEntry,
+  SandboxGateDecision,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -118,4 +119,10 @@ export async function applyPatchInSandbox(taskId: number, runId: number): Promis
 export async function fetchSandboxResults(taskId: number): Promise<SandboxArtifactEntry[]> {
   const { data } = await client.get(`/tasks/${taskId}/sandbox/patch-results`)
   return data.data || []
+}
+
+// ── Sandbox Gate ──
+export async function fetchSandboxGate(taskId: number): Promise<SandboxGateDecision> {
+  const { data } = await client.get(`/tasks/${taskId}/sandbox/gate`)
+  return data.data
 }
