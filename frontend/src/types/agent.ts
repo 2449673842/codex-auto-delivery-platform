@@ -22,6 +22,21 @@ export const AGENT_RUN_STATUS_LABELS: Record<string, string> = {
   human_required: '需要人工介入',
 }
 
+export interface ApprovalDecision {
+  id: number
+  task_id: number
+  agent_run_id: number | null
+  agent_review_id: number | null
+  policy_id: number | null
+  risk_level: string
+  auto_approve_allowed: boolean
+  human_required: boolean
+  decision_reason: string | null
+  blocked_reasons_json: string | null
+  policy_snapshot_json: string | null
+  created_at: string
+}
+
 export const AGENT_RUN_TYPE_LABELS: Record<string, string> = {
   plan: '规划',
   execute: '执行',

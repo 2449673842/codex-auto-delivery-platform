@@ -136,6 +136,30 @@
             <span class="field-label">原始结果 JSON (raw_result_json)</span>
             <pre class="run-pre">{{ r.raw_result_json }}</pre>
           </div>
+
+          <!-- Governance display -->
+          <div v-if="parseGovernance(r)" class="gov-section">
+            <span class="field-label">治理校验</span>
+            <div class="gov-grid">
+              <span class="gov-tag" :class="parseGovernance(r).valid ? 'gov-pass' : 'gov-fail'">
+                {{ parseGovernance(r).valid ? 'Valid' : 'Invalid' }}
+              </span>
+              <span v-if="parseGovernance(r).requires_human" class="gov-tag gov-human">需人工审批</span>
+              <span class="gov-tag" :class="'gov-risk-' + (parseGovernance(r).risk_level || 'low')">
+                风险: {{ parseGovernance(r).risk_level }}
+              </span>
+              <span v-if="parseTrace(r)?.provider" class="gov-tag gov-info">
+                {{ parseTrace(r).provider }}
+              </span>
+            </div>
+            <div v-if="parseGovernance(r).errors?.length" class="gov-issues">
+              <div v-for="e in parseGovernance(r).errors" class="gov-error">{{ e }}</div>
+            </div>
+            <div v-if="parseGovernance(r).warnings?.length" class="gov-issues">
+              <div v-for="w in parseGovernance(r).warnings" class="gov-warn">{{ w }}</div>
+            </div>
+          </div>
+
           <div class="agent-run-actions">
             <button v-if="r.status === 'queued'" class="btn btn-sm btn-primary" @click="startAgentRun(r)">Start</button>
             <button v-if="r.status === 'queued' || r.status === 'running'" class="btn btn-sm btn-warn" @click="cancelAgentRun(r)">Cancel</button>
@@ -242,9 +266,56 @@
         </div>
       </section>
 
+      <!-- Governance Status -->
       <section class="card">
-        <h2>产物</h2>
+        <h2>AI 输出治理</h2>
+        <div v-if="agentRuns.length === 0" class="empty-state"><p>暂无 AgentRun 数据</p></div>
+        <div v-for="r in agentRuns" :key="r.id" class="gov-status-item">
+          <div class="gov-status-header">
+            <strong>AgentRun #{{ r.id }} · {{ runTypeLabel(r.run_type) }}</strong>
+            <span class="run-status-badge" :class="r.status">{{ AGENT_RUN_STATUS_LABELS[r.status] || r.status }}</span>
+          </div>
+          <div class="gov-badges">
+            <span class="label-badge label-ai">AI-generated</span>
+            <span v-if="parseTrace(r)?.provider" class="label-badge label-provider">{{ parseTrace(r).provider }} 输出</span>
+            <span v-if="r.raw_result_json?.includes('REDACTED')" class="label-badge label-redacted">Secret redacted</span>
+            <span class="label-badge label-merged">Not automatically merged</span>
+            <span class="label-badge label-exec">Not executed</span>
+            <span class="label-badge label-applied">Not applied to repository</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Approval Decisions -->
+      <section class="card">
+        <h2>审批决策</h2>
+        <div v-if="approvalDecisions.length === 0" class="empty-state"><p>暂无审批决策记录</p></div>
+        <div v-for="d in approvalDecisions" :key="d.id" class="approval-decision-item">
+          <div class="approval-decision-header">
+            <span class="gov-tag" :class="d.human_required ? 'gov-human' : 'gov-pass'">
+              {{ d.human_required ? '需人工审批' : '系统自动判定' }}
+            </span>
+            <span class="gov-tag" :class="'gov-risk-' + (d.risk_level || 'low')">风险: {{ d.risk_level }}</span>
+            <span class="gov-tag" :class="d.auto_approve_allowed ? 'gov-pass' : 'gov-fail'">
+              自动审批: {{ d.auto_approve_allowed ? '允许' : '禁止' }}
+            </span>
+          </div>
+          <p v-if="d.decision_reason" class="gov-reason">{{ d.decision_reason }}</p>
+          <p class="gov-time">创建时间: {{ formatTime(d.created_at) }}</p>
+        </div>
+      </section>
+
+      <!-- AI Artifacts -->
+      <section class="card">
+        <h2>AI 产物</h2>
         <ArtifactTab :task-id="task.id" :task-status="task.status" />
+        <div class="artifact-note">
+          <span class="label-badge label-ai">AI-generated</span>
+          <span class="label-badge label-redacted">Secret redacted</span>
+          <span class="label-badge label-merged">Not automatically merged</span>
+          <span class="label-badge label-exec">Not executed</span>
+          <span class="label-badge label-applied">Not applied to repository</span>
+        </div>
       </section>
 
       <section class="card">
@@ -278,8 +349,9 @@ import {
   fetchAgents,
   fetchAgentRuns, createAgentRun, updateAgentRun, submitAgentRunResult,
   fetchAgentReviews, createAgentReview,
+  fetchApprovalDecisions,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -298,6 +370,7 @@ const resultSummary = ref('')
 const agents = ref<AgentProfile[]>([])
 const agentRuns = ref<AgentRun[]>([])
 const agentReviews = ref<AgentReview[]>([])
+const approvalDecisions = ref<ApprovalDecision[]>([])
 const showAgentRunForm = ref(false)
 const showAgentReviewForm = ref(false)
 const submitFormRunId = ref<number | null>(null)
@@ -353,6 +426,23 @@ async function refresh() {
   task.value = await taskStore.fetchTask(id)
   agentRuns.value = await fetchAgentRuns(id)
   agentReviews.value = await fetchAgentReviews(id)
+  approvalDecisions.value = await fetchApprovalDecisions(id)
+}
+
+function parseGovernance(r: any): any {
+  if (!r.raw_result_json) return null
+  try {
+    const p = JSON.parse(r.raw_result_json)
+    return p.governance || null
+  } catch { return null }
+}
+
+function parseTrace(r: any): any {
+  if (!r.raw_result_json) return null
+  try {
+    const p = JSON.parse(r.raw_result_json)
+    return p.trace || null
+  } catch { return null }
 }
 
 async function handleAction(action: string) {
@@ -530,6 +620,38 @@ async function handleCreateAgentReview() {
 .review-meta { font-size: 12px; color: var(--color-text-secondary); }
 .review-comments { font-size: 13px; color: var(--color-text-secondary); margin-top: 4px; }
 .run-select { max-width: 100%; }
+.gov-section { margin: 8px 0; padding: 8px; background: #fafafa; border-radius: 6px; border: 1px solid var(--color-border); }
+.gov-grid { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.gov-tag { padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 500; }
+.gov-pass { background: #e8f5e9; color: #2e7d32; }
+.gov-fail { background: #ffebee; color: #c62828; }
+.gov-human { background: #f8bbd0; color: #000000; }
+.gov-risk-low { background: #e8f5e9; color: #2e7d32; }
+.gov-risk-medium { background: #ffcc80; color: #000000; }
+.gov-risk-high { background: #ffebee; color: #c62828; }
+.gov-risk-critical { background: #fce4ec; color: #b71c1c; }
+.gov-info { background: #e3f2fd; color: #1565c0; }
+.gov-issues { margin-top: 4px; }
+.gov-error { font-size: 12px; color: #c62828; margin: 2px 0; }
+.gov-warn { font-size: 12px; color: #e65100; margin: 2px 0; }
+.gov-reason { font-size: 13px; color: var(--color-text-secondary); margin-top: 4px; white-space: pre-wrap; }
+.gov-time { font-size: 12px; color: var(--color-text-secondary); margin-top: 2px; }
+.gov-status-item { padding: 10px 0; border-bottom: 1px solid var(--color-border); }
+.gov-status-item:last-child { border-bottom: none; }
+.gov-status-header { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.gov-status-header strong { font-size: 14px; }
+.gov-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.label-badge { padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 500; }
+.label-ai { background: #e8f5e9; color: #2e7d32; }
+.label-provider { background: #e3f2fd; color: #1565c0; }
+.label-redacted { background: #fff3e0; color: #e65100; }
+.label-merged { background: #ce93d8; color: #000000; }
+.label-exec { background: #ffcdd2; color: #b71c1c; }
+.label-applied { background: #ffcdd2; color: #b71c1c; }
+.approval-decision-item { padding: 10px 0; border-bottom: 1px solid var(--color-border); }
+.approval-decision-item:last-child { border-bottom: none; }
+.approval-decision-header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.artifact-note { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--color-border); }
 .btn-primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
 .btn-approve { background: #4caf50; color: #fff; border-color: #4caf50; }
 .btn-reject { background: #f44336; color: #fff; border-color: #f44336; }

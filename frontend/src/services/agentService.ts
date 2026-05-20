@@ -92,3 +92,8 @@ export async function updateApprovalPolicy(id: number, body: ApprovalPolicyUpdat
 export async function deleteApprovalPolicy(id: number): Promise<void> {
   await client.delete(`/approval-policies/${id}`)
 }
+
+export async function fetchApprovalDecisions(taskId: number): Promise<any[]> {
+  const { data } = await client.get(`/tasks/${taskId}/approval-decisions`)
+  return data.data || data || []
+}
