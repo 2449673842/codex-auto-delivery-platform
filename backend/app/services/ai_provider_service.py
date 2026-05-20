@@ -1,25 +1,35 @@
 """AI Provider dispatch service.
 
 Dispatches AgentRun execution through the appropriate provider.
-In v0.3, only SandboxProvider is available.
+- v0.3: SandboxProvider is the default.
+- v0.3 S2: OpenAIProvider is available when explicitly configured (provider="openai").
+- If the AgentProfile.provider field is empty or unknown, falls back to sandbox.
+- API key is read from OPENAI_API_KEY env var ONLY, never from AgentProfile.secret_ref.
 """
 
+import os
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_run import AgentRun
 from app.models.task_artifact import TaskArtifact
 from app.schemas.ai_provider import AgentRunResult
-from app.schemas.agent_run import AgentRunUpdate, SubmitResultRequest
+from app.schemas.agent_run import AgentRunUpdate
 from app.services.agent_run_service import update_agent_run
 from app.services.sandbox_provider import SandboxProvider
 from app.services.event_service import create_event
+from app.models.agent_profile import AgentProfile
 from app.enums import AgentRunStatus
 import hashlib
 
 
 async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system") -> AgentRun:
-    """Execute an AgentRun through the provider and update its status.
+    """Execute an AgentRun through the appropriate provider and update its status.
+
+    v0.3 S2: Provider selection:
+    - AgentProfile.provider == "openai" → OpenAIProvider (requires OPENAI_API_KEY)
+    - All others (sandbox, empty, unknown, codex, claude, manual) → SandboxProvider
+    - API key is read from OPENAI_API_KEY env var, NEVER from AgentProfile.secret_ref
 
     Flow: queued → running → succeeded (or failed on error)
     On success: writes output_summary, output_log, raw_result_json, creates artifacts.
@@ -41,20 +51,50 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
         actor=actor, message=f"AgentRun #{run.id} started by {actor}",
     )
 
-    # Step 2: Execute via Sandbox provider (v0.3 only)
-    try:
-        provider = SandboxProvider()
-        result = await provider.execute(run)
-    except Exception as e:
-        # Mark as failed (direct model update)
-        run.status = AgentRunStatus.FAILED.value
-        run.error_message = f"Provider execution failed: {str(e)}"
-        await db.flush()
-        await create_event(
-            db, task_id=run.task_id, event_type="agent_run_failed",
-            actor=actor, message=f"AgentRun #{run.id} failed: {str(e)}",
-        )
-        raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} execution failed: {str(e)}")
+    # Step 2: Select provider based on AgentProfile.provider
+    agent = await db.get(AgentProfile, run.agent_id)
+    agent_provider = agent.provider if agent else ""
+
+    # v0.3 S2: Only "openai" triggers real provider; everything else uses sandbox
+    if agent_provider == "openai":
+        try:
+            from app.services.openai_provider import OpenAIProvider
+            provider = OpenAIProvider()
+            result = await provider.execute(run)
+        except RuntimeError as e:
+            # No API key or provider init failure → fail clearly
+            run.status = AgentRunStatus.FAILED.value
+            run.error_message = "AI provider initialization failed (check API key)"
+            await db.flush()
+            await create_event(
+                db, task_id=run.task_id, event_type="agent_run_failed",
+                actor=actor, message=f"AgentRun #{run.id} failed",
+            )
+            raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} failed: Provider init error")
+        except Exception as e:
+            # API call failure
+            run.status = AgentRunStatus.FAILED.value
+            run.error_message = "AI provider execution failed"
+            await db.flush()
+            await create_event(
+                db, task_id=run.task_id, event_type="agent_run_failed",
+                actor=actor, message=f"AgentRun #{run.id} failed",
+            )
+            raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} failed: Execution error")
+    else:
+        # Sandbox provider (default for all other provider types, including empty/unknown)
+        try:
+            provider = SandboxProvider()
+            result = await provider.execute(run)
+        except Exception as e:
+            run.status = AgentRunStatus.FAILED.value
+            run.error_message = f"Provider execution failed: {str(e)}"
+            await db.flush()
+            await create_event(
+                db, task_id=run.task_id, event_type="agent_run_failed",
+                actor=actor, message=f"AgentRun #{run.id} failed",
+            )
+            raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} execution failed")
 
     # Step 3: running → succeeded with results (direct model update)
     run.status = AgentRunStatus.SUCCEEDED.value
