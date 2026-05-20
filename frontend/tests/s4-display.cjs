@@ -13,16 +13,16 @@ const BE = 'http://127.0.0.1:5697'
 const t_actor = { actor: 'test' }
 const r = { passed: 0, failed: 0, errors: [], networkFailures: [], details: [] }
 
-function log(m) { console.log(m); r.details.push(m) }
+function log(m) { console.log(m); r.details.push(m) }  // NOSONAR - test log
 function pass(m) { r.passed++; log(`  [PASS] ${m}`) }
 function fail(m, e) { r.failed++; log(`  [FAIL] ${m}: ${e}`) }
 
-function httpGet(url, cb) {
+function httpGet(url, cb) {  // NOSONAR - test harness
   http.get(url, res => { let d = ''; res.on('data', c => d += c); res.on('end', () => cb({ status: res.statusCode, body: d })) })
     .on('error', cb)
 }
 
-function httpPost(url, body, cb) {
+function httpPost(url, body, cb) {  // NOSONAR - test harness
   const u = new URL(url)
   const req = http.request({ hostname: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' } },
     res => { let d = ''; res.on('data', c => d += c); res.on('end', () => cb({ status: res.statusCode, body: d })) })
@@ -165,7 +165,7 @@ async function main() {
   pass('ApprovalDecision seeded')
   await orchestrateSteps(task.id)
   const runs = await apiGet(`/tasks/${task.id}/agent-runs`) // NOSONAR
-  const hasRun = runs.data && runs.data[0]
+  const hasRun = runs.data?.[0]
   if (hasRun) pass(`AgentRun #${hasRun.id} status=${hasRun.status}`)
   else { fail('No AgentRun', ''); return }
 
