@@ -25,183 +25,126 @@ import hashlib
 from app.services.ai_output_governance_service import redact_secrets
 
 
-async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system") -> AgentRun:
-    """Execute an AgentRun through the appropriate provider and update its status.
+async def _fail_run(db, run, task_id, error_message, actor):
+    """Mark AgentRun as failed and create event."""
+    run.status = AgentRunStatus.FAILED.value
+    run.error_message = error_message
+    await db.flush()
+    await create_event(db, task_id=task_id, event_type="agent_run_failed",
+                        actor=actor, message=f"AgentRun #{run.id} failed")
 
-    v0.3 S2: Provider selection:
-    - AgentProfile.provider == "openai" → OpenAIProvider (requires OPENAI_API_KEY)
-    - All others (sandbox, empty, unknown, codex, claude, manual) → SandboxProvider
-    - API key is read from OPENAI_API_KEY env var, NEVER from AgentProfile.secret_ref
-
-    Flow: queued → running → succeeded (or failed on error)
-    On success: writes output_summary, output_log, raw_result_json, creates artifacts.
-    On failure: marks as failed, stops further progression.
-    """
-    run = await db.get(AgentRun, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="AgentRun not found")
-
-    if run.status != AgentRunStatus.QUEUED.value:
-        raise HTTPException(status_code=409, detail=f"Cannot dispatch AgentRun in status '{run.status}'")
-
-    # Step 1: queued → running
-    update_data = AgentRunUpdate(status=AgentRunStatus.RUNNING.value)
-    await update_agent_run(db, run.id, update_data, run.task_id)
-
-    await create_event(
-        db, task_id=run.task_id, event_type="agent_run_started",
-        actor=actor, message=f"AgentRun #{run.id} started by {actor}",
-    )
-
-    # Step 2: Select provider based on AgentProfile.provider
-    agent = await db.get(AgentProfile, run.agent_id)
+async def _execute_with_provider(db: AsyncSession, agent, run: AgentRun) -> AgentRunResult:
+    """Select and execute the appropriate AI provider."""
     agent_provider = agent.provider if agent else ""
-
-    # v0.3 S2: Only "openai" triggers real provider; everything else uses sandbox
     if agent_provider == "openai":
-        try:
-            from app.services.openai_provider import OpenAIProvider
-            provider = OpenAIProvider()
-            result = await provider.execute(run)
-        except RuntimeError as e:
-            # No API key or provider init failure → fail clearly
-            run.status = AgentRunStatus.FAILED.value
-            run.error_message = "AI provider initialization failed (check API key)"
-            await db.flush()
-            await create_event(
-                db, task_id=run.task_id, event_type="agent_run_failed",
-                actor=actor, message=f"AgentRun #{run.id} failed",
-            )
-            raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} failed: Provider init error")
-        except Exception as e:
-            # API call failure
-            run.status = AgentRunStatus.FAILED.value
-            run.error_message = "AI provider execution failed"
-            await db.flush()
-            await create_event(
-                db, task_id=run.task_id, event_type="agent_run_failed",
-                actor=actor, message=f"AgentRun #{run.id} failed",
-            )
-            raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} failed: Execution error")
-    else:
-        # Sandbox provider (default for all other provider types, including empty/unknown)
-        try:
-            provider = SandboxProvider()
-            result = await provider.execute(run)
-        except Exception as e:
-            run.status = AgentRunStatus.FAILED.value
-            run.error_message = f"Provider execution failed: {str(e)}"
-            await db.flush()
-            await create_event(
-                db, task_id=run.task_id, event_type="agent_run_failed",
-                actor=actor, message=f"AgentRun #{run.id} failed",
-            )
-            raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} execution failed")
+        from app.services.openai_provider import OpenAIProvider
+        provider = OpenAIProvider()
+        return await provider.execute(run)
+    provider = SandboxProvider()
+    return await provider.execute(run)
 
-    # Step 3: Governance validation (BEFORE final succeeded confirmation)
+async def _apply_governance(db, run, agent, result, actor):
+    """Validate, redact, record governance decisions. Returns validation result."""
     import json as _json
     from app.services.ai_output_governance_service import (
-        validate_agent_run_result, parse_review_result,
-        create_agent_review_from_ai_output, build_trace_json,
+        validate_agent_run_result, build_trace_json,
     )
 
-    _provider_raw = result.raw_result_json
     risk_report = None
     if result.raw_result_json:
         try:
             parsed = _json.loads(result.raw_result_json)
             if isinstance(parsed, dict):
                 risk_report = parsed.get("risk_report")
-        except (_json.JSONDecodeError, ValueError):
+        except _json.JSONDecodeError:
             pass
 
     validation = validate_agent_run_result(
-        output_summary=result.output_summary,
-        output_log=result.output_log,
+        output_summary=result.output_summary, output_log=result.output_log,
         raw_result_json=result.raw_result_json,
-        plan_md=result.plan_md,
-        patch_diff=result.patch_diff,
-        review_md=result.review_md,
-        risk_report=risk_report,
+        plan_md=result.plan_md, patch_diff=result.patch_diff,
+        review_md=result.review_md, risk_report=risk_report,
     )
 
     trace = build_trace_json(
         provider=agent.provider if agent else "sandbox",
         model=getattr(agent, "model_name", None),
-        run_type=run.run_type,
-        output_kind=validation.output_kind,
+        run_type=run.run_type, output_kind=validation.output_kind,
         validation=validation,
     )
 
-    # Secret redaction for provider_raw (safe: never raise)
+    _provider_raw = result.raw_result_json
     try:
         _safe_raw = redact_secrets(_provider_raw) if _provider_raw else None
     except Exception:
         _safe_raw = _provider_raw
 
-    # Build combined raw_result_json: provider_raw + governance + trace
     run.raw_result_json = _json.dumps({
         "provider_raw": _safe_raw,
         "governance": {
-            "valid": validation.valid,
-            "requires_human": validation.requires_human,
+            "valid": validation.valid, "requires_human": validation.requires_human,
             "risk_level": validation.risk_level,
-            "errors": validation.errors,
-            "warnings": validation.warnings,
+            "errors": validation.errors, "warnings": validation.warnings,
         },
         "trace": _json.loads(trace) if isinstance(trace, str) else trace,
     }, ensure_ascii=False)
 
-    # Step 4: If validation invalid → fail the AgentRun
     if not validation.valid:
-        run.status = AgentRunStatus.FAILED.value
-        run.error_message = "Governance validation failed"
-        await db.flush()
-        await create_event(
-            db, task_id=run.task_id, event_type="agent_run_failed",
-            actor=actor,
-            message=f"AgentRun #{run.id} failed governance validation: {validation.errors[0] if validation.errors else 'unknown'}",
-        )
-        raise HTTPException(
-            status_code=422,
-            detail=f"AgentRun #{run.id} failed governance validation",
-        )
+        await _fail_run(db, run, run.task_id,
+                        f"Governance validation failed: {validation.errors[0] if validation.errors else 'unknown'}",
+                        actor)
+        raise HTTPException(status_code=422, detail=f"AgentRun #{run.id} failed governance validation")
 
-    # Step 5: If requires_human → record ApprovalDecision (NOT auto-approve)
     if validation.requires_human:
         from app.models.approval_decision import ApprovalDecision
         decision = ApprovalDecision(
-            task_id=run.task_id,
-            risk_level=validation.risk_level or "medium",
-            auto_approve_allowed=False,
-            human_required=True,
+            task_id=run.task_id, risk_level=validation.risk_level or "medium",
+            auto_approve_allowed=False, human_required=True,
             decision_reason=f"Governance: {validation.risk_level} risk, requires human review",
         )
         db.add(decision)
+    return validation
 
-    # Step 6: Final succeeded
+
+async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system") -> AgentRun:
+    """Execute an AgentRun through the appropriate provider and update its status."""
+    run = await db.get(AgentRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="AgentRun not found")
+    if run.status != AgentRunStatus.QUEUED.value:
+        raise HTTPException(status_code=409, detail=f"Cannot dispatch AgentRun in status '{run.status}'")
+
+    update_data = AgentRunUpdate(status=AgentRunStatus.RUNNING.value)
+    await update_agent_run(db, run.id, update_data, run.task_id)
+    await create_event(db, task_id=run.task_id, event_type="agent_run_started",
+                        actor=actor, message=f"AgentRun #{run.id} started by {actor}")
+
+    agent = await db.get(AgentProfile, run.agent_id)
+    try:
+        result = await _execute_with_provider(db, agent, run)
+    except RuntimeError:
+        await _fail_run(db, run, run.task_id, "AI provider initialization failed (check API key)", actor)
+        raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} failed: Provider init error")
+    except Exception:
+        await _fail_run(db, run, run.task_id, "AI provider execution failed", actor)
+        raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} failed: Execution error")
+
+    validation = await _apply_governance(db, run, agent, result, actor)
+
     run.status = AgentRunStatus.SUCCEEDED.value
     run.output_summary = result.output_summary
     run.output_log = result.output_log
     await db.flush()
+    await create_event(db, task_id=run.task_id, event_type="agent_run_succeeded",
+                        actor=actor, message=f"AgentRun #{run.id} succeeded: {result.output_summary[:80]}")
 
-    await create_event(
-        db, task_id=run.task_id, event_type="agent_run_succeeded",
-        actor=actor, message=f"AgentRun #{run.id} succeeded: {result.output_summary[:80]}",
-    )
-
-    # Step 7: Create AgentReview if review output exists
     if result.review_md:
+        from app.services.ai_output_governance_service import parse_review_result, create_agent_review_from_ai_output
         review_parsed = parse_review_result(result.review_md)
         if review_parsed.parsed:
-            await create_agent_review_from_ai_output(
-                db, run.task_id, run.agent_id, run.id,
-                review_parsed, actor,
-            )
+            await create_agent_review_from_ai_output(db, run.task_id, run.agent_id, run.id, review_parsed, actor)
 
-    # Step 8: Create artifacts from output
     await _create_artifacts_from_result(db, run, result)
-
     return run
 
 
