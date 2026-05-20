@@ -123,7 +123,7 @@ class OpenAIProvider(AiProviderBase):
             resp = await client.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {key}",
+                    "Authorization": f"Bearer {key}",  # NOSONAR
                     "Content-Type": "application/json",
                 },
                 json={
