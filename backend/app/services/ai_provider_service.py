@@ -33,7 +33,7 @@ async def _fail_run(db, run, task_id, error_message, actor):
     await create_event(db, task_id=task_id, event_type="agent_run_failed",
                         actor=actor, message=f"AgentRun #{run.id} failed")
 
-async def _execute_with_provider(db: AsyncSession, agent, run: AgentRun) -> AgentRunResult:
+async def _execute_with_provider(agent, run: AgentRun) -> AgentRunResult:
     """Select and execute the appropriate AI provider."""
     agent_provider = agent.provider if agent else ""
     if agent_provider == "openai":
@@ -121,7 +121,7 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
 
     agent = await db.get(AgentProfile, run.agent_id)
     try:
-        result = await _execute_with_provider(db, agent, run)
+        result = await _execute_with_provider(agent, run)
     except RuntimeError:
         await _fail_run(db, run, run.task_id, "AI provider initialization failed (check API key)", actor)
         raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} failed: Provider init error")
@@ -129,7 +129,7 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
         await _fail_run(db, run, run.task_id, "AI provider execution failed", actor)
         raise HTTPException(status_code=500, detail=f"AgentRun #{run.id} failed: Execution error")
 
-    validation = await _apply_governance(db, run, agent, result, actor)
+    await _apply_governance(db, run, agent, result, actor)
 
     run.status = AgentRunStatus.SUCCEEDED.value
     run.output_summary = result.output_summary
