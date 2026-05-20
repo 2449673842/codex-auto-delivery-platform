@@ -34,6 +34,7 @@ from app.routers import health, projects, tasks, artifacts, events, reviews, age
 from app.routers import code_context as code_context_router
 from app.routers import patch_sandbox as patch_sandbox_router
 from app.routers import sandbox_gate as sandbox_gate_router
+from app.routers import review_packet as review_packet_router
 
 app.include_router(health.router)
 app.include_router(projects.router)
@@ -50,3 +51,4 @@ app.include_router(orchestration.router)
 app.include_router(code_context_router.router)
 app.include_router(patch_sandbox_router.router)
 app.include_router(sandbox_gate_router.router)
+app.include_router(review_packet_router.router)
