@@ -309,10 +309,12 @@
       <section class="card">
         <h2>AI 产物</h2>
         <ArtifactTab :task-id="task.id" :task-status="task.status" />
-        <div v-if="agentRuns.some(r => r.output_diff)" class="artifact-note">
+        <div class="artifact-note">
           <span class="label-badge label-ai">AI-generated</span>
           <span class="label-badge label-redacted">Secret redacted</span>
           <span class="label-badge label-merged">Not automatically merged</span>
+          <span class="label-badge label-exec">Not executed</span>
+          <span class="label-badge label-applied">Not applied to repository</span>
         </div>
       </section>
 
@@ -643,9 +645,9 @@ async function handleCreateAgentReview() {
 .label-ai { background: #e8f5e9; color: #2e7d32; }
 .label-provider { background: #e3f2fd; color: #1565c0; }
 .label-redacted { background: #fff3e0; color: #e65100; }
-.label-merged { background: #f3e5f5; color: #7b1fa2; }
-.label-exec { background: #fce4ec; color: #c62828; }
-.label-applied { background: #fce4ec; color: #c62828; }
+.label-merged { background: #e1bee7; color: #4a148c; }
+.label-exec { background: #ffcdd2; color: #b71c1c; }
+.label-applied { background: #ffcdd2; color: #b71c1c; }
 .approval-decision-item { padding: 10px 0; border-bottom: 1px solid var(--color-border); }
 .approval-decision-item:last-child { border-bottom: none; }
 .approval-decision-header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
