@@ -22,6 +22,8 @@ from app.models.agent_profile import AgentProfile
 from app.enums import AgentRunStatus
 import hashlib
 
+from app.services.ai_output_governance_service import redact_secrets
+
 
 async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system") -> AgentRun:
     """Execute an AgentRun through the appropriate provider and update its status.
@@ -101,7 +103,6 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
     from app.services.ai_output_governance_service import (
         validate_agent_run_result, parse_review_result,
         create_agent_review_from_ai_output, build_trace_json,
-        redact_secrets,
     )
 
     _provider_raw = result.raw_result_json
@@ -205,43 +206,47 @@ async def dispatch_agent_run(db: AsyncSession, run_id: int, actor: str = "system
 
 
 async def _create_artifacts_from_result(db: AsyncSession, run: AgentRun, result: AgentRunResult):
-    """Create TaskArtifact entries from provider results."""
+    """Create TaskArtifact entries from provider results, with secret redaction."""
     artifacts = []
 
     if result.plan_md:
-        content = result.plan_md
-        sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        content = redact_secrets(result.plan_md)
+        data = content.encode("utf-8")
+        sha256 = hashlib.sha256(data).hexdigest()
         artifacts.append(TaskArtifact(
             task_id=run.task_id, artifact_type="agent_output_log",
             content=content, filename=f"agent_run_{run.id}_plan.md",
-            size_bytes=len(content.encode("utf-8")), sha256=sha256,
+            size_bytes=len(data), sha256=sha256,
         ))
 
     if result.patch_diff:
-        content = result.patch_diff
-        sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        content = redact_secrets(result.patch_diff)
+        data = content.encode("utf-8")
+        sha256 = hashlib.sha256(data).hexdigest()
         artifacts.append(TaskArtifact(
             task_id=run.task_id, artifact_type="agent_output_diff",
             content=content, filename=f"agent_run_{run.id}_patch.diff",
-            size_bytes=len(content.encode("utf-8")), sha256=sha256,
+            size_bytes=len(data), sha256=sha256,
         ))
 
     if result.review_md:
-        content = result.review_md
-        sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        content = redact_secrets(result.review_md)
+        data = content.encode("utf-8")
+        sha256 = hashlib.sha256(data).hexdigest()
         artifacts.append(TaskArtifact(
             task_id=run.task_id, artifact_type="agent_review_report",
             content=content, filename=f"agent_run_{run.id}_review.md",
-            size_bytes=len(content.encode("utf-8")), sha256=sha256,
+            size_bytes=len(data), sha256=sha256,
         ))
 
-    if result.raw_result_json:
-        content = result.raw_result_json
-        sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    if run.raw_result_json:
+        content = run.raw_result_json
+        data = content.encode("utf-8")
+        sha256 = hashlib.sha256(data).hexdigest()
         artifacts.append(TaskArtifact(
             task_id=run.task_id, artifact_type="agent_raw_result",
             content=content, filename=f"agent_run_{run.id}_result.json",
-            size_bytes=len(content.encode("utf-8")), sha256=sha256,
+            size_bytes=len(data), sha256=sha256,
         ))
 
     for art in artifacts:

@@ -201,3 +201,42 @@ async def test_task_not_auto_approved_for_human_required(client, task, monkeypat
     task_data = resp_data.get("data", resp_data.get("data", {}))
     status = task_data.get("status", "") if isinstance(task_data, dict) else ""
     assert status != "approved", "orchestration must not auto-approve human_required tasks"
+
+
+@pytest.mark.asyncio
+async def test_artifact_secret_redaction(client, task, monkeypatch):
+    """Artifact content is redacted for secrets before storage."""
+    fake_secret_plan = "#Plan\napi_key = 'sk-abcdefghijklmnopqrstuvwxyz1234567890'\npassword = 'secret123'"
+    async def _mock_execute(self, run):
+        return AgentRunResult(
+            output_summary="Plan with secrets",
+            output_log="Generated",
+            raw_result_json=json.dumps({"plan_md": fake_secret_plan}),
+            plan_md=fake_secret_plan,
+        )
+    from app.services.openai_provider import OpenAIProvider
+    monkeypatch.setattr(OpenAIProvider, "execute", _mock_execute)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")
+    r = await client.post(BASE + "/agents", json={"name": "a8", "agent_type": "executor", "provider": "openai"})
+    await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
+    await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
+    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
+    assert r.status_code == 200
+    rr = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
+    ar = rr.json()["data"][0]
+    assert ar["status"] == "succeeded"
+    raw = json.loads(ar["raw_result_json"])
+    assert "sk-abcdefghijklmnopqrstuvwxyz1234567890" not in raw.get("provider_raw", "")
+    assert "***REDACTED***" in raw.get("provider_raw", "")
+    ar_resp = await client.get(BASE + f"/tasks/{task['id']}/artifacts")
+    artifacts_data = ar_resp.json()
+    items = artifacts_data.get("data", artifacts_data.get("data", []))
+    art_items = items if isinstance(items, list) else []
+    found_plan = False
+    for art in art_items:
+        if "plan.md" in art.get("filename", ""):
+            found_plan = True
+            assert "sk-abcdefghijklmnopqrstuvwxyz1234567890" not in art.get("content", "")
+            assert "***REDACTED***" in art.get("content", "")
+            assert "secret123" not in art.get("content", "")
+    assert found_plan, "plan artifact should exist"
