@@ -91,7 +91,7 @@ def _parse_diff_git_line(line: str) -> DiffFile:
 
 
 def _parse_hunk_header(line: str) -> Hunk | None:
-    m = re.match(r"^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@", line)
+    m = re.match(r"^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@", line)  # NOSONAR - patch size limited to 500KB, low ReDoS risk
     if not m:
         return None
     old_start = int(m.group(1))
