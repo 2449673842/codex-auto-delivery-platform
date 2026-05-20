@@ -134,7 +134,7 @@ async def test_openai_mocked_creates_artifacts(client, task, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_openai_execute_saves_patch_diff(client, task, monkeypatch):
-    """OpenAI execute run_type should save patch.diff via dispatch"""
+    """OpenAI execute run_type should save patch.diff artifact"""
     from app.services.openai_provider import OpenAIProvider
     monkeypatch.setattr(OpenAIProvider, "_call_openai", _mock_openai_patch)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")
@@ -143,24 +143,28 @@ async def test_openai_execute_saves_patch_diff(client, task, monkeypatch):
     agent = r.json()["data"]
     await client.post(BASE + f"/tasks/{task['id']}/generate-ticket", json=t_actor)
     await client.post(BASE + f"/tasks/{task['id']}/dispatch", json=t_actor)
-    # Orchestration step creates AgentRun (plan type) and dispatches via OpenAI provider
-    r = await client.post(BASE + f"/tasks/{task['id']}/orchestration/step")
-    assert r.status_code == 200
+    # Create AgentRun with execute type directly via API
+    r = await client.post(BASE + f"/tasks/{task['id']}/agent-runs", json={"agent_id": agent["id"], "run_type": "execute", "input_prompt": "add a function"})
+    rid = r.json()["data"]["id"]
+    # Dispatch via direct database session (bypass orchestration wait logic)
+    from app.database import get_session_factory
+    from app.services.ai_provider_service import dispatch_agent_run
+    factory = get_session_factory()
+    async with factory() as db:
+        await dispatch_agent_run(db, rid, "test")
+        await db.commit()
 
     rr = await client.get(BASE + f"/tasks/{task['id']}/agent-runs")
     run = rr.json()["data"][0]
     assert run["status"] == "succeeded"
-    # With _mock_openai_patch mock, even plan type returns diff content
-    # The raw_result_json should contain the mock response
-    assert run["raw_result_json"] is not None
+    assert "patch_diff" in (run["raw_result_json"] or "")
 
     arts = await client.get(BASE + f"/tasks/{task['id']}/artifacts")
     artifacts = arts.json()["data"]
     diff_arts = [a for a in artifacts if a["artifact_type"] == "agent_output_diff"]
-    # With plan type, patch_diff is set from the mock response (which returns diff text)
-    # The artifact may be created if patch_diff is in the result
-    # If not, at minimum there should be artifacts
-    assert len(artifacts) >= 1
+    assert len(diff_arts) >= 1, "No agent_output_diff artifact found"
+    assert ".diff" in diff_arts[0]["filename"]
+    assert "diff --git" in diff_arts[0]["content"]
 
 # ─── API key not exposed ───
 
