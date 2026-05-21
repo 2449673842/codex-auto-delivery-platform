@@ -28,108 +28,68 @@ def _fail(*args, **kwargs):
 @pytest.mark.asyncio
 class Tests:
 
-    async def test_planning_mode_returns_plan_md(self, cli):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
+    async def _preview(self, cli, **overrides):
+        body = {"module_name": "review_packet", "mode": "planning"}
+        body.update(overrides)
+        return await cli.post("/api/ai-context-packets/preview", json=body)
+
+    async def _assert_data(self, r):
         assert r.status_code == 200
-        data = r.json()["data"]
+        return r.json()["data"]
+
+    async def test_planning_mode_returns_plan_md(self, cli):
+        data = await self._assert_data(await self._preview(cli, mode="planning"))
         assert data["output_contract"]["expected_artifacts"] == ["plan.md"]
         assert data["prompt_template"]["template_id"] == "planning_prompt_v1"
         assert data["task_context"]["mode"] == "planning"
 
     async def test_patch_generation_returns_patch_diff(self, cli):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "patch_generation",
-        })
-        assert r.status_code == 200
-        data = r.json()["data"]
+        data = await self._assert_data(await self._preview(cli, mode="patch_generation"))
         assert "patch.diff" in data["output_contract"]["expected_artifacts"]
         assert data["output_contract"]["patch_format"] == "unified_diff"
 
     async def test_review_mode_returns_review_md(self, cli):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "review",
-        })
-        assert r.status_code == 200
-        data = r.json()["data"]
+        data = await self._assert_data(await self._preview(cli, mode="review"))
         assert "review.md" in data["output_contract"]["expected_artifacts"]
         assert data["prompt_template"]["template_id"] == "review_prompt_v1"
 
     async def test_risk_mode_returns_risk_report_json(self, cli):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "risk",
-        })
-        assert r.status_code == 200
-        data = r.json()["data"]
+        data = await self._assert_data(await self._preview(cli, mode="risk"))
         assert "risk_report.json" in data["output_contract"]["expected_artifacts"]
         assert data["output_contract"]["risk_format"] == "json"
 
     async def test_browser_reviewer_mode(self, cli):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "browser_reviewer",
-        })
-        assert r.status_code == 200
-        data = r.json()["data"]
+        data = await self._assert_data(await self._preview(cli, mode="browser_reviewer"))
         assert "browser_ai_review.json" in data["output_contract"]["expected_artifacts"]
         assert data["prompt_template"]["template_id"] == "browser_reviewer_prompt_v1"
 
     async def test_unknown_mode_returns_422(self, cli):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "mode": "invalid_mode_xyz",
-        })
+        r = await self._preview(cli, mode="invalid_mode_xyz")
         assert r.status_code == 422
 
     async def test_context_selector_included(self, cli):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
-        assert r.status_code == 200
-        data = r.json()["data"]
+        data = await self._assert_data(await self._preview(cli))
         cs = data["context_selector"]
         names = [m["name"] for m in cs["matched_modules"]]
         assert "review_packet" in names
         assert len(cs["recommended_files"]) > 0
 
     async def test_safety_boundaries_in_project_brief(self, cli):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
-        assert r.status_code == 200
-        data = r.json()["data"]
+        data = await self._assert_data(await self._preview(cli))
         boundaries = data["project_brief"]["safety_boundaries"]
         assert len(boundaries) > 0
         assert any("Project.root_path" in b for b in boundaries)
 
     async def test_hash_fields_exist_and_stable(self, cli):
-        r1 = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
-        r2 = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
-        data1 = r1.json()["data"]["audit"]
-        data2 = r2.json()["data"]["audit"]
+        data1 = (await self._assert_data(await self._preview(cli)))["audit"]
+        data2 = (await self._assert_data(await self._preview(cli)))["audit"]
         assert data1["project_prefix_hash"] == data2["project_prefix_hash"]
         assert data1["task_context_hash"] == data2["task_context_hash"]
         assert data1["context_packet_hash"] == data2["context_packet_hash"]
         assert len(data1["project_prefix_hash"]) == 16
 
     async def test_estimated_context_tokens_present(self, cli):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
-        data = r.json()["data"]
+        data = await self._assert_data(await self._preview(cli))
         assert data["audit"]["estimated_context_tokens"] > 0
         assert data["token_budget"]["estimated_context_tokens"] > 0
 
@@ -140,12 +100,7 @@ class Tests:
             "_MAX_TOKENS_BY_MODE",
             {"planning": {"context": 1, "code_context": 1, "review_packet": 1, "response": 1}},
         )
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
-        assert r.status_code == 200
-        data = r.json()["data"]
+        data = await self._assert_data(await self._preview(cli))
         assert data["token_budget"]["budget_status"] == "over_limit"
         assert data["token_budget"]["truncation_applied"] is True
         assert "context_budget_exceeded" in data["warnings"]
@@ -153,27 +108,16 @@ class Tests:
     async def test_no_project_root_path_access(self, cli, monkeypatch):
         monkeypatch.setattr("pathlib.Path.glob", _fail)
         monkeypatch.setattr("pathlib.Path.rglob", _fail)
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
-        assert r.status_code == 200
+        await self._assert_data(await self._preview(cli))
 
     async def test_no_subprocess_or_os_system(self, cli, monkeypatch):
         monkeypatch.setattr("subprocess.run", _fail)
         monkeypatch.setattr("subprocess.Popen", _fail)
         monkeypatch.setattr("os.system", _fail)
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
-        assert r.status_code == 200
+        await self._assert_data(await self._preview(cli))
 
-    async def test_no_secret_ref_or_env(self, cli, monkeypatch):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
+    async def test_no_secret_ref_or_env(self, cli):
+        r = await self._preview(cli)
         assert r.status_code == 200
         packet_str = str(r.json())
         dangerous = ["OPENAI_API_KEY", "sk-", "-----BEGIN"]
@@ -186,59 +130,37 @@ class Tests:
         fake.write_text("{bad json", encoding="utf-8")
         monkeypatch.setattr(context_selector_service, "_REPOSITORY_MAP_PATH", fake)
         context_selector_service._clear_cache()
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
+        r = await self._preview(cli)
         assert r.status_code == 500
 
     async def test_api_envelope(self, cli):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
+        r = await self._preview(cli)
         assert r.status_code == 200
         body = r.json()
         assert "data" in body
         assert "message" in body
 
     async def test_empty_task_goal_low_confidence(self, cli):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "task_goal": "",
-            "mode": "planning",
-        })
-        assert r.status_code == 200
-        data = r.json()["data"]
+        data = await self._assert_data(await self._preview(cli, task_goal="", module_name=""))
         assert data["context_selector"]["confidence"] == "low"
 
     async def test_prompt_template_metadata(self, cli):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
-        assert r.status_code == 200
-        pt = r.json()["data"]["prompt_template"]
+        data = await self._assert_data(await self._preview(cli))
+        pt = data["prompt_template"]
         assert pt["template_id"] == "planning_prompt_v1"
         assert pt["mode"] == "planning"
         assert len(pt["allowed_model_tiers"]) > 0
         assert len(pt["safety_notes"]) > 0
 
     async def test_packet_contains_no_secret_values(self, cli):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
+        r = await self._preview(cli)
         assert r.status_code == 200
         raw = str(r.json())
         assert "REDACTED" not in raw
 
     async def test_runtime_evidence_all_not_provided(self, cli):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
-        assert r.status_code == 200
-        re = r.json()["data"]["runtime_evidence"]
+        data = await self._assert_data(await self._preview(cli))
+        re = data["runtime_evidence"]
         assert re["pytest_summary"] == "not_provided"
         assert re["compileall_summary"] == "not_provided"
         assert re["sonar_summary"] == "not_provided"
@@ -246,36 +168,23 @@ class Tests:
         assert re["sandbox_result_summary"] == "not_provided"
 
     async def test_project_brief_fields(self, cli):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
-        assert r.status_code == 200
-        pb = r.json()["data"]["project_brief"]
+        data = await self._assert_data(await self._preview(cli))
+        pb = data["project_brief"]
         assert pb["project_name"] == "Codex Automation Delivery Platform"
         assert pb["current_version"] == "v0.4.0"
         assert len(pb["completed_scope"]) > 0
         assert len(pb["known_non_goals"]) > 0
 
     async def test_all_modes_have_templates(self, cli):
-        modes = ["planning", "patch_generation", "review", "risk", "browser_reviewer"]
-        for mode in modes:
-            r = await cli.post("/api/ai-context-packets/preview", json={
-                "module_name": "review_packet",
-                "mode": mode,
-            })
-            assert r.status_code == 200
-            pt = r.json()["data"]["prompt_template"]
+        for mode in ["planning", "patch_generation", "review", "risk", "browser_reviewer"]:
+            data = await self._assert_data(await self._preview(cli, mode=mode))
+            pt = data["prompt_template"]
             assert pt["template_id"] == f"{mode}_prompt_v1"
             assert pt["mode"] == mode
 
     async def test_forbidden_files_in_task_context(self, cli):
-        r = await cli.post("/api/ai-context-packets/preview", json={
-            "module_name": "review_packet",
-            "mode": "planning",
-        })
-        assert r.status_code == 200
-        tc = r.json()["data"]["task_context"]
+        data = await self._assert_data(await self._preview(cli))
+        tc = data["task_context"]
         assert ".env" in tc["forbidden_files"]
         assert len(tc["forbidden_files"]) > 0
 
