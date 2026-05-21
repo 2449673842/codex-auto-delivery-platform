@@ -33,5 +33,18 @@ class Settings:
     # --- 环境标识 ---
     debug: bool = os.getenv("CODEX_DEBUG", "0") == "1"  # NOSONAR
 
+    # --- AI 执行开关 ---
+    ai_execution_enabled: bool = os.getenv("AI_EXECUTION_ENABLED", "").lower() in ("1", "true")  # NOSONAR
+
+    # --- OpenAI ---
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")  # NOSONAR
+
+    # --- AI Provider 白名单（逗号分隔） ---
+    _provider_allowlist_raw: str = os.getenv("AI_PROVIDER_ALLOWLIST", "sandbox")  # NOSONAR
+
+    @property
+    def provider_allowlist(self) -> list[str]:
+        return [x.strip() for x in self._provider_allowlist_raw.split(",") if x.strip()]
+
 
 settings = Settings()
