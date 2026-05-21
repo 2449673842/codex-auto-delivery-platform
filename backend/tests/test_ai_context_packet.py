@@ -25,6 +25,15 @@ def _fail(*args, **kwargs):
     raise RuntimeError("should not be called")
 
 
+MODE_CASES = [
+    pytest.param("planning",           ["plan.md"],                "planning_prompt_v1",           "",     "",         id="planning"),
+    pytest.param("patch_generation",   ["patch.diff"],             "patch_generation_prompt_v1",   "unified_diff", "",  id="patch_generation"),
+    pytest.param("review",             ["review.md"],              "review_prompt_v1",             "",     "",         id="review"),
+    pytest.param("risk",               ["risk_report.json"],       "risk_prompt_v1",               "",     "json",     id="risk"),
+    pytest.param("browser_reviewer",   ["browser_ai_review.json"], "browser_reviewer_prompt_v1",   "",     "",         id="browser_reviewer"),
+]
+
+
 @pytest.mark.asyncio
 class Tests:
 
@@ -37,31 +46,20 @@ class Tests:
         assert r.status_code == 200
         return r.json()["data"]
 
-    async def test_planning_mode_returns_plan_md(self, cli):
-        data = await self._assert_data(await self._preview(cli, mode="planning"))
-        assert data["output_contract"]["expected_artifacts"] == ["plan.md"]
-        assert data["prompt_template"]["template_id"] == "planning_prompt_v1"
-        assert data["task_context"]["mode"] == "planning"
-
-    async def test_patch_generation_returns_patch_diff(self, cli):
-        data = await self._assert_data(await self._preview(cli, mode="patch_generation"))
-        assert "patch.diff" in data["output_contract"]["expected_artifacts"]
-        assert data["output_contract"]["patch_format"] == "unified_diff"
-
-    async def test_review_mode_returns_review_md(self, cli):
-        data = await self._assert_data(await self._preview(cli, mode="review"))
-        assert "review.md" in data["output_contract"]["expected_artifacts"]
-        assert data["prompt_template"]["template_id"] == "review_prompt_v1"
-
-    async def test_risk_mode_returns_risk_report_json(self, cli):
-        data = await self._assert_data(await self._preview(cli, mode="risk"))
-        assert "risk_report.json" in data["output_contract"]["expected_artifacts"]
-        assert data["output_contract"]["risk_format"] == "json"
-
-    async def test_browser_reviewer_mode(self, cli):
-        data = await self._assert_data(await self._preview(cli, mode="browser_reviewer"))
-        assert "browser_ai_review.json" in data["output_contract"]["expected_artifacts"]
-        assert data["prompt_template"]["template_id"] == "browser_reviewer_prompt_v1"
+    @pytest.mark.parametrize(
+        "mode,expected_artifacts,template_id,patch_format,risk_format",
+        MODE_CASES,
+    )
+    async def test_mode_contract(self, cli, mode, expected_artifacts, template_id, patch_format, risk_format):
+        data = await self._assert_data(await self._preview(cli, mode=mode))
+        oc = data["output_contract"]
+        assert oc["expected_artifacts"] == expected_artifacts
+        assert data["prompt_template"]["template_id"] == template_id
+        assert data["task_context"]["mode"] == mode
+        if patch_format:
+            assert oc["patch_format"] == patch_format
+        if risk_format:
+            assert oc["risk_format"] == risk_format
 
     async def test_unknown_mode_returns_422(self, cli):
         r = await self._preview(cli, mode="invalid_mode_xyz")
@@ -120,8 +118,7 @@ class Tests:
         r = await self._preview(cli)
         assert r.status_code == 200
         packet_str = str(r.json())
-        dangerous = ["OPENAI_API_KEY", "sk-", "-----BEGIN"]
-        for item in dangerous:
+        for item in ["OPENAI_API_KEY", "sk-", "-----BEGIN", "REDACTED"]:
             assert item not in packet_str, f"packet contains {item}"
 
     async def test_malformed_map_propagates_error(self, cli, monkeypatch, tmp_path):
@@ -152,12 +149,6 @@ class Tests:
         assert len(pt["allowed_model_tiers"]) > 0
         assert len(pt["safety_notes"]) > 0
 
-    async def test_packet_contains_no_secret_values(self, cli):
-        r = await self._preview(cli)
-        assert r.status_code == 200
-        raw = str(r.json())
-        assert "REDACTED" not in raw
-
     async def test_runtime_evidence_all_not_provided(self, cli):
         data = await self._assert_data(await self._preview(cli))
         re = data["runtime_evidence"]
@@ -175,6 +166,12 @@ class Tests:
         assert len(pb["completed_scope"]) > 0
         assert len(pb["known_non_goals"]) > 0
 
+    async def test_forbidden_files_in_task_context(self, cli):
+        data = await self._assert_data(await self._preview(cli))
+        tc = data["task_context"]
+        assert ".env" in tc["forbidden_files"]
+        assert len(tc["forbidden_files"]) > 0
+
     async def test_all_modes_have_templates(self, cli):
         for mode in ["planning", "patch_generation", "review", "risk", "browser_reviewer"]:
             data = await self._assert_data(await self._preview(cli, mode=mode))
@@ -182,11 +179,11 @@ class Tests:
             assert pt["template_id"] == f"{mode}_prompt_v1"
             assert pt["mode"] == mode
 
-    async def test_forbidden_files_in_task_context(self, cli):
-        data = await self._assert_data(await self._preview(cli))
-        tc = data["task_context"]
-        assert ".env" in tc["forbidden_files"]
-        assert len(tc["forbidden_files"]) > 0
+    async def test_packet_contains_no_secret_values(self, cli):
+        r = await self._preview(cli)
+        assert r.status_code == 200
+        raw = str(r.json())
+        assert "REDACTED" not in raw
 
 
 class TestStaticAnalysis:
@@ -225,8 +222,7 @@ class TestStaticAnalysis:
         src = self._get_source()
         with open(src, encoding="utf-8") as f:
             code = f.read()
-        dangerous = ["OPENAI_API_KEY"]
-        for item in dangerous:
+        for item in ["OPENAI_API_KEY"]:
             assert item not in code, f"service contains dangerous reference: {item}"
         assert "getenv" not in code, "service calls os.getenv"
         assert 'environ["' not in code and "environ.get(" not in code, "service reads os.environ"
