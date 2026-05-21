@@ -5,7 +5,7 @@
 AI 自动代码交付平台 — Agent 编排、AI Provider、Patch Sandbox、Sandbox Gate、Review Packet Automation。
 
 当前版本：**v0.4.0**
-master commit：`fc3bd09079abee72f011dc5a9d6a2014b500a58c`
+master commit：`9e36052e6fc94640a60d6c8868dfe926d8e04f9b`
 tag：`v0.4.0`
 
 ## Directory Structure
@@ -41,6 +41,12 @@ tag：`v0.4.0`
 │   │   ├── v0.2.0.md
 │   │   ├── v0.3.0.md
 │   │   └── v0.4.0.md
+│   ├── design/
+│   │   └── v0.4-browser-ai-provider.md
+│   ├── project-map/
+│   │   ├── codebase-index.md
+│   │   ├── repository-map.json
+│   │   └── update-policy.md
 │   └── harness/
 │       └── ai-development-harness.md
 ├── scripts/
@@ -57,7 +63,7 @@ tag：`v0.4.0`
 | v0.2.0 | Agent core + approval + orchestration — frozen |
 | v0.3.0 | AI Provider + Output Governance + TaskDetail Display — frozen |
 | v0.4.0 | Patch Sandbox + Sandbox Gate + Review Packet — frozen |
-| Next | TBD |
+| v0.4.0 S6-S7 | Browser AI Provider Design + Project Map & Codebase Index — in progress |
 
 ## Safety Boundaries
 
@@ -169,6 +175,7 @@ Every PR must include the following fields in its body:
 | shell/subprocess executed? | ✅ | Must be "no" |
 | secret_ref read? | ✅ | Must be "no" |
 | GitHub reference survey | ✅ for larger features | Search keywords, ref projects, borrowed points, rejected points, no-copy declaration |
+| Project Map updated? | ✅ | yes / no / not_needed — see docs/project-map/update-policy.md |
 | Safety boundary self-check | ✅ | |
 | Known risks / unfinished | ✅ | |
 

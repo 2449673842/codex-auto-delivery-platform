@@ -1,0 +1,561 @@
+{
+  "version": "v0.4.0",
+  "generated_at": "2026-05-21",
+  "root": ".",
+  "modules": [
+    {
+      "name": "core",
+      "type": "backend_core",
+      "description": "FastAPI app entry, configuration, database, enums",
+      "files": {
+        "entry": ["backend/app/main.py"],
+        "config": ["backend/app/config.py"],
+        "database": ["backend/app/database.py"],
+        "enums": ["backend/app/enums.py"]
+      },
+      "api": ["GET /api/health"],
+      "safety_notes": ["enums.py contains state machine whitelists", "main.py router registration order matters"]
+    },
+    {
+      "name": "project",
+      "type": "backend_feature",
+      "description": "Project CRUD and configuration management",
+      "files": {
+        "router": ["backend/app/routers/projects.py"],
+        "service": ["backend/app/services/project_service.py"],
+        "schema": ["backend/app/schemas/project.py"],
+        "model": ["backend/app/models/project.py"],
+        "tests": ["backend/tests/test_mvp_full.py"]
+      },
+      "api": [
+        "GET /api/projects",
+        "POST /api/projects",
+        "GET /api/projects/{id}",
+        "PATCH /api/projects/{id}",
+        "DELETE /api/projects/{id}",
+        "GET /api/projects/{id}/branches",
+        "POST /api/projects/{id}/sync-git-info"
+      ],
+      "safety_notes": ["Project.root_path must not be accessed"]
+    },
+    {
+      "name": "task",
+      "type": "backend_feature",
+      "description": "Task CRUD with 10-state machine (draft→ticket_ready→dispatched→result_submitted→reviewing→approved/rejected/changes_requested/human_required→archived)",
+      "files": {
+        "router": ["backend/app/routers/tasks.py"],
+        "service": ["backend/app/services/task_service.py"],
+        "schema": ["backend/app/schemas/task.py"],
+        "model": ["backend/app/models/task.py"],
+        "tests": ["backend/tests/test_mvp_full.py"]
+      },
+      "api": [
+        "GET /api/tasks",
+        "POST /api/tasks",
+        "GET /api/tasks/{id}",
+        "DELETE /api/tasks/{id}",
+        "POST /api/tasks/{id}/generate-ticket",
+        "POST /api/tasks/{id}/dispatch",
+        "POST /api/tasks/{id}/submit-result",
+        "POST /api/tasks/{id}/start-review",
+        "POST /api/tasks/{id}/approve",
+        "POST /api/tasks/{id}/reject",
+        "POST /api/tasks/{id}/request-changes",
+        "POST /api/tasks/{id}/require-human-approval",
+        "POST /api/tasks/{id}/archive",
+        "POST /api/tasks/{id}/create-pr",
+        "POST /api/tasks/{id}/trigger-ci",
+        "POST /api/tasks/{id}/trigger-deploy"
+      ],
+      "safety_notes": ["archived guard prevents writes after archive", "state transition whitelist in enums.py"]
+    },
+    {
+      "name": "task_event",
+      "type": "backend_feature",
+      "description": "Event audit trail for task state changes",
+      "files": {
+        "router": ["backend/app/routers/events.py"],
+        "service": ["backend/app/services/event_service.py"],
+        "schema": ["backend/app/schemas/event.py"],
+        "model": ["backend/app/models/task_event.py"]
+      },
+      "api": ["GET /api/tasks/{id}/events"],
+      "safety_notes": ["events are append-only, never modified or deleted"]
+    },
+    {
+      "name": "task_artifact",
+      "type": "backend_feature",
+      "description": "Artifact upload/retrieve/delete associated with tasks",
+      "files": {
+        "router": ["backend/app/routers/artifacts.py"],
+        "service": ["backend/app/services/artifact_service.py"],
+        "schema": ["backend/app/schemas/artifact.py"],
+        "model": ["backend/app/models/task_artifact.py"]
+      },
+      "api": [
+        "POST /api/tasks/{id}/artifacts",
+        "GET /api/tasks/{id}/artifacts",
+        "GET /api/tasks/{id}/artifacts/{art_id}",
+        "DELETE /api/tasks/{id}/artifacts/{art_id}"
+      ],
+      "safety_notes": ["archived guard prevents new artifacts", "28 artifact types in enums.py"]
+    },
+    {
+      "name": "human_review",
+      "type": "backend_feature",
+      "description": "Human review submission on tasks",
+      "files": {
+        "router": ["backend/app/routers/reviews.py"],
+        "service": ["backend/app/services/review_service.py"],
+        "schema": ["backend/app/schemas/review.py"],
+        "model": ["backend/app/models/review_record.py"]
+      },
+      "api": ["GET /api/tasks/{id}/reviews", "POST /api/tasks/{id}/reviews"],
+      "safety_notes": []
+    },
+    {
+      "name": "agent_profile",
+      "type": "backend_feature",
+      "description": "AI agent profile CRUD (name, provider, model, secret_ref, enabled)",
+      "files": {
+        "router": ["backend/app/routers/agents.py"],
+        "service": ["backend/app/services/agent_profile_service.py"],
+        "schema": ["backend/app/schemas/agent_profile.py"],
+        "model": ["backend/app/models/agent_profile.py"],
+        "tests": ["backend/tests/test_v02_agent_core.py"]
+      },
+      "api": [
+        "GET /api/agents",
+        "POST /api/agents",
+        "GET /api/agents/{id}",
+        "PATCH /api/agents/{id}",
+        "DELETE /api/agents/{id}"
+      ],
+      "safety_notes": ["secret_ref must not be read or exposed", "agent_type and provider in enums.py"]
+    },
+    {
+      "name": "agent_run",
+      "type": "backend_feature",
+      "description": "Agent execution run with 6-state machine (queued→running→succeeded/failed/cancelled)",
+      "files": {
+        "router": ["backend/app/routers/agent_runs.py"],
+        "service": ["backend/app/services/agent_run_service.py"],
+        "schema": ["backend/app/schemas/agent_run.py"],
+        "model": ["backend/app/models/agent_run.py"]
+      },
+      "api": [
+        "POST /api/tasks/{id}/agent-runs",
+        "GET /api/tasks/{id}/agent-runs",
+        "GET /api/tasks/{id}/agent-runs/{run_id}",
+        "PATCH /api/tasks/{id}/agent-runs/{run_id}",
+        "POST /api/tasks/{id}/agent-runs/{run_id}/submit-result"
+      ],
+      "safety_notes": ["result artifacts must pass governance", "raw_result_json may contain secrets"]
+    },
+    {
+      "name": "agent_review",
+      "type": "backend_feature",
+      "description": "AI-to-AI review of agent run outputs",
+      "files": {
+        "router": ["backend/app/routers/agent_reviews.py"],
+        "service": ["backend/app/services/agent_review_service.py"],
+        "schema": ["backend/app/schemas/agent_review.py"],
+        "model": ["backend/app/models/agent_review.py"],
+        "tests": ["backend/tests/test_v02_agent_core.py"]
+      },
+      "api": [
+        "POST /api/tasks/{id}/agent-runs/{run_id}/review",
+        "GET /api/tasks/{id}/agent-reviews"
+      ],
+      "safety_notes": ["AI review does not replace human approval", "advisory only"]
+    },
+    {
+      "name": "approval_policy",
+      "type": "backend_feature",
+      "description": "Approval policy CRUD (risk threshold, test/sonar/security requirements, exemptions)",
+      "files": {
+        "router": ["backend/app/routers/approval_policies.py"],
+        "service": ["backend/app/services/approval_policy_service.py"],
+        "schema": ["backend/app/schemas/approval_policy.py"],
+        "model": ["backend/app/models/approval_policy.py"],
+        "tests": ["backend/tests/test_v02_approval_core.py"]
+      },
+      "api": [
+        "GET /api/approval-policies",
+        "POST /api/approval-policies",
+        "GET /api/approval-policies/{id}",
+        "PATCH /api/approval-policies/{id}",
+        "DELETE /api/approval-policies/{id}"
+      ],
+      "safety_notes": ["policies control auto-approve gate", "forbid_auto_merge_main and forbid_deploy_prod are critical flags"]
+    },
+    {
+      "name": "approval_decision",
+      "type": "backend_feature",
+      "description": "Approval evaluation engine: risk assessment + policy matching + auto-approve",
+      "files": {
+        "router": ["backend/app/routers/approval.py"],
+        "service": ["backend/app/services/approval_service.py"],
+        "schema": ["backend/app/schemas/approval_decision.py"],
+        "model": ["backend/app/models/approval_decision.py"],
+        "tests": ["backend/tests/test_v02_approval_core.py"]
+      },
+      "api": [
+        "POST /api/tasks/{id}/evaluate-approval",
+        "POST /api/tasks/{id}/auto-approve",
+        "GET /api/tasks/{id}/approval-decisions"
+      ],
+      "safety_notes": ["human_required cannot be auto-approved", "high/critical risk blocks auto-approve", "policy must be matched before auto-approve"]
+    },
+    {
+      "name": "orchestration",
+      "type": "backend_feature",
+      "description": "Auto-orchestration engine: state machine executor driving task through agent runs, reviews, approvals",
+      "files": {
+        "router": ["backend/app/routers/orchestration.py"],
+        "service": ["backend/app/services/orchestration_service.py"],
+        "schema": ["backend/app/schemas/orchestration.py"],
+        "tests": ["backend/tests/test_v02_orchestration.py"]
+      },
+      "api": [
+        "GET /api/tasks/{id}/orchestration/status",
+        "POST /api/tasks/{id}/orchestration/step",
+        "POST /api/tasks/{id}/orchestration/run"
+      ],
+      "safety_notes": ["calls ai_provider_service which may call external APIs", "archived/human_required blocks orchestration"]
+    },
+    {
+      "name": "ai_provider",
+      "type": "backend_feature",
+      "description": "AI Provider dispatch: abstract base, dispatch service, SandboxProvider, OpenAIProvider",
+      "files": {
+        "service_base": ["backend/app/services/ai_provider_base.py"],
+        "service_dispatch": ["backend/app/services/ai_provider_service.py"],
+        "provider_sandbox": ["backend/app/services/sandbox_provider.py"],
+        "provider_openai": ["backend/app/services/openai_provider.py"],
+        "schema": ["backend/app/schemas/ai_provider.py"],
+        "tests": ["backend/tests/test_v03_ai_provider.py", "backend/tests/test_v03_real_ai_provider.py"]
+      },
+      "api": [],
+      "safety_notes": ["OpenAIProvider reads OPENAI_API_KEY from env only", "SandboxProvider is simulated (no external calls)", "output must pass governance"]
+    },
+    {
+      "name": "ai_output_governance",
+      "type": "backend_feature",
+      "description": "AI output validation, secret redaction, forbidden path detection, patch diff validation",
+      "files": {
+        "service": ["backend/app/services/ai_output_governance_service.py"],
+        "tests": ["backend/tests/test_v03_ai_output_governance.py", "backend/tests/test_v03_ai_output_governance_integration.py"]
+      },
+      "api": [],
+      "safety_notes": ["7 secret patterns redacted", "fnmatch forbidden path blocking", "must run after every AI provider call"]
+    },
+    {
+      "name": "risk_assessment",
+      "type": "backend_feature",
+      "description": "Risk assessment: keyword analysis, secret detection, test/sonar/confidence scoring",
+      "files": {
+        "service": ["backend/app/services/risk_assessment_service.py"]
+      },
+      "api": [],
+      "safety_notes": ["pure function, no DB access", "risk_level determines auto-approve eligibility"]
+    },
+    {
+      "name": "ticket_renderer",
+      "type": "backend_feature",
+      "description": "Markdown ticket generation from task + project data",
+      "files": {
+        "service": ["backend/app/services/ticket_renderer.py"]
+      },
+      "api": [],
+      "safety_notes": []
+    },
+    {
+      "name": "code_context",
+      "type": "backend_feature",
+      "description": "Code context upload/retrieve as TaskArtifacts (JSON bundle with secret redaction)",
+      "files": {
+        "router": ["backend/app/routers/code_context.py"],
+        "service": ["backend/app/services/code_context_service.py"],
+        "schema": ["backend/app/schemas/code_context.py"],
+        "tests": ["backend/tests/test_v04_ai_coding_sandbox.py"]
+      },
+      "api": ["POST /api/tasks/{id}/code-context", "GET /api/tasks/{id}/code-context"],
+      "safety_notes": ["uses ai_output_governance for secret redaction", "stored as TaskArtifact"]
+    },
+    {
+      "name": "patch_sandbox",
+      "type": "backend_feature",
+      "description": "In-memory unified diff application on virtual files from code context",
+      "files": {
+        "router": ["backend/app/routers/patch_sandbox.py"],
+        "service": ["backend/app/services/patch_apply_sandbox_service.py"],
+        "schema": ["backend/app/schemas/patch_sandbox.py"],
+        "tests": ["backend/tests/test_v04_ai_coding_sandbox.py"]
+      },
+      "api": [
+        "POST /api/tasks/{id}/agent-runs/{run_id}/sandbox/apply-patch",
+        "GET /api/tasks/{id}/sandbox/patch-results"
+      ],
+      "safety_notes": ["forbidden path detection", "secret detection", "in-memory only, no real file system writes"]
+    },
+    {
+      "name": "sandbox_gate",
+      "type": "backend_feature",
+      "description": "Sandbox approval gate with 10 security checks",
+      "files": {
+        "router": ["backend/app/routers/sandbox_gate.py"],
+        "service": ["backend/app/services/sandbox_approval_gate_service.py"],
+        "schema": ["backend/app/schemas/sandbox_gate.py"],
+        "tests": ["backend/tests/test_sandbox_gate.py"]
+      },
+      "api": [
+        "GET /api/tasks/{id}/sandbox/gate",
+        "POST /api/tasks/{id}/sandbox/evaluate-gate"
+      ],
+      "safety_notes": ["10 security checks: archived, no_result, not_applied, forbidden_path, secret, stale, bad_run, risk, human_required"]
+    },
+    {
+      "name": "review_packet",
+      "type": "backend_feature",
+      "description": "Stateless PR review packet with MockGitHub/MockSonar connectors",
+      "files": {
+        "router": ["backend/app/routers/review_packet.py"],
+        "service": ["backend/app/services/review_packet_service.py"],
+        "schema": ["backend/app/schemas/review_packet.py"],
+        "tests": ["backend/tests/test_review_packet.py"]
+      },
+      "api": ["POST /api/review-packets/preview"],
+      "safety_notes": ["MockGitHub/MockSonar only", "no real external API calls", "22 check rules"]
+    },
+    {
+      "name": "stubs",
+      "type": "backend_feature",
+      "description": "Stub implementations for PR/CI/Deploy (return 'not implemented')",
+      "files": {
+        "service_pr": ["backend/app/services/pr_builder.py"],
+        "service_ci": ["backend/app/services/ci_client.py"],
+        "service_deploy": ["backend/app/services/deploy_hook.py"]
+      },
+      "api": [],
+      "safety_notes": ["stubs only — no real operations", "do not implement without explicit plan"]
+    },
+    {
+      "name": "frontend_core",
+      "type": "frontend_core",
+      "description": "Vue 3 app bootstrap, router, types, API client, stores, styles",
+      "files": {
+        "entry": ["frontend/src/main.ts"],
+        "app": ["frontend/src/App.vue"],
+        "router": ["frontend/src/router/index.ts"],
+        "types": ["frontend/src/types/agent.ts"],
+        "api_service": ["frontend/src/services/api.ts"],
+        "agent_service": ["frontend/src/services/agentService.ts"],
+        "stores": ["frontend/src/stores/projectStore.ts", "frontend/src/stores/taskStore.ts"],
+        "styles": ["frontend/src/styles/base.css"]
+      },
+      "api": [],
+      "safety_notes": []
+    },
+    {
+      "name": "frontend_pages",
+      "type": "frontend_feature",
+      "description": "Vue 3 page components (8 pages)",
+      "files": {
+        "pages": [
+          "frontend/src/pages/DashboardPage.vue",
+          "frontend/src/pages/ProjectListPage.vue",
+          "frontend/src/pages/ProjectConfigPage.vue",
+          "frontend/src/pages/TaskListPage.vue",
+          "frontend/src/pages/TaskCreatePage.vue",
+          "frontend/src/pages/TaskDetailPage.vue",
+          "frontend/src/pages/AgentListPage.vue",
+          "frontend/src/pages/ApprovalPolicyPage.vue"
+        ]
+      },
+      "api": [],
+      "safety_notes": ["TaskDetailPage.vue is the most complex (906 lines)"]
+    },
+    {
+      "name": "frontend_components",
+      "type": "frontend_feature",
+      "description": "Shared Vue 3 components (6 components)",
+      "files": {
+        "components": [
+          "frontend/src/components/StatusBadge.vue",
+          "frontend/src/components/DiffViewer.vue",
+          "frontend/src/components/EventTimeline.vue",
+          "frontend/src/components/ReviewPanel.vue",
+          "frontend/src/components/ArtifactTab.vue",
+          "frontend/src/components/TicketPreview.vue"
+        ]
+      },
+      "api": [],
+      "safety_notes": []
+    },
+    {
+      "name": "docs_releases",
+      "type": "docs",
+      "description": "Release notes for v0.1.0 through v0.4.0",
+      "files": {
+        "release_notes": [
+          "docs/releases/v0.1.0.md",
+          "docs/releases/v0.2.0.md",
+          "docs/releases/v0.3.0.md",
+          "docs/releases/v0.4.0.md"
+        ]
+      },
+      "api": [],
+      "safety_notes": []
+    },
+    {
+      "name": "docs_design",
+      "type": "docs",
+      "description": "Design documents for future features",
+      "files": {
+        "design_docs": [
+          "docs/design/v0.4-browser-ai-provider.md",
+          "docs/design/v0.4-project-map-codebase-index.md"
+        ]
+      },
+      "api": [],
+      "safety_notes": ["design only — no implementation"]
+    },
+    {
+      "name": "docs_harness",
+      "type": "docs",
+      "description": "AI development harness documentation",
+      "files": {
+        "harness": ["docs/harness/ai-development-harness.md"]
+      },
+      "api": [],
+      "safety_notes": []
+    },
+    {
+      "name": "docs_project_map",
+      "type": "docs",
+      "description": "Project Map & Codebase Index artifacts",
+      "files": {
+        "project_map": [
+          "docs/project-map/codebase-index.md",
+          "docs/project-map/repository-map.json",
+          "docs/project-map/update-policy.md"
+        ]
+      },
+      "api": [],
+      "safety_notes": ["must be updated when new modules/routers/services/schemas/models/tests are added"]
+    },
+    {
+      "name": "scripts",
+      "type": "scripts",
+      "description": "Local verification scripts",
+      "files": {
+        "scripts": ["scripts/ai_verify.sh"]
+      },
+      "api": [],
+      "safety_notes": ["dry-run mode by default", "no dangerous commands", "no real file writes"]
+    },
+    {
+      "name": "agents_config",
+      "type": "docs",
+      "description": "AI agent project rules (safety, PR format, DoD, review process)",
+      "files": {
+        "config": ["AGENTS.md"]
+      },
+      "api": [],
+      "safety_notes": ["contains all safety boundaries", "PR body requirements", "AI1 self-restrictions"]
+    }
+  ],
+  "file_roles": {
+    "backend/app/main.py": ["FastAPI app entry", "CORS middleware", "router registration (17 routers)"],
+    "backend/app/config.py": ["Settings dataclass", "CODEX_* env var reading"],
+    "backend/app/database.py": ["SQLAlchemy async engine", "Base declarative base", "WAL mode PRAGMAs", "init_db auto-create tables"],
+    "backend/app/enums.py": ["TaskStatus 10-state machine", "ArtifactType (28)", "EventType (35)", "AgentType", "AgentProvider", "AgentRunStatus", "RiskLevel", "transition whitelists"],
+
+    "backend/app/services/ai_provider_base.py": ["AiProviderBase abstract class with execute(run, code_context)"],
+    "backend/app/services/ai_provider_service.py": ["dispatch_agent_run", "governance integration", "artifact creation"],
+    "backend/app/services/sandbox_provider.py": ["SandboxProvider (simulated)", "generates template outputs"],
+    "backend/app/services/openai_provider.py": ["OpenAIProvider (real GPT-4o-mini via httpx)", "reads OPENAI_API_KEY env"],
+    "backend/app/services/ai_output_governance_service.py": ["validate_agent_run_result", "validate_patch_diff", "parse_review_result", "check_risk_report", "redact_secrets", "build_trace_json"],
+    "backend/app/services/risk_assessment_service.py": ["assess_risk — keyword/secret/test/sonar/confidence scoring"],
+    "backend/app/services/code_context_service.py": ["set_code_context (JSON bundle artifact)", "get_code_context", "load_code_context_dict"],
+    "backend/app/services/patch_apply_sandbox_service.py": ["apply_patch_in_sandbox (in-memory)", "parse_unified_diff", "_apply_hunk"],
+    "backend/app/services/sandbox_approval_gate_service.py": ["evaluate_sandbox_gate (10 checks)", "evaluate_and_record_gate"],
+    "backend/app/services/review_packet_service.py": ["generate_review_packet_preview (22 rules)", "MockGitHub/MockSonar data"],
+    "backend/app/services/orchestration_service.py": ["get_orchestration_status", "_decide_next_action", "orchestration_step", "orchestration_run"],
+    "backend/app/services/approval_service.py": ["evaluate_approval (risk+policy+decision)", "auto_approve"],
+    "backend/app/services/task_service.py": ["CRUD + _transition core state machine", "generate_ticket/dispatch/submit_result/start_review/approve/reject/request_changes/require_human_approval/archive"],
+
+    "frontend/src/pages/TaskDetailPage.vue": ["most complex page (906 lines)", "status actions, agent runs, code context, sandbox, gate, reviews, artifacts, approval"],
+    "frontend/src/services/agentService.ts": ["all API client functions for backend services"],
+    "frontend/src/types/agent.ts": ["all TypeScript interfaces + constants + enums"],
+
+    "AGENTS.md": ["AI agent project rules", "safety boundaries", "verification commands", "PR body requirements", "mastermind review rules", "Definition of Done", "common failure modes"]
+  },
+  "task_hints": [
+    {
+      "task_type": "add a new backend router",
+      "look_at": ["routers/", "services/", "schemas/", "models/", "tests/", "backend/app/main.py"],
+      "what_to_do": ["create router file", "create service file", "create schema if needed", "register in main.py", "write tests", "update Project Map"]
+    },
+    {
+      "task_type": "add a new API endpoint to existing router",
+      "look_at": ["relevant router", "relevant service", "relevant schema", "relevant tests"],
+      "what_to_do": ["add endpoint to router", "add function to service", "add schema if new request/response", "write tests", "update Project Map api list"]
+    },
+    {
+      "task_type": "add a new enum value",
+      "look_at": ["backend/app/enums.py"],
+      "what_to_do": ["add enum value", "update transition whitelist if needed", "update model/schema/service if references", "write tests", "update Project Map"]
+    },
+    {
+      "task_type": "add a new state to task machine",
+      "look_at": ["backend/app/enums.py", "backend/app/models/task.py", "backend/app/services/task_service.py", "backend/app/schemas/task.py", "backend/tests/"],
+      "what_to_do": ["add state enum", "add transition whitelist entries", "update _transition", "update schemas", "write tests"]
+    },
+    {
+      "task_type": "add a new test file",
+      "look_at": ["backend/tests/", "existing test patterns"],
+      "what_to_do": ["follow conftest.py pattern", "match existing test style", "cover success + failure + safety", "update Project Map"]
+    },
+    {
+      "task_type": "add a new frontend page",
+      "look_at": ["frontend/src/pages/", "frontend/src/router/index.ts", "frontend/src/types/agent.ts"],
+      "what_to_do": ["create page component", "add route", "add types if needed", "update Project Map"]
+    },
+    {
+      "task_type": "update safety boundary",
+      "look_at": ["AGENTS.md"],
+      "what_to_do": ["add/update safety rule", "update Project Map safety notes"]
+    },
+    {
+      "task_type": "find all files related to a feature (e.g., review_packet)",
+      "look_at": ["modules list in repository-map.json"],
+      "what_to_do": ["find module by name", "read router/service/schema/test/list", "navigate accordingly"]
+    },
+    {
+      "task_type": "understand the full task lifecycle",
+      "look_at": ["backend/app/enums.py", "backend/app/services/task_service.py", "backend/app/services/orchestration_service.py", "backend/app/services/approval_service.py"],
+      "what_to_do": ["read state machine enums", "read _transition", "read _decide_next_action", "read evaluate_approval"]
+    },
+    {
+      "task_type": "review PR for safety",
+      "look_at": ["changed files list", "AGENTS.md safety boundaries", "Project Map update-policy.md"],
+      "what_to_do": ["check forbidden paths", "check secret patterns", "check real API calls", "check Project Map staleness"]
+    }
+  ],
+  "safety_boundary_files": {
+    "must_not_modify": [],
+    "handle_with_care": [
+      "backend/app/main.py",
+      "backend/app/enums.py",
+      "backend/app/models/task.py",
+      "backend/app/services/task_service.py",
+      "backend/app/services/orchestration_service.py",
+      "backend/app/services/sandbox_approval_gate_service.py",
+      "backend/app/services/review_packet_service.py",
+      "backend/app/services/ai_output_governance_service.py",
+      "AGENTS.md"
+    ]
+  }
+}
