@@ -65,77 +65,103 @@ def _get_tests(module: dict) -> list[str]:
     return sorted(set(tests))
 
 
-def preview(body: ContextSelectorRequest) -> ContextSelectorResponse:
-    data = _load_repository_map()
-    modules = data.get("modules", [])
-    hints = data.get("task_hints", [])
-    goal_lower = body.task_goal.lower().strip() if body.task_goal else ""
-    goal_tokens = set(goal_lower.split()) if goal_lower else set()
+def _parse_goal(task_goal: str) -> set:
+    if not task_goal:
+        return set()
+    return set(task_goal.lower().strip().split())
 
-    matched_module_objs: list[dict] = []
-    used_hints: list[str] = []
 
-    # 1. Exact module_name match
-    if body.module_name:
-        for m in modules:
-            if m.get("name", "").lower() == body.module_name.lower():
-                matched_module_objs.append(m)
+def _match_by_module_name(modules: list[dict], module_name: str) -> list[dict]:
+    if not module_name:
+        return []
+    target = module_name.lower()
+    for m in modules:
+        if m.get("name", "").lower() == target:
+            return [m]
+    return []
+
+
+def _find_module_by_look_at(modules: list[dict], look_at: str) -> list[dict]:
+    found = []
+    low = look_at.lower()
+    for m in modules:
+        if low in m.get("name", "").lower():
+            found.append(m)
+            continue
+        for path_list in m.get("files", {}).values():
+            if isinstance(path_list, list) and any(low in p.lower() for p in path_list):
+                found.append(m)
                 break
+    return found
 
-    # 2. task_type match against task_hints
-    if body.task_type:
-        for h in hints:
-            if h.get("task_type", "").lower() == body.task_type.lower():
-                used_hints.append(h["task_type"])
-                for look_at in h.get("look_at", []):
-                    for m in modules:
-                        m_name = m.get("name", "").lower()
-                        if look_at.lower() in m_name:
-                            if m not in matched_module_objs:
-                                matched_module_objs.append(m)
-                            continue
-                        for path_list in m.get("files", {}).values():
-                            if not isinstance(path_list, list):
-                                continue
-                            if any(look_at.lower() in p.lower() for p in path_list):
-                                if m not in matched_module_objs:
-                                    matched_module_objs.append(m)
 
-    # 3. task_goal keyword matching
-    if goal_tokens and not body.module_name:
-        for m in modules:
-            name = m.get("name", "").lower()
-            desc = m.get("description", "").lower()
-            apis = " ".join(m.get("api", [])).lower()
-            name_parts = set(name.replace("_", " ").split())
-            if goal_tokens & name_parts:
-                if m not in matched_module_objs:
-                    matched_module_objs.append(m)
-                continue
-            if goal_tokens & set(name.split()):
-                if m not in matched_module_objs:
-                    matched_module_objs.append(m)
-                continue
-            if any(t in desc or t in apis for t in goal_tokens):
-                if m not in matched_module_objs:
-                    matched_module_objs.append(m)
+def _match_by_task_type(
+    modules: list[dict], hints: list[dict], task_type: str,
+) -> tuple[list[dict], list[str]]:
+    matched = []
+    used_hints = []
+    if not task_type:
+        return matched, used_hints
+    low = task_type.lower()
+    for h in hints:
+        if h.get("task_type", "").lower() == low:
+            used_hints.append(h["task_type"])
+            for look_at in h.get("look_at", []):
+                matched.extend(_find_module_by_look_at(modules, look_at))
+    return matched, used_hints
 
-    # 4. Deduplicate by name
+
+def _keyword_match(module: dict, tokens: set) -> bool:
+    name = module.get("name", "").lower()
+    desc = module.get("description", "").lower()
+    apis = " ".join(module.get("api", [])).lower()
+    name_parts = set(name.replace("_", " ").split())
+    if tokens & name_parts:
+        return True
+    if tokens & set(name.split()):
+        return True
+    return any(t in desc or t in apis for t in tokens)
+
+
+def _match_by_task_goal(modules: list[dict], tokens: set) -> list[dict]:
+    if not tokens:
+        return []
+    return [m for m in modules if _keyword_match(m, tokens)]
+
+
+def _deduplicate(modules: list[dict]) -> list[dict]:
     seen = set()
-    unique_modules: list[dict] = []
-    for m in matched_module_objs:
+    result = []
+    for m in modules:
         n = m.get("name", "")
         if n not in seen:
             seen.add(n)
-            unique_modules.append(m)
+            result.append(m)
+    return result
 
-    # Build response
-    all_files: list[str] = []
-    all_tests: list[str] = []
-    all_apis: list[str] = []
-    all_safety: list[str] = []
 
-    for m in unique_modules:
+def _collect_hints(hints: list[dict], task_type: str, tokens: set) -> list[str]:
+    used = []
+    for h in hints:
+        ht = h.get("task_type", "").lower()
+        if task_type and ht == task_type.lower():
+            if ht not in used:
+                used.append(ht)
+        if tokens and any(t in ht for t in tokens):
+            if ht not in used:
+                used.append(ht)
+    return used
+
+
+def _build_response(
+    modules: list[dict], hints: list[dict], used_hints: list[str],
+    body: ContextSelectorRequest, tokens: set,
+) -> ContextSelectorResponse:
+    all_files = []
+    all_tests = []
+    all_apis = []
+    all_safety = []
+    for m in modules:
         all_files.extend(_get_all_files(m))
         all_tests.extend(_get_tests(m))
         all_apis.extend(m.get("api", []))
@@ -150,34 +176,39 @@ def preview(body: ContextSelectorRequest) -> ContextSelectorResponse:
             api=m.get("api", []),
             safety_notes=m.get("safety_notes", []),
         )
-        for m in unique_modules
+        for m in modules
     ]
 
-    # Also look for task_hints for task_type or goal
-    for h in hints:
-        ht = h.get("task_type", "").lower()
-        if body.task_type and ht == body.task_type.lower():
-            if ht not in used_hints:
-                used_hints.append(ht)
-        if goal_tokens and any(t in ht for t in goal_tokens):
-            if ht not in used_hints:
-                used_hints.append(ht)
-
-    warnings: list[str] = []
-    confidence = "high" if unique_modules else "low"
-
-    if not unique_modules:
+    all_hints_used = sorted(set(used_hints + _collect_hints(hints, body.task_type, tokens)))
+    warnings = []
+    if not modules:
         warnings.append("no_project_map_match")
 
-    response = ContextSelectorResponse(
+    return ContextSelectorResponse(
         matched_modules=matched_schemas,
         recommended_files=sorted(set(all_files)),
         recommended_tests=sorted(set(all_tests)),
         recommended_api=sorted(set(all_apis)),
         safety_notes=sorted(set(all_safety)),
-        task_hints_used=sorted(set(used_hints)),
-        confidence=confidence,
+        task_hints_used=all_hints_used,
+        confidence="high" if modules else "low",
         warnings=warnings,
     )
 
-    return response
+
+def preview(body: ContextSelectorRequest) -> ContextSelectorResponse:
+    data = _load_repository_map()
+    modules = data.get("modules", [])
+    hints = data.get("task_hints", [])
+    tokens = _parse_goal(body.task_goal)
+
+    matched = _match_by_module_name(modules, body.module_name)
+    task_matched, used = _match_by_task_type(modules, hints, body.task_type)
+    matched.extend(m for m in task_matched if m not in matched)
+
+    if not body.module_name and tokens:
+        goal_matched = _match_by_task_goal(modules, tokens)
+        matched.extend(m for m in goal_matched if m not in matched)
+
+    unique = _deduplicate(matched)
+    return _build_response(unique, hints, used, body, tokens)
