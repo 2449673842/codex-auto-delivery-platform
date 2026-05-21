@@ -141,16 +141,14 @@ def _deduplicate(modules: list[dict]) -> list[dict]:
 
 
 def _collect_hints(hints: list[dict], task_type: str, tokens: set) -> list[str]:
-    used = []
+    used = set()
     for h in hints:
         ht = h.get("task_type", "").lower()
         if task_type and ht == task_type.lower():
-            if ht not in used:
-                used.append(ht)
+            used.add(ht)
         if tokens and any(t in ht for t in tokens):
-            if ht not in used:
-                used.append(ht)
-    return used
+            used.add(ht)
+    return sorted(used)
 
 
 def _build_response(
