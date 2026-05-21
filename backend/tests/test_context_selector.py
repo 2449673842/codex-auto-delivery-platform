@@ -116,19 +116,16 @@ class Tests:
         assert any("review-packets" in a for a in data["recommended_api"])
 
     async def test_malformed_repository_map(self, cli, tmp_path):
-        orig = context_selector_service._REPOSITORY_MAP_PATH
         fake = tmp_path / "_test_malformed.json"
         fake.write_text("{bad json", encoding="utf-8")
+        orig = context_selector_service._REPOSITORY_MAP_PATH
         context_selector_service._REPOSITORY_MAP_PATH = fake
         context_selector_service._clear_cache()
-        try:
-            r = await cli.post("/api/context-selector/preview", json={
-                "task_goal": "anything",
-            })
-            assert r.status_code == 500
-        finally:
-            context_selector_service._REPOSITORY_MAP_PATH = orig
-            context_selector_service._clear_cache()
+        r = await cli.post("/api/context-selector/preview", json={
+            "task_goal": "anything",
+        })
+        assert r.status_code == 500
+        context_selector_service._REPOSITORY_MAP_PATH = orig
 
     async def test_endpoint_returns_200(self, cli):
         r = await cli.post("/api/context-selector/preview", json={
@@ -229,7 +226,7 @@ class Tests:
             "task_hints": []
         }
         """, encoding="utf-8")
-        context_selector_service._REPOSITORY_MAP_PATH = fake_map
+        monkeypatch.setattr(context_selector_service, "_REPOSITORY_MAP_PATH", fake_map)
         context_selector_service._clear_cache()
         r = await cli.post("/api/context-selector/preview", json={
             "module_name": "fake_module",
@@ -242,15 +239,11 @@ class Tests:
         assert not any("sandbox_gate" in n for n in names)
 
     async def test_does_not_glob_walk_or_scan(self, cli, monkeypatch):
-        orig_glob = context_selector_service.Path.glob
         monkeypatch.setattr(context_selector_service.Path, "glob",
                             lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("glob called")))
         monkeypatch.setattr(context_selector_service.Path, "rglob",
                             lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("rglob called")))
-        try:
-            r = await cli.post("/api/context-selector/preview", json={
-                "module_name": "review_packet",
-            })
-            assert r.status_code == 200
-        finally:
-            context_selector_service.Path.glob = orig_glob
+        r = await cli.post("/api/context-selector/preview", json={
+            "module_name": "review_packet",
+        })
+        assert r.status_code == 200
