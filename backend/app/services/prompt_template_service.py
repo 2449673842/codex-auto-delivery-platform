@@ -109,28 +109,29 @@ def _build_user_prompt(
     oc = context_packet.get("output_contract", {})
     tb = context_packet.get("token_budget", {})
 
+    _NONE = "- (none)"
+    _NOT_SPECIFIED = "(not specified)"
+
     matched = cs.get("matched_modules", [])
-    matched_summary = "\n".join(
+    matched_lines = [
         f"- {m.get('name', '?')} ({m.get('module_type', '?')})"
         for m in matched
-    ) if matched else "- (none)"
+    ]
+    matched_summary = "\n".join(matched_lines) if matched else _NONE
 
-    files = "\n".join(f"- {f}" for f in cs.get("recommended_files", [])) or "- (none)"
-    tests = "\n".join(f"- {t}" for t in cs.get("recommended_tests", [])) or "- (none)"
-    apis = "\n".join(f"- {a}" for a in cs.get("recommended_api", [])) or "- (none)"
-    safety = "\n".join(f"- {s}" for s in cs.get("safety_notes", [])) or "- (none)"
-    artifacts = "\n".join(f"- {a}" for a in oc.get("expected_artifacts", [])) or "- (none)"
+    def _fmt(items):
+        return "\n".join(f"- {x}" for x in items) if items else _NONE
 
     return (
-        f"## Task Goal\n{task_goal or '(not specified)'}\n\n"
-        f"## Task Type\n{task_type or '(not specified)'}\n\n"
-        f"## Module\n{module_name or '(not specified)'}\n\n"
+        f"## Task Goal\n{task_goal or _NOT_SPECIFIED}\n\n"
+        f"## Task Type\n{task_type or _NOT_SPECIFIED}\n\n"
+        f"## Module\n{module_name or _NOT_SPECIFIED}\n\n"
         f"## Matched Modules\n{matched_summary}\n\n"
-        f"## Recommended Files\n{files}\n\n"
-        f"## Recommended Tests\n{tests}\n\n"
-        f"## Recommended APIs\n{apis}\n\n"
-        f"## Safety Notes\n{safety}\n\n"
-        f"## Expected Artifacts\n{artifacts}\n\n"
+        f"## Recommended Files\n{_fmt(cs.get('recommended_files', []))}\n\n"
+        f"## Recommended Tests\n{_fmt(cs.get('recommended_tests', []))}\n\n"
+        f"## Recommended APIs\n{_fmt(cs.get('recommended_api', []))}\n\n"
+        f"## Safety Notes\n{_fmt(cs.get('safety_notes', []))}\n\n"
+        f"## Expected Artifacts\n{_fmt(oc.get('expected_artifacts', []))}\n\n"
         f"## Token Budget Summary\n"
         f"- Estimated context tokens: {tb.get('estimated_context_tokens', 0)}\n"
         f"- Budget status: {tb.get('budget_status', 'ok')}"
