@@ -21,7 +21,7 @@ def cli():
     return AsyncClient(transport=transport, base_url="https://x")
 
 
-def _fail(*args, **kwargs):
+def _blocked(*args, **kwargs):
     raise RuntimeError("should not be called")
 
 
@@ -116,15 +116,15 @@ class Tests:
         monkeypatch.setattr(prompt_template_service, "_estimate_tokens", original)
 
     async def test_no_project_root_path_access(self, cli, monkeypatch):
-        monkeypatch.setattr("pathlib.Path.glob", _fail)
-        monkeypatch.setattr("pathlib.Path.rglob", _fail)
+        monkeypatch.setattr("pathlib.Path.glob", _blocked)
+        monkeypatch.setattr("pathlib.Path.rglob", _blocked)
         r = await self._preview(cli)
         assert r.status_code == 200
 
     async def test_no_subprocess_or_os_system(self, cli, monkeypatch):
-        monkeypatch.setattr("subprocess.run", _fail)
-        monkeypatch.setattr("subprocess.Popen", _fail)
-        monkeypatch.setattr("os.system", _fail)
+        monkeypatch.setattr("subprocess.run", _blocked)
+        monkeypatch.setattr("subprocess.Popen", _blocked)
+        monkeypatch.setattr("os.system", _blocked)
         r = await self._preview(cli)
         assert r.status_code == 200
 
