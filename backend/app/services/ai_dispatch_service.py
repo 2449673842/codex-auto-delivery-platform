@@ -18,11 +18,11 @@ from app.schemas.ai_dispatch import (
     AiExecuteStep,
     SafetyGateInfo,
 )
+from app.schemas.ai_provider import AgentRunResult
 from app.services.ai_output_governance_service import redact_secrets, validate_patch_diff
 from app.services.ai_provider_service import (
     _apply_governance,
     _create_artifacts_from_result,
-    _execute_with_provider,
 )
 from app.services.event_service import create_event
 from app.services.prompt_template_service import preview as prompt_preview
@@ -88,6 +88,76 @@ def _redact_result_for_storage(result):
     return result
 
 
+def _extract_json_object(text: str) -> dict | None:
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _parse_dispatch_response(mode: str, response_text: str, ts: str) -> AgentRunResult:
+    words = len(response_text.split())
+    summary = response_text[:200].replace("\n", " ") + ("..." if len(response_text) > 200 else "")
+    if mode == "planning":
+        return AgentRunResult(
+            output_summary=f"AI-generated plan ({words} words): {summary}",
+            output_log=f"[{ts}] AI dispatch generated plan ({words} words)",
+            raw_result_json=json.dumps({"plan_md": response_text}, ensure_ascii=False),
+            plan_md=response_text,
+        )
+    if mode == "patch_generation":
+        return AgentRunResult(
+            output_summary=f"AI-generated patch ({words} words): {summary}",
+            output_log=f"[{ts}] AI dispatch generated patch ({words} words)",
+            raw_result_json=json.dumps({"patch_diff": response_text}, ensure_ascii=False),
+            patch_diff=response_text,
+        )
+    if mode == "review":
+        return AgentRunResult(
+            output_summary=f"AI review ({words} words): {summary}",
+            output_log=f"[{ts}] AI dispatch generated review ({words} words)",
+            raw_result_json=json.dumps({"review_md": response_text}, ensure_ascii=False),
+            review_md=response_text,
+        )
+    if mode == "risk":
+        risk_report = _extract_json_object(response_text)
+        return AgentRunResult(
+            output_summary=f"AI risk assessment ({words} words): {summary}",
+            output_log=f"[{ts}] AI dispatch generated risk assessment ({words} words)",
+            raw_result_json=json.dumps({"risk_report": risk_report} if risk_report else {"raw_response": response_text}, ensure_ascii=False),
+            risk_report=risk_report,
+        )
+    if mode == "browser_reviewer":
+        parsed = _extract_json_object(response_text)
+        review_payload = parsed if parsed is not None else {"review_md": response_text}
+        review_md = json.dumps(parsed, ensure_ascii=False) if parsed is not None else response_text
+        return AgentRunResult(
+            output_summary=f"AI browser review ({words} words): {summary}",
+            output_log=f"[{ts}] AI dispatch generated browser review ({words} words)",
+            raw_result_json=json.dumps({"browser_ai_review": review_payload}, ensure_ascii=False),
+            review_md=review_md,
+        )
+    return AgentRunResult(
+        output_summary=f"AI response ({words} words): {summary}",
+        output_log=f"[{ts}] AI dispatch generated response ({words} words)",
+        raw_result_json=json.dumps({"raw_response": response_text}, ensure_ascii=False),
+    )
+
+
+async def _execute_openai_with_prompt_preview(preview, mode: str) -> AgentRunResult:
+    from app.services.openai_provider import OpenAIProvider
+
+    provider = OpenAIProvider()
+    response_text = await provider._call_openai(
+        preview.system_prompt_preview,
+        preview.user_prompt_preview,
+    )
+    if not response_text or not response_text.strip():
+        raise RuntimeError("AI returned empty response")
+    return _parse_dispatch_response(mode, response_text, datetime.now(timezone.utc).isoformat())
+
+
 def _normalize_result_for_mode(result, mode: str):
     """Keep only the artifact type allowed for the requested dispatch mode."""
     if mode == "planning":
@@ -127,8 +197,16 @@ def _mode_validation_error(result, mode: str) -> str | None:
         if not isinstance(result.risk_report, dict):
             return "malformed_response: risk mode requires valid risk_report.json"
     if mode == "browser_reviewer":
-        review = (result.review_md or "").lower()
-        if "advisory_only" not in review or "not_final_approval" not in review:
+        review = (result.review_md or "").strip()
+        parsed = _extract_json_object(review)
+        if parsed is not None:
+            advisory_ok = parsed.get("advisory_only") is True
+            not_final_ok = parsed.get("not_final_approval") is True
+        else:
+            lower = review.lower()
+            advisory_ok = "advisory_only" in lower and "true" in lower
+            not_final_ok = "not_final_approval" in lower and "true" in lower
+        if not advisory_ok or not not_final_ok:
             return "malformed_response: browser_reviewer requires advisory_only and not_final_approval"
     return None
 
@@ -358,7 +436,7 @@ async def execute(
 
     _step("ai_execution", "running", "Calling AI provider")
     try:
-        result = await _execute_with_provider(db, agent, run)
+        result = await _execute_openai_with_prompt_preview(preview, mode)
     except HTTPException:
         await _mark_run_failed(db, run, task.id, "AI provider execution failed")
         _step("ai_execution", "failed", "AI provider execution failed")

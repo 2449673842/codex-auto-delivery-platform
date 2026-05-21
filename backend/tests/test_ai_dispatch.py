@@ -14,6 +14,7 @@ from app.models.agent_run import AgentRun
 from app.models.task_artifact import TaskArtifact
 from app.models.task_event import TaskEvent
 from app.schemas.ai_provider import AgentRunResult
+from app.services.prompt_template_service import preview as prompt_preview
 
 
 BASE = "/api/ai-dispatch"
@@ -91,24 +92,27 @@ def _reset_settings(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _mock_provider(monkeypatch):
-    async def _execute_fake(db, agent, run):
-        mode_by_run_type = {
-            "plan": "planning",
-            "execute": "patch_generation",
-            "review": "review",
-        }
-        if getattr(agent, "agent_type", "") == "reviewer" and run.run_type == "review":
-            prompt = run.input_prompt or ""
-            if "Mode: risk" in prompt:
-                return _fake_result(run.run_type or "review", "risk")
-            if "Mode: browser_reviewer" in prompt:
-                return _fake_result(run.run_type or "review", "browser_reviewer")
-        return _fake_result(run.run_type or "plan", mode_by_run_type.get(run.run_type, "planning"))
+    from app.services.openai_provider import OpenAIProvider
 
-    monkeypatch.setattr(
-        "app.services.ai_dispatch_service._execute_with_provider",
-        AsyncMock(side_effect=_execute_fake),
-    )
+    async def _fake_call(self, system_prompt, user_prompt):
+        if "patch.diff" in system_prompt:
+            return "diff --git a/test.py b/test.py\nindex 000..111\n--- a/test.py\n+++ b/test.py\n@@ -0,0 +1 @@\n+print('hello')"
+        if "risk_report.json" in system_prompt:
+            return json.dumps({"risk_level": "low", "requires_human": False, "reasons": []})
+        if "browser_ai_review.json" in system_prompt:
+            return json.dumps({
+                "advisory_only": True,
+                "not_final_approval": True,
+                "blockers": [],
+                "warnings": [],
+                "required_actions": [],
+            })
+        if "review.md" in system_prompt:
+            return "## Review\n\n**Decision**: approved\n**Risk**: low"
+        return "# Plan\n\n1. Implement feature\n2. Add tests"
+
+    monkeypatch.setattr(OpenAIProvider, "__init__", lambda self: None)
+    monkeypatch.setattr(OpenAIProvider, "_call_openai", _fake_call)
 
 
 @pytest.fixture
@@ -152,13 +156,13 @@ class TestDryRun:
         assert data["estimated_tokens"] > 0
 
     async def test_dry_run_does_not_call_provider(self, client):
-        from app.services import ai_provider_service
-        orig = ai_provider_service._execute_with_provider
+        import app.services.ai_dispatch_service as svc
+        orig = svc._execute_openai_with_prompt_preview
         r = await client.post(f"{BASE}/dry-run", json={
             "module_name": "review_packet", "mode": "planning",
         })
         assert r.status_code == 200
-        assert ai_provider_service._execute_with_provider is orig
+        assert svc._execute_openai_with_prompt_preview is orig
 
     async def test_dry_run_unknown_mode_returns_422(self, client):
         r = await client.post(f"{BASE}/dry-run", json={
@@ -214,6 +218,57 @@ class TestExecute:
         assert data["output_summary"] is not None
         assert data["agent_run_id"] > 0
         assert len(data["prompt_hash"]) > 0
+
+    async def test_execute_provider_input_contains_s10_prompt_preview(self, client, project, monkeypatch):
+        seen = {}
+
+        async def fake_dispatch(preview, mode):
+            seen["system"] = preview.system_prompt_preview
+            seen["user"] = preview.user_prompt_preview
+            return _fake_result("dispatch", mode)
+
+        monkeypatch.setattr(
+            "app.services.ai_dispatch_service._execute_openai_with_prompt_preview",
+            AsyncMock(side_effect=fake_dispatch),
+        )
+
+        r = await client.post(f"{BASE}/execute", json={
+            "project_id": project["id"],
+            "task_goal": "Implement dispatch",
+            "task_type": "backend",
+            "module_name": "review_packet",
+            "mode": "planning",
+        })
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert data["status"] == "succeeded"
+        assert "You are a code planning assistant" in seen["system"]
+        assert "## Task Goal\nImplement dispatch" in seen["user"]
+        assert data["prompt_hash"]
+
+    async def test_openai_dispatch_entry_passes_s10_prompts_to_openai(self, monkeypatch):
+        from app.services.ai_dispatch_service import _execute_openai_with_prompt_preview
+        from app.services.openai_provider import OpenAIProvider
+
+        seen = {}
+
+        async def fake_call(self, system_prompt, user_prompt):
+            seen["system"] = system_prompt
+            seen["user"] = user_prompt
+            return "# Plan\n\n1. Provider received prompt preview"
+
+        monkeypatch.setattr(OpenAIProvider, "__init__", lambda self: None)
+        monkeypatch.setattr(OpenAIProvider, "_call_openai", fake_call)
+        preview = prompt_preview(
+            task_goal="Use S10 preview",
+            module_name="review_packet",
+            task_type="backend",
+            mode="planning",
+        )
+        result = await _execute_openai_with_prompt_preview(preview, "planning")
+        assert seen["system"] == preview.system_prompt_preview
+        assert seen["user"] == preview.user_prompt_preview
+        assert result.plan_md.startswith("# Plan")
 
     async def test_execute_prompt_hash_recorded(self, client, project):
         r = await client.post(f"{BASE}/execute", json={
@@ -272,6 +327,7 @@ class TestExecute:
         assert r.status_code == 200
         data = r.json()["data"]
         assert data["status"] == "succeeded"
+        assert any(a["filename"].endswith("_result.json") for a in data["artifacts"])
 
     async def test_execute_browser_reviewer_success(self, client, project):
         r = await client.post(f"{BASE}/execute", json={
@@ -373,7 +429,7 @@ class TestExecuteGovernance:
             raw_result_json="",
         )
         monkeypatch.setattr(
-            "app.services.ai_dispatch_service._execute_with_provider",
+            "app.services.ai_dispatch_service._execute_openai_with_prompt_preview",
             AsyncMock(return_value=bad_result),
         )
         r = await client.post(f"{BASE}/execute", json={
@@ -385,7 +441,7 @@ class TestExecuteGovernance:
 
     async def test_execute_provider_exception(self, client, project, monkeypatch):
         monkeypatch.setattr(
-            "app.services.ai_dispatch_service._execute_with_provider",
+            "app.services.ai_dispatch_service._execute_openai_with_prompt_preview",
             AsyncMock(side_effect=RuntimeError("Provider crashed")),
         )
         r = await client.post(f"{BASE}/execute", json={
@@ -398,7 +454,7 @@ class TestExecuteGovernance:
 
     async def test_execute_provider_timeout(self, client, project, monkeypatch):
         monkeypatch.setattr(
-            "app.services.ai_dispatch_service._execute_with_provider",
+            "app.services.ai_dispatch_service._execute_openai_with_prompt_preview",
             AsyncMock(side_effect=TimeoutError("provider timeout")),
         )
         r = await client.post(f"{BASE}/execute", json={
@@ -411,7 +467,7 @@ class TestExecuteGovernance:
 
     async def test_patch_generation_non_unified_diff_malformed(self, client, project, monkeypatch):
         monkeypatch.setattr(
-            "app.services.ai_dispatch_service._execute_with_provider",
+            "app.services.ai_dispatch_service._execute_openai_with_prompt_preview",
             AsyncMock(return_value=AgentRunResult(
                 output_summary="bad patch",
                 output_log="bad patch",
@@ -429,7 +485,7 @@ class TestExecuteGovernance:
 
     async def test_risk_non_json_malformed(self, client, project, monkeypatch):
         monkeypatch.setattr(
-            "app.services.ai_dispatch_service._execute_with_provider",
+            "app.services.ai_dispatch_service._execute_openai_with_prompt_preview",
             AsyncMock(return_value=AgentRunResult(
                 output_summary="risk",
                 output_log="risk",
@@ -438,6 +494,40 @@ class TestExecuteGovernance:
         )
         r = await client.post(f"{BASE}/execute", json={
             "project_id": project["id"], "module_name": "review_packet", "mode": "risk",
+        })
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert data["status"] == "failed"
+        assert data["output_summary"] == "malformed_response"
+
+    async def test_risk_json_from_openai_response_becomes_risk_report(self, monkeypatch):
+        from app.services.ai_dispatch_service import _execute_openai_with_prompt_preview
+        from app.services.openai_provider import OpenAIProvider
+
+        async def fake_call(self, system_prompt, user_prompt):
+            assert "risk_report.json" in system_prompt
+            assert "JSON only" in system_prompt
+            return json.dumps({"risk_level": "low", "requires_human": False, "reasons": []})
+
+        monkeypatch.setattr(OpenAIProvider, "__init__", lambda self: None)
+        monkeypatch.setattr(OpenAIProvider, "_call_openai", fake_call)
+        preview = prompt_preview(module_name="review_packet", mode="risk")
+        result = await _execute_openai_with_prompt_preview(preview, "risk")
+        assert result.risk_report == {"risk_level": "low", "requires_human": False, "reasons": []}
+        assert result.review_md is None
+
+    async def test_browser_reviewer_json_missing_required_flags_malformed(self, client, project, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.ai_dispatch_service._execute_openai_with_prompt_preview",
+            AsyncMock(return_value=AgentRunResult(
+                output_summary="browser review",
+                output_log="browser review",
+                raw_result_json=json.dumps({"browser_ai_review": {"advisory_only": True}}),
+                review_md=json.dumps({"advisory_only": True}),
+            )),
+        )
+        r = await client.post(f"{BASE}/execute", json={
+            "project_id": project["id"], "module_name": "review_packet", "mode": "browser_reviewer",
         })
         assert r.status_code == 200
         data = r.json()["data"]
@@ -485,7 +575,7 @@ class TestExecuteGovernance:
             plan_md=f"# Plan\n{secret}",
         )
         monkeypatch.setattr(
-            "app.services.ai_dispatch_service._execute_with_provider",
+            "app.services.ai_dispatch_service._execute_openai_with_prompt_preview",
             AsyncMock(return_value=result_with_secret),
         )
         r = await client.post(f"{BASE}/execute", json={
@@ -515,7 +605,7 @@ class TestExecuteGovernance:
             patch_diff="sk-test-secret-key",
         )
         monkeypatch.setattr(
-            "app.services.ai_dispatch_service._execute_with_provider",
+            "app.services.ai_dispatch_service._execute_openai_with_prompt_preview",
             AsyncMock(return_value=result_with_secret),
         )
         r = await client.post(f"{BASE}/execute", json={
