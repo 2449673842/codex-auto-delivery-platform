@@ -13,7 +13,7 @@ from app.schemas.common import ApiEnvelope
 from app.services import ai_context_packet_service
 
 
-_PROHIBITED = [
+_GLOBAL_PROHIBITED = [
     "Do NOT access Project.root_path",
     "Do NOT read secret_ref or .env files",
     "Do NOT execute shell, subprocess, or os.system",
@@ -22,6 +22,30 @@ _PROHIBITED = [
     "Do NOT approve human_required or high/critical risk tasks without authorization",
     "Do NOT write to the database or create TaskArtifacts/TaskEvents",
 ]
+
+_MODE_PROHIBITED = {
+    "planning": [
+        "Do NOT execute code",
+        "Do NOT include file contents",
+    ],
+    "patch_generation": [
+        "Do NOT output explanatory text",
+        "Do NOT modify forbidden files",
+        "Do NOT add real external API calls",
+    ],
+    "review": [
+        "Do NOT auto-approve",
+        "Do NOT merge",
+    ],
+    "risk": [
+        "Do NOT output text outside JSON",
+    ],
+    "browser_reviewer": [
+        "Do NOT comment on PRs",
+        "Do NOT merge",
+        "Do NOT approve",
+    ],
+}
 
 def _build_template(role: str, format_spec: str, *items: str) -> str:
     return (
@@ -38,30 +62,22 @@ _MODE_SYSTEM_TEMPLATES = {
         "code planning assistant",
         "plan.md (Markdown)",
         "Include: implementation steps, files to touch, tests to add, risks, safety notes",
-        "Do NOT execute code",
-        "Do NOT include file contents",
     ),
     "patch_generation": _build_template(
         "code generation assistant",
         "patch.diff (unified diff only)",
-        "Do NOT output explanatory text",
-        "Do NOT modify forbidden files",
-        "Do NOT add real external API calls",
     ),
     "review": _build_template(
         "code review assistant",
         "review.md (Markdown)",
         "Include: approve/changes_requested, blockers, warnings, required_actions",
         "Include: test quality review, security boundary review",
-        "Do NOT auto-approve",
-        "Do NOT merge",
     ),
     "risk": _build_template(
         "risk assessment assistant",
         "risk_report.json (JSON only)",
         "Include: risk_level, requires_human, reasons",
         "Include: security_findings, scope_findings, test_findings",
-        "Do NOT output text outside JSON",
     ),
     "browser_reviewer": _build_template(
         "browser review assistant",
@@ -69,9 +85,6 @@ _MODE_SYSTEM_TEMPLATES = {
         "advisory_only: true",
         "not_final_approval: true",
         "Include: blockers, warnings, required_actions, confidence",
-        "Do NOT comment on PRs",
-        "Do NOT merge",
-        "Do NOT approve",
     ),
 }
 
@@ -90,7 +103,9 @@ def _build_system_prompt(mode: str, safety_boundaries: list[str]) -> str:
         _MODE_SYSTEM_TEMPLATES["planning"],
     )
     safety_text = "\n".join(f"- {b}" for b in safety_boundaries) if safety_boundaries else "- None specified"
-    prohibited_text = "\n".join(f"- {p}" for p in _PROHIBITED)
+    mode_rules = _MODE_PROHIBITED.get(mode, [])
+    all_prohibited = _GLOBAL_PROHIBITED + mode_rules
+    prohibited_text = "\n".join(f"- {p}" for p in all_prohibited)
     return template.format(safety=safety_text, prohibited=prohibited_text)
 
 
