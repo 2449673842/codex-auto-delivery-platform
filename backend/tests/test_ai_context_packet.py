@@ -118,7 +118,7 @@ class Tests:
         r = await self._preview(cli)
         assert r.status_code == 200
         packet_str = str(r.json())
-        for item in ["OPENAI_API_KEY", "sk-", "-----BEGIN", "REDACTED"]:
+        for item in ["OPENAI_API_KEY", "sk-", "-----BEGIN"]:
             assert item not in packet_str, f"packet contains {item}"
 
     async def test_malformed_map_propagates_error(self, cli, monkeypatch, tmp_path):

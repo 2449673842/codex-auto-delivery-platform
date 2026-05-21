@@ -99,10 +99,8 @@ def _build_task_context(
     )] if recommended_files else []
 
     artifacts = []
-    format_name = ""
     if mode in MODE_ARTIFACTS:
         artifacts = list(MODE_ARTIFACTS[mode][0])
-        format_name = MODE_ARTIFACTS[mode][1]
 
     return TaskContext(
         task_goal=task_goal,
