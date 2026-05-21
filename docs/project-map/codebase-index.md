@@ -328,7 +328,7 @@ codex-auto-delivery-platform/
 | `backend/tests/test_v04_ai_coding_sandbox.py` | Coding sandbox | Code context, patch apply, boundary checks |
 | `backend/tests/test_sandbox_gate.py` | Sandbox gate | 10 check scenarios |
 | `backend/tests/test_review_packet.py` | Review packet | 9 mock PR scenarios, 22 rules, boundary checks |
-| `backend/tests/test_context_selector.py` | Context selector | 15 tests: module match, keyword match, task type, malformed JSON, confidence, safety
+| `backend/tests/test_context_selector.py` | Context selector | 19 tests: module match, keyword match, task type, malformed JSON, confidence, safety boundaries |
 
 ---
 
