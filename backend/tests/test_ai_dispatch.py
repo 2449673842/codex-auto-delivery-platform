@@ -2,6 +2,7 @@
 
 import json
 import os
+import hashlib
 from unittest.mock import AsyncMock
 
 import pytest
@@ -328,6 +329,7 @@ class TestExecute:
         data = r.json()["data"]
         assert data["status"] == "succeeded"
         assert any(a["filename"].endswith("_result.json") for a in data["artifacts"])
+        assert any(a["filename"].endswith("_risk_report.json") for a in data["artifacts"])
 
     async def test_execute_browser_reviewer_success(self, client, project):
         r = await client.post(f"{BASE}/execute", json={
@@ -339,6 +341,7 @@ class TestExecute:
         artifact_text = json.dumps(data["artifacts"]) + json.dumps(data["events"])
         assert "advisory_only" in json.dumps(data)
         assert "not_final_approval" in json.dumps(data)
+        assert any(a["filename"].endswith("_browser_ai_review.json") for a in data["artifacts"])
 
     async def test_execute_unknown_mode_blocked(self, client, project):
         r = await client.post(f"{BASE}/execute", json={
@@ -563,8 +566,132 @@ class TestExecuteGovernance:
         data = r.json()["data"]
         assert data["sandbox_applied"] is True
         assert data["sandbox_gate_passed"] is True
+        assert data["pipeline_status"] == "succeeded"
         assert apply_mock.await_count == 1
         assert gate_mock.await_count == 1
+
+    async def test_risk_artifact_redacted_and_sha256_uses_redacted_content(self, client, project, monkeypatch):
+        secret = MOCK_API_KEY
+        monkeypatch.setattr(
+            "app.services.ai_dispatch_service._execute_openai_with_prompt_preview",
+            AsyncMock(return_value=AgentRunResult(
+                output_summary="risk ok",
+                output_log="risk ok",
+                raw_result_json=json.dumps({"risk_report": {"risk_level": "low", "secret": secret}}),
+                risk_report={"risk_level": "low", "secret": secret},
+            )),
+        )
+        r = await client.post(f"{BASE}/execute", json={
+            "project_id": project["id"], "module_name": "review_packet", "mode": "risk",
+        })
+        assert r.status_code == 200
+        artifact = next(a for a in r.json()["data"]["artifacts"] if a["filename"].endswith("_risk_report.json"))
+        assert secret not in artifact["content"]
+        assert "sk-test" not in artifact["content"]
+        assert artifact["sha256"] == hashlib.sha256(artifact["content"].encode("utf-8")).hexdigest()
+
+    async def test_browser_review_artifact_redacted_flags_and_sha256(self, client, project, monkeypatch):
+        secret = MOCK_API_KEY
+        payload = {
+            "advisory_only": True,
+            "not_final_approval": True,
+            "notes": secret,
+        }
+        monkeypatch.setattr(
+            "app.services.ai_dispatch_service._execute_openai_with_prompt_preview",
+            AsyncMock(return_value=AgentRunResult(
+                output_summary="browser ok",
+                output_log="browser ok",
+                raw_result_json=json.dumps({"browser_ai_review": payload}),
+                review_md=json.dumps(payload),
+            )),
+        )
+        r = await client.post(f"{BASE}/execute", json={
+            "project_id": project["id"], "module_name": "review_packet", "mode": "browser_reviewer",
+        })
+        assert r.status_code == 200
+        artifact = next(a for a in r.json()["data"]["artifacts"] if a["filename"].endswith("_browser_ai_review.json"))
+        content = json.loads(artifact["content"])
+        assert content["advisory_only"] is True
+        assert content["not_final_approval"] is True
+        assert secret not in artifact["content"]
+        assert "sk-test" not in artifact["content"]
+        assert artifact["sha256"] == hashlib.sha256(artifact["content"].encode("utf-8")).hexdigest()
+
+    async def test_agent_run_trace_contains_dispatch_hashes_without_prompt_or_api_key(self, client, project):
+        r = await client.post(f"{BASE}/execute", json={
+            "project_id": project["id"],
+            "task_goal": "Persist trace metadata",
+            "task_type": "backend",
+            "module_name": "review_packet",
+            "mode": "planning",
+        })
+        assert r.status_code == 200
+        data = r.json()["data"]
+        async with get_session_factory()() as session:
+            run = await session.get(AgentRun, data["agent_run_id"])
+        raw = run.raw_result_json or ""
+        parsed = json.loads(raw)
+        assert parsed["dispatch"]["prompt_hash"] == data["prompt_hash"]
+        assert parsed["dispatch"]["context_packet_hash"] == data["context_packet_hash"]
+        assert "system_prompt_preview" not in raw
+        assert "user_prompt_preview" not in raw
+        assert "You are a code planning assistant" not in raw
+        assert "## Task Goal\nPersist trace metadata" not in raw
+        assert MOCK_API_KEY not in raw
+        assert "sk-test" not in raw
+
+    async def test_patch_generation_sandbox_apply_failure_sets_pipeline_status(self, client, project, monkeypatch):
+        apply_mock = AsyncMock()
+        gate_mock = AsyncMock()
+
+        class ApplyResult:
+            success = False
+            error_message = "sandbox apply failed"
+
+        class GateResult:
+            passed = True
+            blocked_reasons = []
+
+        apply_mock.return_value = ApplyResult()
+        gate_mock.return_value = GateResult()
+        monkeypatch.setattr("app.services.patch_apply_sandbox_service.apply_patch_in_sandbox", apply_mock)
+        monkeypatch.setattr("app.services.sandbox_approval_gate_service.evaluate_and_record_gate", gate_mock)
+        r = await client.post(f"{BASE}/execute", json={
+            "project_id": project["id"], "module_name": "review_packet", "mode": "patch_generation",
+        })
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert data["sandbox_applied"] is False
+        assert data["pipeline_status"] == "sandbox_failed"
+
+    async def test_patch_generation_sandbox_gate_blocked_sets_pipeline_status(self, client, project, monkeypatch):
+        apply_mock = AsyncMock()
+        gate_mock = AsyncMock()
+
+        class ApplyResult:
+            success = True
+            error_message = None
+
+        class Reason:
+            reason = "high risk"
+
+        class GateResult:
+            passed = False
+            blocked_reasons = [Reason()]
+
+        apply_mock.return_value = ApplyResult()
+        gate_mock.return_value = GateResult()
+        monkeypatch.setattr("app.services.patch_apply_sandbox_service.apply_patch_in_sandbox", apply_mock)
+        monkeypatch.setattr("app.services.sandbox_approval_gate_service.evaluate_and_record_gate", gate_mock)
+        r = await client.post(f"{BASE}/execute", json={
+            "project_id": project["id"], "module_name": "review_packet", "mode": "patch_generation",
+        })
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert data["sandbox_applied"] is True
+        assert data["sandbox_gate_passed"] is False
+        assert data["pipeline_status"] == "sandbox_gate_blocked"
 
     async def test_api_key_not_persisted_in_run_artifacts_or_events(self, client, project, monkeypatch):
         secret = MOCK_API_KEY

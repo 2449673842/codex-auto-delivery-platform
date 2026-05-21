@@ -47,6 +47,7 @@ class AiDispatchExecuteResponse(BaseModel):
     sandbox_applied: bool = False
     sandbox_gate_passed: bool = False
     sandbox_gate_blocked_reasons: list[str] = Field(default_factory=list)
+    pipeline_status: str = "succeeded"
     prompt_hash: str = ""
     context_packet_hash: str = ""
     token_usage: dict = Field(default_factory=dict)

@@ -1,4 +1,5 @@
 import json
+import hashlib
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
@@ -59,6 +60,7 @@ def _failed_response(
         task_id=task_id,
         status=AgentRunStatus.FAILED.value,
         output_summary=output_summary,
+        pipeline_status="ai_failed",
         prompt_hash=prompt_hash,
         context_packet_hash=context_packet_hash,
         steps=steps,
@@ -86,6 +88,77 @@ def _redact_result_for_storage(result):
         safe_json = _redact_dispatch_secrets(json.dumps(result.risk_report, ensure_ascii=False))
         result.risk_report = json.loads(safe_json or "{}")
     return result
+
+
+def _dispatch_metadata(preview, mode: str) -> dict:
+    return {
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "mode": mode,
+        "prompt_hash": preview.prompt_hash,
+        "context_packet_hash": preview.context_packet_hash,
+        "estimated_prompt_tokens": preview.token_budget.estimated_prompt_tokens,
+        "redaction_applied": True,
+    }
+
+
+def _persist_dispatch_metadata(run: AgentRun, dispatch_metadata: dict) -> None:
+    current = {}
+    if run.raw_result_json:
+        try:
+            parsed = json.loads(run.raw_result_json)
+            if isinstance(parsed, dict):
+                current = parsed
+        except json.JSONDecodeError:
+            current = {"provider_raw": _redact_dispatch_secrets(run.raw_result_json)}
+    current["dispatch"] = dispatch_metadata
+    safe_json = _redact_dispatch_secrets(json.dumps(current, ensure_ascii=False)) or "{}"
+    run.raw_result_json = safe_json
+
+
+def _redacted_json_artifact(run: AgentRun, artifact_type: str, filename: str, payload: dict) -> TaskArtifact:
+    content = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
+    content = _redact_dispatch_secrets(content) or "{}"
+    data = content.encode("utf-8")
+    return TaskArtifact(
+        task_id=run.task_id,
+        artifact_type=artifact_type,
+        content=content,
+        filename=filename,
+        size_bytes=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+
+
+async def _create_dispatch_mode_artifacts(db: AsyncSession, run: AgentRun, mode: str, result: AgentRunResult) -> None:
+    artifact = None
+    if mode == "risk" and isinstance(result.risk_report, dict):
+        artifact = _redacted_json_artifact(
+            run,
+            "agent_risk_report",
+            f"agent_run_{run.id}_risk_report.json",
+            result.risk_report,
+        )
+    elif mode == "browser_reviewer":
+        parsed = _extract_json_object(result.review_md or "")
+        if isinstance(parsed, dict):
+            artifact = _redacted_json_artifact(
+                run,
+                "agent_browser_review",
+                f"agent_run_{run.id}_browser_ai_review.json",
+                parsed,
+            )
+    if artifact is None:
+        return
+    db.add(artifact)
+    await db.flush()
+    await create_event(
+        db,
+        task_id=run.task_id,
+        event_type="artifact_uploaded",
+        actor=f"agent_run:{run.id}",
+        message=f"S11 dispatch artifact created: {artifact.filename}",
+    )
 
 
 def _extract_json_object(text: str) -> dict | None:
@@ -394,6 +467,7 @@ async def execute(
         raise HTTPException(status_code=400, detail="Token budget over limit")
     budget_status = preview.token_budget.budget_status
     _step("prompt_build", "passed", f"Estimated {preview.token_budget.estimated_prompt_tokens} tokens ({budget_status})")
+    dispatch_metadata = _dispatch_metadata(preview, mode)
 
     _step("agent_setup", "running", "Finding or creating openai agent profile")
     agent = await _find_or_create_openai_agent(db, mode)
@@ -439,6 +513,8 @@ async def execute(
         result = await _execute_openai_with_prompt_preview(preview, mode)
     except HTTPException:
         await _mark_run_failed(db, run, task.id, "AI provider execution failed")
+        _persist_dispatch_metadata(run, dispatch_metadata)
+        await db.flush()
         _step("ai_execution", "failed", "AI provider execution failed")
         return _failed_response(
             run=run,
@@ -449,6 +525,8 @@ async def execute(
         )
     except Exception as e:
         await _mark_run_failed(db, run, task.id, str(e))
+        _persist_dispatch_metadata(run, dispatch_metadata)
+        await db.flush()
         _step("ai_execution", "failed", _redact_dispatch_secrets(str(e)))
         return _failed_response(
             run=run,
@@ -465,6 +543,8 @@ async def execute(
     mode_error = _mode_validation_error(result, mode)
     if mode_error:
         await _mark_run_failed(db, run, task.id, mode_error)
+        _persist_dispatch_metadata(run, dispatch_metadata)
+        await db.flush()
         _step("response_validation", "failed", mode_error)
         return _failed_response(
             run=run,
@@ -481,6 +561,8 @@ async def execute(
         await _apply_governance(db, run, agent, result, actor=_DISPATCH_ACTOR)
     except HTTPException:
         await _mark_run_failed(db, run, task.id, "Governance validation failed")
+        _persist_dispatch_metadata(run, dispatch_metadata)
+        await db.flush()
         _step("governance", "failed", "Governance validation failed")
         return _failed_response(
             run=run,
@@ -493,7 +575,9 @@ async def execute(
     _step("governance", "passed", "AI output passed all validation checks")
 
     _step("artifact_creation", "running", "Creating artifacts from AI output")
+    _persist_dispatch_metadata(run, dispatch_metadata)
     await _create_artifacts_from_result(db, run, result)
+    await _create_dispatch_mode_artifacts(db, run, mode, result)
     run.status = AgentRunStatus.SUCCEEDED.value
     run.output_summary = result.output_summary
     run.output_diff = result.patch_diff
@@ -506,6 +590,7 @@ async def execute(
     sandbox_applied = False
     sandbox_gate_passed = False
     sandbox_blocked_reasons: list[str] = []
+    pipeline_status = "succeeded"
 
     if mode == "patch_generation":
         _step("sandbox_apply", "running", "Auto-applying patch in sandbox")
@@ -513,10 +598,13 @@ async def execute(
             from app.services.patch_apply_sandbox_service import apply_patch_in_sandbox
             sandbox_result = await apply_patch_in_sandbox(db, task.id, run.id)
             sandbox_applied = sandbox_result.success
+            if not sandbox_applied:
+                pipeline_status = "sandbox_failed"
             _step("sandbox_apply",
                   "passed" if sandbox_applied else "failed",
                   sandbox_result.error_message or "Patch applied" if sandbox_applied else "Apply failed")
         except Exception as e:
+            pipeline_status = "sandbox_failed"
             _step("sandbox_apply", "failed", str(e))
 
         _step("sandbox_gate", "running", "Evaluating sandbox gate")
@@ -525,10 +613,14 @@ async def execute(
             gate_result = await evaluate_and_record_gate(db, task.id)
             sandbox_gate_passed = gate_result.passed
             sandbox_blocked_reasons = [r.reason for r in (gate_result.blocked_reasons or [])]
+            if pipeline_status == "succeeded" and not sandbox_gate_passed:
+                pipeline_status = "sandbox_gate_blocked"
             _step("sandbox_gate",
                   "passed" if sandbox_gate_passed else "blocked",
                   "; ".join(sandbox_blocked_reasons) if sandbox_blocked_reasons else "Gate passed")
         except Exception as e:
+            if pipeline_status == "succeeded":
+                pipeline_status = "sandbox_gate_blocked"
             _step("sandbox_gate", "failed", str(e))
 
     run.finished_at = datetime.now(timezone.utc)
@@ -545,6 +637,7 @@ async def execute(
         sandbox_applied=sandbox_applied,
         sandbox_gate_passed=sandbox_gate_passed,
         sandbox_gate_blocked_reasons=sandbox_blocked_reasons,
+        pipeline_status=pipeline_status,
         prompt_hash=preview.prompt_hash,
         context_packet_hash=preview.context_packet_hash,
         token_usage={"estimated_prompt_tokens": preview.token_budget.estimated_prompt_tokens},
