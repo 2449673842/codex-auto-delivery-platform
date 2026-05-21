@@ -64,7 +64,8 @@ tag：`v0.4.0`
 | v0.3.0 | AI Provider + Output Governance + TaskDetail Display — frozen |
 | v0.4.0 | Patch Sandbox + Sandbox Gate + Review Packet — frozen |
 | v0.4.0 S6-S7 | Browser AI Provider Design + Project Map & Codebase Index — frozen |
-| v0.4.0 S8 | Context Selector from Project Map — in progress |
+| v0.4.0 S8 | Context Selector from Project Map — frozen |
+| v0.4.0 S9 | AI Context Packet Builder — in progress |
 
 ## Safety Boundaries
 
@@ -98,7 +99,7 @@ python -m pytest backend/tests/ -v --rootdir backend
 # Single file
 python -m pytest backend/tests/test_mvp_full.py -v --rootdir backend
 
-# Current count: 302 passed
+# Current count: 327 passed
 ```
 
 ### compileall
