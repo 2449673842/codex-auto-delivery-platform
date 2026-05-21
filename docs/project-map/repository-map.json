@@ -342,6 +342,19 @@
       "safety_notes": ["reads docs/project-map/repository-map.json only", "no file system scanning", "no Project.root_path access", "no shell/subprocess", "no external API calls"]
     },
     {
+      "name": "ai_context_packet",
+      "type": "backend_feature",
+      "description": "AI Context Packet Builder — generates stateless 9-section context packets via POST /api/ai-context-packets/preview",
+      "files": {
+        "router": ["backend/app/routers/ai_context_packet.py"],
+        "service": ["backend/app/services/ai_context_packet_service.py"],
+        "schema": ["backend/app/schemas/ai_context_packet.py"],
+        "tests": ["backend/tests/test_ai_context_packet.py"]
+      },
+      "api": ["POST /api/ai-context-packets/preview"],
+      "safety_notes": ["stateless preview only", "no DB writes", "no real AI calls", "no Browser AI", "reads repository-map.json via context_selector_service", "no file system scanning", "no secret_ref or .env access"]
+    },
+    {
       "name": "stubs",
       "type": "backend_feature",
       "description": "Stub implementations for PR/CI/Deploy (return 'not implemented')",

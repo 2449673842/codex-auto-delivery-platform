@@ -1,7 +1,7 @@
 # Codebase Index — Codex Automation Delivery Platform
 
 > Human-and-AI-readable project map. Covers all modules, file roles, and task-to-file mappings.
-> Version: v0.4.0 | Last updated: 2026-05-21 | S8 updated
+> Version: v0.4.0 | Last updated: 2026-05-21 | S9 updated
 
 ---
 
@@ -16,11 +16,11 @@ codex-auto-delivery-platform/
 │   │   ├── database.py             # SQLite + async SQLAlchemy engine
 │   │   ├── enums.py                # All enums + state transition whitelists
 │   │   ├── models/                 # SQLAlchemy ORM models (10 tables)
-│   │   ├── schemas/                # Pydantic request/response schemas (19 files)
-│   │   ├── routers/                # API route handlers (18 routers, 76+ endpoints)
-│   │   └── services/               # Business logic (28 service files)
+│   │   ├── schemas/                # Pydantic request/response schemas (20 files)
+│   │   ├── routers/                # API route handlers (19 routers, 77+ endpoints)
+│   │   └── services/               # Business logic (29 service files)
 │   ├── data/                       # SQLite database file location
-│   ├── tests/                      # pytest tests (13 files, 298+ tests)
+│   ├── tests/                      # pytest tests (14 files, 327+ tests)
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/                       # Vue 3 + TypeScript + Vite
@@ -303,6 +303,19 @@ codex-auto-delivery-platform/
 
 **Features**: Reads `docs/project-map/repository-map.json`; matches task_goal/module_name/task_type to modules; returns file/test/api recommendations. No file system scanning, no Project.root_path access.
 
+### 3.22 AI Context Packet Builder (v0.4 S9)
+
+| Layer | File |
+|-------|------|
+| Router | `backend/app/routers/ai_context_packet.py` |
+| Service | `backend/app/services/ai_context_packet_service.py` |
+| Schema | `backend/app/schemas/ai_context_packet.py` |
+| Test | `backend/tests/test_ai_context_packet.py` |
+
+**API**: `POST /api/ai-context-packets/preview`
+
+**Features**: 9-section stateless AI context packet (project brief, task context, context selector, output contract, token budget, prompt template, runtime evidence, audit, warnings). 5 modes: planning, patch_generation, review, risk, browser_reviewer. Token estimation via character count, SHA256 audit hashes. No DB writes, no real AI calls, no file scanning.
+
 ---
 
 ## 4. Health / Utility
@@ -329,6 +342,7 @@ codex-auto-delivery-platform/
 | `backend/tests/test_sandbox_gate.py` | Sandbox gate | 10 check scenarios |
 | `backend/tests/test_review_packet.py` | Review packet | 9 mock PR scenarios, 22 rules, boundary checks |
 | `backend/tests/test_context_selector.py` | Context selector | 19 tests: module match, keyword match, task type, malformed JSON, confidence, safety boundaries |
+| `backend/tests/test_ai_context_packet.py` | AI context packet | 25 tests: 5 mode contracts, unknown mode 422, selector integration, hash stability, token budget, safety boundaries |
 
 ---
 
