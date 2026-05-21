@@ -66,7 +66,7 @@ tag：`v0.4.0`
 | v0.4.0 S6-S7 | Browser AI Provider Design + Project Map & Codebase Index — frozen |
 | v0.4.0 S8 | Context Selector from Project Map — frozen |
 | v0.4.0 S9 | AI Context Packet Builder — frozen |
-| v0.4.0 S10 | Prompt Template Preview API — in progress |
+| v0.4.0 S10 | Prompt Template Preview API — frozen |
 
 ## Safety Boundaries
 
