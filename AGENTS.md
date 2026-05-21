@@ -5,7 +5,7 @@
 AI 自动代码交付平台 — Agent 编排、AI Provider、Patch Sandbox、Sandbox Gate、Review Packet Automation。
 
 当前版本：**v0.4.0**
-master commit：`9e36052e6fc94640a60d6c8868dfe926d8e04f9b`
+master commit：`d2480224c73feb531182bdad9e9e4461dea2a8f3`
 tag：`v0.4.0`
 
 ## Directory Structure
@@ -63,7 +63,8 @@ tag：`v0.4.0`
 | v0.2.0 | Agent core + approval + orchestration — frozen |
 | v0.3.0 | AI Provider + Output Governance + TaskDetail Display — frozen |
 | v0.4.0 | Patch Sandbox + Sandbox Gate + Review Packet — frozen |
-| v0.4.0 S6-S7 | Browser AI Provider Design + Project Map & Codebase Index — in progress |
+| v0.4.0 S6-S7 | Browser AI Provider Design + Project Map & Codebase Index — frozen |
+| v0.4.0 S8 | Context Selector from Project Map — in progress |
 
 ## Safety Boundaries
 
@@ -97,7 +98,7 @@ python -m pytest backend/tests/ -v --rootdir backend
 # Single file
 python -m pytest backend/tests/test_mvp_full.py -v --rootdir backend
 
-# Current count: 283 passed
+# Current count: 302 passed
 ```
 
 ### compileall

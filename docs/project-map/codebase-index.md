@@ -1,7 +1,7 @@
 # Codebase Index — Codex Automation Delivery Platform
 
 > Human-and-AI-readable project map. Covers all modules, file roles, and task-to-file mappings.
-> Version: v0.4.0 | Last updated: 2026-05-21
+> Version: v0.4.0 | Last updated: 2026-05-21 | S8 updated
 
 ---
 
@@ -16,11 +16,11 @@ codex-auto-delivery-platform/
 │   │   ├── database.py             # SQLite + async SQLAlchemy engine
 │   │   ├── enums.py                # All enums + state transition whitelists
 │   │   ├── models/                 # SQLAlchemy ORM models (10 tables)
-│   │   ├── schemas/                # Pydantic request/response schemas (18 files)
-│   │   ├── routers/                # API route handlers (17 routers, 75+ endpoints)
-│   │   └── services/               # Business logic (27 service files)
+│   │   ├── schemas/                # Pydantic request/response schemas (19 files)
+│   │   ├── routers/                # API route handlers (18 routers, 76+ endpoints)
+│   │   └── services/               # Business logic (28 service files)
 │   ├── data/                       # SQLite database file location
-│   ├── tests/                      # pytest tests (12 files, 283+ tests)
+│   ├── tests/                      # pytest tests (13 files, 298+ tests)
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/                       # Vue 3 + TypeScript + Vite
@@ -53,7 +53,7 @@ codex-auto-delivery-platform/
 
 | File | Role |
 |------|------|
-| `backend/app/main.py` | FastAPI entry point; creates app with lifespan; registers CORS; imports all 17 routers |
+| `backend/app/main.py` | FastAPI entry point; creates app with lifespan; registers CORS; imports all 18 routers |
 | `backend/app/config.py` | `Settings` dataclass; reads `CODEX_*` env vars; host 127.0.0.1:8700 |
 | `backend/app/database.py` | `Base`, `get_engine()`, `get_session()`, `init_db()`; WAL mode SQLite |
 | `backend/app/enums.py` | `TaskStatus` (10 states), `ArtifactType` (28), `EventType` (35), `AgentType` (4), `AgentProvider` (6), `AgentRunStatus` (6), `RiskLevel` (4); transition whitelists |
@@ -290,6 +290,19 @@ codex-auto-delivery-platform/
 | `backend/app/services/ci_client.py` | STUB — trigger_ci returns "not implemented" |
 | `backend/app/services/deploy_hook.py` | STUB — trigger_deploy returns "not implemented" |
 
+### 3.21 Context Selector (v0.4 S8)
+
+| Layer | File |
+|-------|------|
+| Router | `backend/app/routers/context_selector.py` |
+| Service | `backend/app/services/context_selector_service.py` |
+| Schema | `backend/app/schemas/context_selector.py` |
+| Test | `backend/tests/test_context_selector.py` |
+
+**API**: `POST /api/context-selector/preview`
+
+**Features**: Reads `docs/project-map/repository-map.json`; matches task_goal/module_name/task_type to modules; returns file/test/api recommendations. No file system scanning, no Project.root_path access.
+
 ---
 
 ## 4. Health / Utility
@@ -315,6 +328,7 @@ codex-auto-delivery-platform/
 | `backend/tests/test_v04_ai_coding_sandbox.py` | Coding sandbox | Code context, patch apply, boundary checks |
 | `backend/tests/test_sandbox_gate.py` | Sandbox gate | 10 check scenarios |
 | `backend/tests/test_review_packet.py` | Review packet | 9 mock PR scenarios, 22 rules, boundary checks |
+| `backend/tests/test_context_selector.py` | Context selector | 19 tests: module match, keyword match, task type, malformed JSON, confidence, safety boundaries |
 
 ---
 
@@ -393,6 +407,7 @@ When implementing a task, start with these files:
 | Add new API call | `services/agentService.ts`, `types/agent.ts` |
 | Update safety boundary | `AGENTS.md`, `docs/project-map/` |
 | Add test | `tests/`, match existing pattern |
+| Use Context Selector API | `POST /api/context-selector/preview` with task_goal/module_name/task_type |
 
 ---
 
