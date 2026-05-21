@@ -355,6 +355,19 @@
       "safety_notes": ["stateless preview only", "no DB writes", "no real AI calls", "no Browser AI", "reads repository-map.json via context_selector_service", "no file system scanning", "no secret_ref or .env access"]
     },
     {
+      "name": "prompt_template",
+      "type": "backend_feature",
+      "description": "Prompt Template Preview API — generates per-mode system/user prompt previews with safety boundaries and token budget estimation via POST /api/prompt-templates/preview",
+      "files": {
+        "router": ["backend/app/routers/prompt_template.py"],
+        "service": ["backend/app/services/prompt_template_service.py"],
+        "schema": ["backend/app/schemas/prompt_template.py"],
+        "tests": ["backend/tests/test_prompt_template.py"]
+      },
+      "api": ["POST /api/prompt-templates/preview"],
+      "safety_notes": ["stateless preview only", "no real AI calls", "no Browser AI", "reuses ai_context_packet_service for context data", "no file system scanning", "no secret_ref or .env access"]
+    },
+    {
       "name": "stubs",
       "type": "backend_feature",
       "description": "Stub implementations for PR/CI/Deploy (return 'not implemented')",
