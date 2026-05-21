@@ -8,8 +8,11 @@ from app.models.agent_run import AgentRun
 from app.models.agent_review import AgentReview
 from app.models.approval_policy import ApprovalPolicy
 from app.models.approval_decision import ApprovalDecision
+from app.models.dispatch_batch import DispatchBatch
+from app.models.dispatch_job import DispatchJob
 
 __all__ = [
     "Project", "Task", "TaskArtifact", "TaskEvent", "ReviewRecord",
     "AgentProfile", "AgentRun", "AgentReview", "ApprovalPolicy", "ApprovalDecision",
+    "DispatchBatch", "DispatchJob",
 ]
