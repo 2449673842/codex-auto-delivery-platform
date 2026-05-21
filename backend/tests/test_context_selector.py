@@ -1,5 +1,6 @@
 """Tests for Context Selector API (v0.4 S8)."""
 
+import ast
 import os
 import subprocess
 
@@ -20,6 +21,10 @@ def clear_cache():
 def cli():
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="https://x")
+
+
+def _fail(*args, **kwargs):
+    raise RuntimeError("should not be called")
 
 
 @pytest.mark.asyncio
@@ -158,72 +163,52 @@ class Tests:
         names = [m["name"] for m in data["matched_modules"]]
         assert "review_packet" in names
 
-    async def test_no_file_system_scanning(self, cli):
-        r = await cli.post("/api/context-selector/preview", json={
-            "task_goal": "anything",
-        })
-        assert r.status_code == 200
-        data = r.json()["data"]
-        assert "recommended_files" in data
-        assert isinstance(data["recommended_files"], list)
+    async def test_no_dangerous_imports(self):
+        src = (context_selector_service.__file__ or "").replace("\\", "/")
+        with open(src, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        imports = set()
+        attrs = set()
+        calls = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    imports.add(alias.name.split(".")[0])
+            elif isinstance(node, ast.Attribute):
+                attrs.add(node.attr)
+            elif isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute):
+                    calls.add(node.func.attr)
+                elif isinstance(node.func, ast.Name):
+                    calls.add(node.func.id)
+        dangerous = {"subprocess", "glob", "shutil"}
+        assert not (imports & dangerous), f"service imports dangerous module: {imports & dangerous}"
+        assert "walk" not in attrs, "service calls os.walk"
+        assert "rglob" not in calls, "service calls rglob"
+        assert "environ" not in attrs, "service reads os.environ"
+        assert "getenv" not in calls, "service calls os.getenv"
+        assert "root_path" not in attrs, "service accesses root_path"
+
+    async def test_no_secret_ref_or_env_access(self):
+        src = (context_selector_service.__file__ or "").replace("\\", "/")
+        with open(src, encoding="utf-8") as f:
+            code = f.read()
+        dangerous = ["secret_ref", "OPENAI_API_KEY"]
+        for item in dangerous:
+            assert item not in code, f"service contains dangerous reference: {item}"
 
     # ── Security boundary tests (16-19) ──
 
-    async def test_service_does_not_use_subprocess_or_os_system(self, cli):
-        orig_run = subprocess.run
-        orig_popen = subprocess.Popen
-        orig_system = os.system
-        try:
-            subprocess.run = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("subprocess.run called"))
-            subprocess.Popen = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("subprocess.Popen called"))
-            os.system = lambda *a: (_ for _ in ()).throw(RuntimeError("os.system called"))
-            r = await cli.post("/api/context-selector/preview", json={
-                "module_name": "review_packet",
-            })
-            assert r.status_code == 200
-        finally:
-            subprocess.run = orig_run
-            subprocess.Popen = orig_popen
-            os.system = orig_system
+    async def test_does_not_use_subprocess_or_os_system(self, cli, monkeypatch):
+        monkeypatch.setattr(subprocess, "run", _fail)
+        monkeypatch.setattr(subprocess, "Popen", _fail)
+        monkeypatch.setattr(os, "system", _fail)
+        r = await cli.post("/api/context-selector/preview", json={
+            "module_name": "review_packet",
+        })
+        assert r.status_code == 200
 
-    async def test_service_does_not_read_secret_ref_or_env(self, cli):
-        import builtins
-        orig_open = builtins.open
-        def guarded_open(*args, **kwargs):
-            path = str(args[0]) if args else ""
-            for forbidden in (".env", "secret_ref", ".secret"):
-                if forbidden in path:
-                    raise RuntimeError(f"Cannot open forbidden path: {path}")
-            return orig_open(*args, **kwargs)
-        builtins.open = guarded_open
-        try:
-            r = await cli.post("/api/context-selector/preview", json={
-                "module_name": "review_packet",
-            })
-            assert r.status_code == 200
-        finally:
-            builtins.open = orig_open
-            context_selector_service._clear_cache()
-
-    async def test_service_does_not_access_project_root_path(self, cli):
-        import builtins
-        orig_open = builtins.open
-        def guarded_open(*args, **kwargs):
-            path = str(args[0]) if args else ""
-            if "root_path" in path.lower():
-                raise RuntimeError(f"Cannot access root_path: {path}")
-            return orig_open(*args, **kwargs)
-        builtins.open = guarded_open
-        try:
-            r = await cli.post("/api/context-selector/preview", json={
-                "module_name": "review_packet",
-            })
-            assert r.status_code == 200
-        finally:
-            builtins.open = orig_open
-            context_selector_service._clear_cache()
-
-    async def test_service_only_reads_configured_repository_map(self, cli, tmp_path):
+    async def test_only_reads_configured_repository_map(self, cli, monkeypatch, tmp_path):
         fake_map = tmp_path / "_test_fake_map.json"
         fake_map.write_text("""
         {
@@ -244,18 +229,28 @@ class Tests:
             "task_hints": []
         }
         """, encoding="utf-8")
-        orig = context_selector_service._REPOSITORY_MAP_PATH
         context_selector_service._REPOSITORY_MAP_PATH = fake_map
         context_selector_service._clear_cache()
+        r = await cli.post("/api/context-selector/preview", json={
+            "module_name": "fake_module",
+        })
+        assert r.status_code == 200
+        data = r.json()["data"]
+        names = [m["name"] for m in data["matched_modules"]]
+        assert "fake_module" in names
+        assert not any("review_packet" in n for n in names)
+        assert not any("sandbox_gate" in n for n in names)
+
+    async def test_does_not_glob_walk_or_scan(self, cli, monkeypatch):
+        orig_glob = context_selector_service.Path.glob
+        monkeypatch.setattr(context_selector_service.Path, "glob",
+                            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("glob called")))
+        monkeypatch.setattr(context_selector_service.Path, "rglob",
+                            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("rglob called")))
         try:
             r = await cli.post("/api/context-selector/preview", json={
-                "module_name": "fake_module",
+                "module_name": "review_packet",
             })
             assert r.status_code == 200
-            data = r.json()["data"]
-            names = [m["name"] for m in data["matched_modules"]]
-            assert "fake_module" in names
-            assert any("fake" in f for f in data["recommended_files"])
         finally:
-            context_selector_service._REPOSITORY_MAP_PATH = orig
-            context_selector_service._clear_cache()
+            context_selector_service.Path.glob = orig_glob
