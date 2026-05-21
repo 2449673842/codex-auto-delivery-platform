@@ -16,11 +16,11 @@ codex-auto-delivery-platform/
 │   │   ├── database.py             # SQLite + async SQLAlchemy engine
 │   │   ├── enums.py                # All enums + state transition whitelists
 │   │   ├── models/                 # SQLAlchemy ORM models (10 tables)
-│   │   ├── schemas/                # Pydantic request/response schemas (20 files)
-│   │   ├── routers/                # API route handlers (19 routers, 77+ endpoints)
-│   │   └── services/               # Business logic (29 service files)
+│   │   ├── schemas/                # Pydantic request/response schemas (21 files)
+│   │   ├── routers/                # API route handlers (20 routers, 78+ endpoints)
+│   │   └── services/               # Business logic (30 service files)
 │   ├── data/                       # SQLite database file location
-│   ├── tests/                      # pytest tests (14 files, 327+ tests)
+│   ├── tests/                      # pytest tests (15 files, 351+ tests)
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/                       # Vue 3 + TypeScript + Vite
@@ -316,6 +316,19 @@ codex-auto-delivery-platform/
 
 **Features**: 9-section stateless AI context packet (project brief, task context, context selector, output contract, token budget, prompt template, runtime evidence, audit, warnings). 5 modes: planning, patch_generation, review, risk, browser_reviewer. Token estimation via character count, SHA256 audit hashes. No DB writes, no real AI calls, no file scanning.
 
+### 3.23 Prompt Template Preview (v0.4 S10)
+
+| Layer | File |
+|-------|------|
+| Router | `backend/app/routers/prompt_template.py` |
+| Service | `backend/app/services/prompt_template_service.py` |
+| Schema | `backend/app/schemas/prompt_template.py` |
+| Test | `backend/tests/test_prompt_template.py` |
+
+**API**: `POST /api/prompt-templates/preview`
+
+**Features**: Generates per-mode system/user prompt previews with safety boundaries, output constraints, task context from context selector. 5 mode templates: planning, patch_generation, review, risk, browser_reviewer. SHA256 prompt hashes, token budget estimation, stateless preview. No real AI calls, no file scanning, no DB writes.
+
 ---
 
 ## 4. Health / Utility
@@ -343,6 +356,7 @@ codex-auto-delivery-platform/
 | `backend/tests/test_review_packet.py` | Review packet | 9 mock PR scenarios, 22 rules, boundary checks |
 | `backend/tests/test_context_selector.py` | Context selector | 19 tests: module match, keyword match, task type, malformed JSON, confidence, safety boundaries |
 | `backend/tests/test_ai_context_packet.py` | AI context packet | 25 tests: 5 mode contracts, unknown mode 422, selector integration, hash stability, token budget, safety boundaries |
+| `backend/tests/test_prompt_template.py` | Prompt template | 24 tests: 5 mode prompts, safety boundaries, hash stability, token budget, API envelope, static analysis |
 
 ---
 
