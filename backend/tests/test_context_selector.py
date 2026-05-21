@@ -1,8 +1,6 @@
 """Tests for Context Selector API (v0.4 S8)."""
 
 import ast
-import os
-import subprocess
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -29,8 +27,6 @@ def _fail(*args, **kwargs):
 
 @pytest.mark.asyncio
 class Tests:
-
-    # ── Existing tests (1-15) ──
 
     async def test_module_name_review_packet(self, cli):
         r = await cli.post("/api/context-selector/preview", json={
@@ -158,46 +154,10 @@ class Tests:
         names = [m["name"] for m in data["matched_modules"]]
         assert "review_packet" in names
 
-    async def test_no_dangerous_imports(self):
-        src = (context_selector_service.__file__ or "").replace("\\", "/")
-        with open(src, encoding="utf-8") as f:
-            tree = ast.parse(f.read())
-        imports = set()
-        attrs = set()
-        calls = set()
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.Import, ast.ImportFrom)):
-                for alias in node.names:
-                    imports.add(alias.name.split(".")[0])
-            elif isinstance(node, ast.Attribute):
-                attrs.add(node.attr)
-            elif isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Attribute):
-                    calls.add(node.func.attr)
-                elif isinstance(node.func, ast.Name):
-                    calls.add(node.func.id)
-        dangerous = {"subprocess", "glob", "shutil"}
-        assert not (imports & dangerous), f"service imports dangerous module: {imports & dangerous}"
-        assert "walk" not in attrs, "service calls os.walk"
-        assert "rglob" not in calls, "service calls rglob"
-        assert "environ" not in attrs, "service reads os.environ"
-        assert "getenv" not in calls, "service calls os.getenv"
-        assert "root_path" not in attrs, "service accesses root_path"
-
-    async def test_no_secret_ref_or_env_access(self):
-        src = (context_selector_service.__file__ or "").replace("\\", "/")
-        with open(src, encoding="utf-8") as f:
-            code = f.read()
-        dangerous = ["secret_ref", "OPENAI_API_KEY"]
-        for item in dangerous:
-            assert item not in code, f"service contains dangerous reference: {item}"
-
-    # ── Security boundary tests (16-19) ──
-
     async def test_does_not_use_subprocess_or_os_system(self, cli, monkeypatch):
-        monkeypatch.setattr(subprocess, "run", _fail)
-        monkeypatch.setattr(subprocess, "Popen", _fail)
-        monkeypatch.setattr(os, "system", _fail)
+        monkeypatch.setattr("subprocess.run", _fail)
+        monkeypatch.setattr("subprocess.Popen", _fail)
+        monkeypatch.setattr("os.system", _fail)
         r = await cli.post("/api/context-selector/preview", json={
             "module_name": "review_packet",
         })
@@ -237,11 +197,46 @@ class Tests:
         assert not any("sandbox_gate" in n for n in names)
 
     async def test_does_not_glob_walk_or_scan(self, cli, monkeypatch):
-        monkeypatch.setattr(context_selector_service.Path, "glob",
-                            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("glob called")))
-        monkeypatch.setattr(context_selector_service.Path, "rglob",
-                            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("rglob called")))
+        monkeypatch.setattr("pathlib.Path.glob", _fail)
+        monkeypatch.setattr("pathlib.Path.rglob", _fail)
         r = await cli.post("/api/context-selector/preview", json={
             "module_name": "review_packet",
         })
         assert r.status_code == 200
+
+
+class TestStaticAnalysis:
+
+    def test_no_dangerous_imports(self):
+        src = (context_selector_service.__file__ or "").replace("\\", "/")
+        with open(src, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        imports = set()
+        attrs = set()
+        calls = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    imports.add(alias.name.split(".")[0])
+            elif isinstance(node, ast.Attribute):
+                attrs.add(node.attr)
+            elif isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute):
+                    calls.add(node.func.attr)
+                elif isinstance(node.func, ast.Name):
+                    calls.add(node.func.id)
+        dangerous = {"subprocess", "glob", "shutil"}
+        assert not (imports & dangerous), f"service imports dangerous module: {imports & dangerous}"
+        assert "walk" not in attrs, "service calls os.walk"
+        assert "rglob" not in calls, "service calls rglob"
+        assert "environ" not in attrs, "service reads os.environ"
+        assert "getenv" not in calls, "service calls os.getenv"
+        assert "root_path" not in attrs, "service accesses root_path"
+
+    def test_no_secret_ref_or_env_access(self):
+        src = (context_selector_service.__file__ or "").replace("\\", "/")
+        with open(src, encoding="utf-8") as f:
+            code = f.read()
+        dangerous = ["secret_ref", "OPENAI_API_KEY"]
+        for item in dangerous:
+            assert item not in code, f"service contains dangerous reference: {item}"
