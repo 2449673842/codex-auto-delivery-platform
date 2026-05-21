@@ -23,33 +23,33 @@ _PROHIBITED = [
     "Do NOT write to the database or create TaskArtifacts/TaskEvents",
 ]
 
+_MODE_TEMPLATE_HEADER = (
+    "## Safety Boundaries\n{safety}\n\n"
+    "## Prohibited\n{prohibited}\n\n"
+    "## Output Requirements\n"
+)
+
 _MODE_SYSTEM_TEMPLATES = {
     "planning": (
         "You are a code planning assistant.\n\n"
-        "## Safety Boundaries\n{safety}\n\n"
-        "## Prohibited\n{prohibited}\n\n"
-        "## Output Requirements\n"
-        "- Format: plan.md (Markdown)\n"
+        + _MODE_TEMPLATE_HEADER
+        + "- Format: plan.md (Markdown)\n"
         "- Include: implementation steps, files to touch, tests to add, risks, safety notes\n"
         "- Do NOT execute code\n"
         "- Do NOT include file contents"
     ),
     "patch_generation": (
         "You are a code generation assistant.\n\n"
-        "## Safety Boundaries\n{safety}\n\n"
-        "## Prohibited\n{prohibited}\n\n"
-        "## Output Requirements\n"
-        "- Format: patch.diff (unified diff only)\n"
+        + _MODE_TEMPLATE_HEADER
+        + "- Format: patch.diff (unified diff only)\n"
         "- Do NOT output explanatory text\n"
         "- Do NOT modify forbidden files\n"
         "- Do NOT add real external API calls"
     ),
     "review": (
         "You are a code review assistant.\n\n"
-        "## Safety Boundaries\n{safety}\n\n"
-        "## Prohibited\n{prohibited}\n\n"
-        "## Output Requirements\n"
-        "- Format: review.md (Markdown)\n"
+        + _MODE_TEMPLATE_HEADER
+        + "- Format: review.md (Markdown)\n"
         "- Include: approve/changes_requested, blockers, warnings, required_actions\n"
         "- Include: test quality review, security boundary review\n"
         "- Do NOT auto-approve\n"
@@ -57,20 +57,16 @@ _MODE_SYSTEM_TEMPLATES = {
     ),
     "risk": (
         "You are a risk assessment assistant.\n\n"
-        "## Safety Boundaries\n{safety}\n\n"
-        "## Prohibited\n{prohibited}\n\n"
-        "## Output Requirements\n"
-        "- Format: risk_report.json (JSON only)\n"
+        + _MODE_TEMPLATE_HEADER
+        + "- Format: risk_report.json (JSON only)\n"
         "- Include: risk_level, requires_human, reasons\n"
         "- Include: security_findings, scope_findings, test_findings\n"
         "- Do NOT output text outside JSON"
     ),
     "browser_reviewer": (
         "You are a browser review assistant.\n\n"
-        "## Safety Boundaries\n{safety}\n\n"
-        "## Prohibited\n{prohibited}\n\n"
-        "## Output Requirements\n"
-        "- Format: browser_ai_review.json (JSON only)\n"
+        + _MODE_TEMPLATE_HEADER
+        + "- Format: browser_ai_review.json (JSON only)\n"
         "- advisory_only: true\n"
         "- not_final_approval: true\n"
         "- Include: blockers, warnings, required_actions, confidence\n"
