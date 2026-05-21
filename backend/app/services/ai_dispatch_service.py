@@ -130,6 +130,25 @@ def _redacted_json_artifact(run: AgentRun, artifact_type: str, filename: str, pa
     )
 
 
+def _browser_review_artifact_payload(review_md: str | None) -> dict | None:
+    review = (review_md or "").strip()
+    if not review:
+        return None
+    parsed = _extract_json_object(review)
+    if isinstance(parsed, dict):
+        return parsed
+    lower = review.lower()
+    advisory_ok = "advisory_only" in lower and "true" in lower
+    not_final_ok = "not_final_approval" in lower and "true" in lower
+    if not advisory_ok or not not_final_ok:
+        return None
+    return {
+        "advisory_only": True,
+        "not_final_approval": True,
+        "review_md": review,
+    }
+
+
 async def _create_dispatch_mode_artifacts(db: AsyncSession, run: AgentRun, mode: str, result: AgentRunResult) -> None:
     artifact = None
     if mode == "risk" and isinstance(result.risk_report, dict):
@@ -140,13 +159,13 @@ async def _create_dispatch_mode_artifacts(db: AsyncSession, run: AgentRun, mode:
             result.risk_report,
         )
     elif mode == "browser_reviewer":
-        parsed = _extract_json_object(result.review_md or "")
-        if isinstance(parsed, dict):
+        payload = _browser_review_artifact_payload(result.review_md)
+        if isinstance(payload, dict):
             artifact = _redacted_json_artifact(
                 run,
                 "agent_browser_review",
                 f"agent_run_{run.id}_browser_ai_review.json",
-                parsed,
+                payload,
             )
     if artifact is None:
         return

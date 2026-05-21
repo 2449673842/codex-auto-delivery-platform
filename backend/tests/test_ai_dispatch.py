@@ -618,6 +618,35 @@ class TestExecuteGovernance:
         assert "sk-test" not in artifact["content"]
         assert artifact["sha256"] == hashlib.sha256(artifact["content"].encode("utf-8")).hexdigest()
 
+    async def test_browser_review_markdown_success_creates_normalized_json_artifact(self, client, project, monkeypatch):
+        review_md = (
+            "## Browser Review\n\n"
+            "**advisory_only**: true\n"
+            "**not_final_approval**: true\n"
+            "- Finding: layout looks stable"
+        )
+        monkeypatch.setattr(
+            "app.services.ai_dispatch_service._execute_openai_with_prompt_preview",
+            AsyncMock(return_value=AgentRunResult(
+                output_summary="browser markdown ok",
+                output_log="browser markdown ok",
+                raw_result_json=json.dumps({"browser_ai_review": {"review_md": review_md}}),
+                review_md=review_md,
+            )),
+        )
+        r = await client.post(f"{BASE}/execute", json={
+            "project_id": project["id"], "module_name": "review_packet", "mode": "browser_reviewer",
+        })
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert data["status"] == "succeeded"
+        artifact = next(a for a in data["artifacts"] if a["filename"].endswith("_browser_ai_review.json"))
+        content = json.loads(artifact["content"])
+        assert content["advisory_only"] is True
+        assert content["not_final_approval"] is True
+        assert content["review_md"] == review_md
+        assert artifact["sha256"] == hashlib.sha256(artifact["content"].encode("utf-8")).hexdigest()
+
     async def test_agent_run_trace_contains_dispatch_hashes_without_prompt_or_api_key(self, client, project):
         r = await client.post(f"{BASE}/execute", json={
             "project_id": project["id"],
