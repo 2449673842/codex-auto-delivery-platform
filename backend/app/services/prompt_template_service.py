@@ -14,38 +14,40 @@ from app.services import ai_context_packet_service
 
 
 _GLOBAL_PROHIBITED = [
-    "Do NOT access Project.root_path",
-    "Do NOT read secret_ref or .env files",
-    "Do NOT execute shell, subprocess, or os.system",
-    "Do NOT create real GitHub PRs",
-    "Do NOT call real CI, Sonar, or Deploy APIs",
-    "Do NOT approve human_required or high/critical risk tasks without authorization",
-    "Do NOT write to the database or create TaskArtifacts/TaskEvents",
+    "access Project.root_path",
+    "read secret_ref or .env files",
+    "execute shell, subprocess, or os.system",
+    "create real GitHub PRs",
+    "call real CI, Sonar, or Deploy APIs",
+    "approve human_required or high/critical risk tasks without authorization",
+    "write to the database or create TaskArtifacts/TaskEvents",
 ]
 
 _MODE_PROHIBITED = {
     "planning": [
-        "Do NOT execute code",
-        "Do NOT include file contents",
+        "execute code",
+        "include file contents",
     ],
     "patch_generation": [
-        "Do NOT output explanatory text",
-        "Do NOT modify forbidden files",
-        "Do NOT add real external API calls",
+        "output explanatory text",
+        "modify forbidden files",
+        "add real external API calls",
     ],
     "review": [
-        "Do NOT auto-approve",
-        "Do NOT merge",
+        "auto-approve",
+        "merge",
     ],
     "risk": [
-        "Do NOT output text outside JSON",
+        "output text outside JSON",
     ],
     "browser_reviewer": [
-        "Do NOT comment on PRs",
-        "Do NOT merge",
-        "Do NOT approve",
+        "comment on PRs",
+        "merge",
+        "approve",
     ],
 }
+
+_PREFIX = "Do NOT"
 
 def _build_template(role: str, format_spec: str, *items: str) -> str:
     return (
@@ -105,7 +107,7 @@ def _build_system_prompt(mode: str, safety_boundaries: list[str]) -> str:
     safety_text = "\n".join(f"- {b}" for b in safety_boundaries) if safety_boundaries else "- None specified"
     mode_rules = _MODE_PROHIBITED.get(mode, [])
     all_prohibited = _GLOBAL_PROHIBITED + mode_rules
-    prohibited_text = "\n".join(f"- {p}" for p in all_prohibited)
+    prohibited_text = "\n".join(f"- {_PREFIX} {p}" for p in all_prohibited)
     return template.format(safety=safety_text, prohibited=prohibited_text)
 
 
