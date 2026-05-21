@@ -115,17 +115,15 @@ class Tests:
         assert len(data["recommended_api"]) > 0
         assert any("review-packets" in a for a in data["recommended_api"])
 
-    async def test_malformed_repository_map(self, cli, tmp_path):
+    async def test_malformed_repository_map(self, cli, monkeypatch, tmp_path):
         fake = tmp_path / "_test_malformed.json"
         fake.write_text("{bad json", encoding="utf-8")
-        orig = context_selector_service._REPOSITORY_MAP_PATH
-        context_selector_service._REPOSITORY_MAP_PATH = fake
+        monkeypatch.setattr(context_selector_service, "_REPOSITORY_MAP_PATH", fake)
         context_selector_service._clear_cache()
         r = await cli.post("/api/context-selector/preview", json={
             "task_goal": "anything",
         })
         assert r.status_code == 500
-        context_selector_service._REPOSITORY_MAP_PATH = orig
 
     async def test_endpoint_returns_200(self, cli):
         r = await cli.post("/api/context-selector/preview", json={

@@ -47,12 +47,11 @@ def _clear_cache():
 
 def _get_all_files(module: dict) -> list[str]:
     files = []
-    for key in ("files",):
-        fgroup = module.get(key, {})
-        if isinstance(fgroup, dict):
-            for path_list in fgroup.values():
-                if isinstance(path_list, list):
-                    files.extend(p for p in path_list if isinstance(p, str))
+    fgroup = module.get("files", {})
+    if isinstance(fgroup, dict):
+        for path_list in fgroup.values():
+            if isinstance(path_list, list):
+                files.extend(p for p in path_list if isinstance(p, str))
     return sorted(set(files))
 
 
@@ -145,7 +144,7 @@ def preview(body: ContextSelectorRequest) -> ContextSelectorResponse:
     matched_schemas = [
         ContextSelectorMatch(
             name=m.get("name", ""),
-            type=m.get("type", ""),
+            module_type=m.get("type", ""),
             description=m.get("description", ""),
             files=m.get("files", {}),
             api=m.get("api", []),

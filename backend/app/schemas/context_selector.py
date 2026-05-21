@@ -9,7 +9,7 @@ class ContextSelectorRequest(BaseModel):
 
 class ContextSelectorMatch(BaseModel):
     name: str = ""
-    type: str = ""
+    module_type: str = ""
     description: str = ""
     files: dict = Field(default_factory=dict)
     api: list[str] = Field(default_factory=list)
