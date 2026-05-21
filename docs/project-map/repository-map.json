@@ -329,6 +329,19 @@
       "safety_notes": ["MockGitHub/MockSonar only", "no real external API calls", "22 check rules"]
     },
     {
+      "name": "context_selector",
+      "type": "backend_feature",
+      "description": "Context Selector from Project Map — stateless module/file/API recommendation based on task_goal, module_name, or task_type",
+      "files": {
+        "router": ["backend/app/routers/context_selector.py"],
+        "service": ["backend/app/services/context_selector_service.py"],
+        "schema": ["backend/app/schemas/context_selector.py"],
+        "tests": ["backend/tests/test_context_selector.py"]
+      },
+      "api": ["POST /api/context-selector/preview"],
+      "safety_notes": ["reads docs/project-map/repository-map.json only", "no file system scanning", "no Project.root_path access", "no shell/subprocess", "no external API calls"]
+    },
+    {
       "name": "stubs",
       "type": "backend_feature",
       "description": "Stub implementations for PR/CI/Deploy (return 'not implemented')",
