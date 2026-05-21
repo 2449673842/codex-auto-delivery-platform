@@ -3,7 +3,7 @@ import math
 
 from fastapi import HTTPException
 
-from app.schemas.ai_context_packet import MODE_ARTIFACTS, PROMPT_TEMPLATES, VALID_MODES
+from app.schemas.ai_context_packet import VALID_MODES
 from app.schemas.prompt_template import (
     PromptOutputContract,
     PromptTemplatePreviewResponse,
@@ -158,9 +158,12 @@ def _estimate_tokens(text: str) -> int:
     return max(1, math.ceil(len(text) / 4))
 
 
-def _build_output_contract(mode: str) -> PromptOutputContract:
-    artifacts, fmt = MODE_ARTIFACTS.get(mode, ([], ""))
-    return PromptOutputContract(expected_artifacts=list(artifacts), format=fmt)
+def _build_output_contract(packet_dict: dict) -> PromptOutputContract:
+    oc = packet_dict.get("output_contract", {})
+    return PromptOutputContract(
+        expected_artifacts=list(oc.get("expected_artifacts", [])),
+        format=oc.get("format", ""),
+    )
 
 
 def preview(
@@ -189,8 +192,8 @@ def preview(
     prompt_hash = _hash_text(combined)
     estimated = _estimate_tokens(combined)
 
-    template = PROMPT_TEMPLATES.get(mode, {})
-    output_contract = _build_output_contract(mode)
+    template_meta = packet_dict.get("prompt_template", {})
+    output_contract = _build_output_contract(packet_dict)
 
     warnings = list(packet_dict.get("warnings", []))
 
@@ -206,7 +209,7 @@ def preview(
     context_packet_hash = packet_dict.get("audit", {}).get("context_packet_hash", "")
 
     return PromptTemplatePreviewResponse(
-        template_id=template.get("template_id", ""),
+        template_id=template_meta.get("template_id", ""),
         mode=mode,
         system_prompt_preview=system_prompt,
         user_prompt_preview=user_prompt,
