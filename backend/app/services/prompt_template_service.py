@@ -23,56 +23,55 @@ _PROHIBITED = [
     "Do NOT write to the database or create TaskArtifacts/TaskEvents",
 ]
 
-_MODE_TEMPLATE_HEADER = (
-    "## Safety Boundaries\n{safety}\n\n"
-    "## Prohibited\n{prohibited}\n\n"
-    "## Output Requirements\n"
-)
+def _build_template(role: str, format_spec: str, *items: str) -> str:
+    return (
+        f"You are a {role}.\n\n"
+        "## Safety Boundaries\n{safety}\n\n"
+        "## Prohibited\n{prohibited}\n\n"
+        "## Output Requirements\n"
+        f"- Format: {format_spec}\n"
+        + "\n".join(f"- {item}" for item in items)
+    )
 
 _MODE_SYSTEM_TEMPLATES = {
-    "planning": (
-        "You are a code planning assistant.\n\n"
-        + _MODE_TEMPLATE_HEADER
-        + "- Format: plan.md (Markdown)\n"
-        "- Include: implementation steps, files to touch, tests to add, risks, safety notes\n"
-        "- Do NOT execute code\n"
-        "- Do NOT include file contents"
+    "planning": _build_template(
+        "code planning assistant",
+        "plan.md (Markdown)",
+        "Include: implementation steps, files to touch, tests to add, risks, safety notes",
+        "Do NOT execute code",
+        "Do NOT include file contents",
     ),
-    "patch_generation": (
-        "You are a code generation assistant.\n\n"
-        + _MODE_TEMPLATE_HEADER
-        + "- Format: patch.diff (unified diff only)\n"
-        "- Do NOT output explanatory text\n"
-        "- Do NOT modify forbidden files\n"
-        "- Do NOT add real external API calls"
+    "patch_generation": _build_template(
+        "code generation assistant",
+        "patch.diff (unified diff only)",
+        "Do NOT output explanatory text",
+        "Do NOT modify forbidden files",
+        "Do NOT add real external API calls",
     ),
-    "review": (
-        "You are a code review assistant.\n\n"
-        + _MODE_TEMPLATE_HEADER
-        + "- Format: review.md (Markdown)\n"
-        "- Include: approve/changes_requested, blockers, warnings, required_actions\n"
-        "- Include: test quality review, security boundary review\n"
-        "- Do NOT auto-approve\n"
-        "- Do NOT merge"
+    "review": _build_template(
+        "code review assistant",
+        "review.md (Markdown)",
+        "Include: approve/changes_requested, blockers, warnings, required_actions",
+        "Include: test quality review, security boundary review",
+        "Do NOT auto-approve",
+        "Do NOT merge",
     ),
-    "risk": (
-        "You are a risk assessment assistant.\n\n"
-        + _MODE_TEMPLATE_HEADER
-        + "- Format: risk_report.json (JSON only)\n"
-        "- Include: risk_level, requires_human, reasons\n"
-        "- Include: security_findings, scope_findings, test_findings\n"
-        "- Do NOT output text outside JSON"
+    "risk": _build_template(
+        "risk assessment assistant",
+        "risk_report.json (JSON only)",
+        "Include: risk_level, requires_human, reasons",
+        "Include: security_findings, scope_findings, test_findings",
+        "Do NOT output text outside JSON",
     ),
-    "browser_reviewer": (
-        "You are a browser review assistant.\n\n"
-        + _MODE_TEMPLATE_HEADER
-        + "- Format: browser_ai_review.json (JSON only)\n"
-        "- advisory_only: true\n"
-        "- not_final_approval: true\n"
-        "- Include: blockers, warnings, required_actions, confidence\n"
-        "- Do NOT comment on PRs\n"
-        "- Do NOT merge\n"
-        "- Do NOT approve"
+    "browser_reviewer": _build_template(
+        "browser review assistant",
+        "browser_ai_review.json (JSON only)",
+        "advisory_only: true",
+        "not_final_approval: true",
+        "Include: blockers, warnings, required_actions, confidence",
+        "Do NOT comment on PRs",
+        "Do NOT merge",
+        "Do NOT approve",
     ),
 }
 
