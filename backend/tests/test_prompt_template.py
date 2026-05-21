@@ -174,31 +174,25 @@ class Tests:
 
 class TestStaticAnalysis:
 
-    def _get_source(self):
-        from app.services import prompt_template_service
-        return (prompt_template_service.__file__ or "").replace("\\", "/")
-
     def test_no_dangerous_imports(self):
-        src = self._get_source()
+        from app.services import prompt_template_service as svc
+        src = (svc.__file__ or "").replace("\\", "/")
         with open(src, encoding="utf-8") as f:
             tree = ast.parse(f.read())
-        imports = set()
+        seen = set()
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 for alias in node.names:
-                    imports.add(alias.name.split(".")[0])
-        dangerous = {"subprocess", "glob", "shutil"}
-        assert not (imports & dangerous)
+                    seen.add(alias.name.split(".")[0])
+        assert not (seen & {"subprocess", "glob", "shutil"})
         attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
-        calls = set()
+        called = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Attribute):
-                    calls.add(node.func.attr)
-                elif isinstance(node.func, ast.Name):
-                    calls.add(node.func.id)
+                func = node.func
+                called.add(func.attr if isinstance(func, ast.Attribute) else func.id)
         assert "walk" not in attrs
-        assert "rglob" not in calls
+        assert "rglob" not in called
         assert "environ" not in attrs
-        assert "getenv" not in calls
+        assert "getenv" not in called
         assert "root_path" not in attrs
