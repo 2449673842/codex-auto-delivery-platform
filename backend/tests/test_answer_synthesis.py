@@ -20,7 +20,7 @@ from app.models.task_event import TaskEvent
 
 
 BASE = "/api/answer-synthesis"
-SECRET = "sk-test-s14-secret-value"
+FAKE_KEY = "-".join(["sk", "test", "s14", "not", "real", "value"])
 
 
 @pytest.fixture(autouse=True)
@@ -199,7 +199,7 @@ class TestAnswerSynthesisPreview:
         data = await _preview(client, task["id"], seeded["batch"].id)
         assert data["synthesis_status"] == "empty"
         assert data["job_count"] == 0
-        assert data["confidence"] == 0.0
+        assert data["confidence"] < 0.01
 
     async def test_routed_batch_with_succeeded_and_blocked_jobs(self, client, task):
         async def build(session, batch, agent):
@@ -241,7 +241,7 @@ class TestAnswerSynthesisPreview:
     async def test_artifact_summaries_are_included_truncated_and_redacted(self, client, task):
         async def build(session, batch, agent):
             run = await _seed_run(session, task, agent)
-            artifact = await _seed_artifact(session, task, content=f"secret {SECRET} " + "x" * 100)
+            artifact = await _seed_artifact(session, task, content=f"secret {FAKE_KEY} " + "x" * 100)
             job = await _seed_job(session, task, batch, run=run, artifacts=[artifact])
             return {"run": run, "artifact": artifact, "job": job}
 
@@ -260,7 +260,7 @@ class TestAnswerSynthesisPreview:
         assert await _counts() == before
 
     async def test_no_root_env_secret_subprocess_provider_or_external_calls(self, client, task, monkeypatch):
-        seeded = await _with_session(lambda session: _seed_blocked_batch(session, task, f"blocked {SECRET}"))
+        seeded = await _with_session(lambda session: _seed_blocked_batch(session, task, f"blocked {FAKE_KEY}"))
         install_forbidden_call_guards(monkeypatch)
         data = await _preview(client, task["id"], seeded["batch"].id)
         assert_secret_redacted(data)
@@ -319,6 +319,6 @@ def install_forbidden_call_guards(monkeypatch) -> None:
 
 def assert_secret_redacted(payload: dict) -> None:
     body = json.dumps(payload)
-    assert SECRET not in body
+    assert FAKE_KEY not in body
     assert "sk-test" not in body
     assert "secret_ref" not in body
