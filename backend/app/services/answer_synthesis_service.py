@@ -131,7 +131,7 @@ async def preview(
     if not batch:
         raise HTTPException(status_code=404, detail="dispatch_batch_not_found")
 
-    jobs = sorted(list(batch.jobs), key=lambda item: item.sequence_no)
+    jobs = sorted(batch.jobs, key=lambda item: item.sequence_no)
     source_job_ids = [job.id for job in jobs]
     source_agent_run_ids = sorted({job.agent_run_id for job in jobs if job.agent_run_id})
     artifact_ids = sorted({artifact_id for job in jobs for artifact_id in _loads_list(job.artifact_ids_json)})

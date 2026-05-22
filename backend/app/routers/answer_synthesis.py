@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +13,6 @@ router = APIRouter(tags=["answer_synthesis"])
 
 
 @router.post("/api/answer-synthesis/preview")
-async def preview(body: AnswerSynthesisPreviewRequest, db: AsyncSession = Depends(get_session)) -> ApiEnvelope:
+async def preview(body: AnswerSynthesisPreviewRequest, db: Annotated[AsyncSession, Depends(get_session)]) -> ApiEnvelope:
     result = await answer_synthesis_service.preview(db, body)
     return ApiEnvelope(data=result.model_dump(), message="Answer synthesis preview generated")
