@@ -62,7 +62,7 @@
         </div>
         <div class="workspace-safety">
           <span class="label-badge label-provider">provider: openai</span>
-          <span class="label-badge label-ai">model: gpt-4o-mini</span>
+          <span class="label-badge label-ai">model: {{ realAiDryRunResult?.model || 'backend configured' }}</span>
           <span class="label-badge label-redacted">AI_EXECUTION_ENABLED required</span>
           <span class="label-badge label-redacted">OPENAI_API_KEY required</span>
           <span class="label-badge label-provider">allowlist: openai</span>
@@ -97,6 +97,7 @@
           <div class="dispatch-job-meta">
             <span>would_dispatch={{ realAiDryRunResult.would_dispatch }}</span>
             <span>estimated_tokens={{ realAiDryRunResult.estimated_tokens }}</span>
+            <span>model={{ realAiDryRunResult.model }}</span>
             <span>mode={{ realAiDryRunResult.mode }}</span>
           </div>
           <pre>{{ formatSafetyGate(realAiDryRunResult.safety_gate) }}</pre>

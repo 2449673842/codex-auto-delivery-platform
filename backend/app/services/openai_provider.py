@@ -17,12 +17,16 @@ import os
 from datetime import timezone, datetime
 from typing import Any
 
+from app.config import settings
 from app.models.agent_run import AgentRun
 from app.schemas.ai_provider import AgentRunResult
 from app.services.ai_provider_base import AiProviderBase
 from app.enums import AgentRunType
 
 OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+CHAT_COMPLETIONS_API = "chat_completions"
+RESPONSES_API = "responses"
 
 
 class OpenAIProvider(AiProviderBase):
@@ -35,6 +39,12 @@ class OpenAIProvider(AiProviderBase):
                 f"OpenAI provider requires {OPENAI_API_KEY_ENV} environment variable. "
                 "Set it before using real AI provider."
             )
+        self.base_url = _normalize_base_url(settings.openai_base_url)
+        self.wire_api = _normalize_wire_api(settings.openai_wire_api)
+        self.model = settings.openai_model or "gpt-4o-mini"
+        self.reasoning_effort = settings.openai_reasoning_effort or ""
+        self.disable_response_storage = settings.openai_disable_response_storage
+        self.service_tier = settings.openai_service_tier or ""
 
     async def execute(self, run: AgentRun, code_context: dict | None = None) -> AgentRunResult:
         ts = datetime.now(timezone.utc).isoformat()
@@ -119,26 +129,77 @@ class OpenAIProvider(AiProviderBase):
         if not key:
             raise RuntimeError(f"{OPENAI_API_KEY_ENV} not set")
 
+        base_url = getattr(self, "base_url", _normalize_base_url(settings.openai_base_url))
+        wire_api = getattr(self, "wire_api", _normalize_wire_api(settings.openai_wire_api))
+        model = getattr(self, "model", settings.openai_model or "gpt-4o-mini")
+
+        if wire_api == RESPONSES_API:
+            return await self._call_responses_api(system_prompt, user_prompt, key, base_url, model)
+        return await self._call_chat_completions_api(system_prompt, user_prompt, key, base_url, model)
+
+    async def _call_chat_completions_api(
+        self, system_prompt: str, user_prompt: str, key: str, base_url: str, model: str
+    ) -> str:
+        import httpx
+
         async with httpx.AsyncClient(timeout=120.0) as client:
+            payload: dict[str, Any] = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "max_tokens": 4096,
+                "temperature": 0.3,
+            }
+            service_tier = getattr(self, "service_tier", settings.openai_service_tier or "")
+            if service_tier:
+                payload["service_tier"] = service_tier
             resp = await client.post(
-                "https://api.openai.com/v1/chat/completions",
+                f"{base_url}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {key}",  # NOSONAR
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": "gpt-4o-mini",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "max_tokens": 4096,
-                    "temperature": 0.3,
-                },
+                json=payload,
             )
             resp.raise_for_status()
             data = resp.json()
             return data["choices"][0]["message"]["content"]
+
+    async def _call_responses_api(
+        self, system_prompt: str, user_prompt: str, key: str, base_url: str, model: str
+    ) -> str:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            payload: dict[str, Any] = {
+                "model": model,
+                "instructions": system_prompt,
+                "input": user_prompt,
+                "max_output_tokens": 4096,
+                "store": not getattr(
+                    self,
+                    "disable_response_storage",
+                    settings.openai_disable_response_storage,
+                ),
+            }
+            reasoning_effort = getattr(self, "reasoning_effort", settings.openai_reasoning_effort or "")
+            if reasoning_effort:
+                payload["reasoning"] = {"effort": reasoning_effort}
+            service_tier = getattr(self, "service_tier", settings.openai_service_tier or "")
+            if service_tier:
+                payload["service_tier"] = service_tier
+            resp = await client.post(
+                f"{base_url}/responses",
+                headers={
+                    "Authorization": f"Bearer {key}",  # NOSONAR
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            resp.raise_for_status()
+            return _extract_response_text(resp.json())
 
     def _parse_response(self, run_type: str, text: str, ts: str) -> AgentRunResult:
         """Parse the AI response into structured AgentRunResult."""
@@ -173,3 +234,33 @@ class OpenAIProvider(AiProviderBase):
                 output_log=f"[{ts}] AI provider generated response ({words} words)",
                 raw_result_json=json.dumps({"raw_response": text}, ensure_ascii=False),
             )
+
+
+def _normalize_base_url(value: str | None) -> str:
+    base_url = (value or DEFAULT_OPENAI_BASE_URL).strip() or DEFAULT_OPENAI_BASE_URL
+    return base_url.rstrip("/")
+
+
+def _normalize_wire_api(value: str | None) -> str:
+    normalized = (value or CHAT_COMPLETIONS_API).strip().lower().replace("-", "_")
+    if normalized in {"responses", "response"}:
+        return RESPONSES_API
+    return CHAT_COMPLETIONS_API
+
+
+def _extract_response_text(data: Any) -> str:
+    if not isinstance(data, dict):
+        return ""
+    if isinstance(data.get("output_text"), str):
+        return data["output_text"]
+    chunks: list[str] = []
+    for output in data.get("output", []) or []:
+        if not isinstance(output, dict):
+            continue
+        for content in output.get("content", []) or []:
+            if not isinstance(content, dict):
+                continue
+            text = content.get("text")
+            if isinstance(text, str):
+                chunks.append(text)
+    return "\n".join(chunks)
