@@ -318,6 +318,48 @@
         </div>
       </section>
 
+      <!-- AI Handoff Packet -->
+      <section class="card ai-handoff-workspace">
+        <div class="section-header">
+          <h2>AI Handoff Packet / 下一 AI 接管包</h2>
+          <div class="section-actions">
+            <button class="btn btn-sm" @click="refreshAiHandoff" :disabled="aiHandoffLoading || !task">
+              重新生成接管包
+            </button>
+            <button class="btn btn-sm" @click="copyNextAiPrompt" :disabled="!aiHandoff?.next_ai_prompt">
+              复制 next_ai_prompt
+            </button>
+          </div>
+        </div>
+        <div class="workspace-safety">
+          <span class="label-badge label-provider">Stateless preview</span>
+          <span class="label-badge label-exec">No AI provider called</span>
+          <span class="label-badge label-applied">No database write</span>
+          <span class="label-badge label-redacted">Verify current master before acting</span>
+          <span class="label-badge label-redacted">verify_current_master_on_github_before_acting</span>
+          <span class="label-badge label-ai">AGENTS.md</span>
+          <span class="label-badge label-provider">Do not read .env.</span>
+          <span class="label-badge label-merged">No auto merge</span>
+        </div>
+        <p v-if="aiHandoffError" class="run-error">{{ aiHandoffError }}</p>
+        <p v-if="aiHandoffCopyMessage" class="copy-message">{{ aiHandoffCopyMessage }}</p>
+        <div v-if="!task && !aiHandoffError" class="empty-state"><p>暂无可生成接管包的任务</p></div>
+        <div v-else-if="aiHandoffLoading && !aiHandoff" class="empty-state"><p>接管包生成中...</p></div>
+        <div v-else-if="aiHandoff" class="handoff-panel">
+          <div class="synthesis-metrics">
+            <span class="run-status-badge" :class="aiHandoff.handoff_status">{{ aiHandoff.handoff_status }}</span>
+            <span>project_id: {{ aiHandoff.project_id }}</span>
+            <span>task_id: {{ aiHandoff.task_id || '-' }}</span>
+            <span>redaction_applied: {{ aiHandoff.redaction_applied }}</span>
+          </div>
+          <pre class="handoff-details">{{ formatHandoffDetails(aiHandoff) }}</pre>
+          <div class="handoff-prompt-block">
+            <strong>next_ai_prompt</strong>
+            <textarea readonly :value="aiHandoff.next_ai_prompt" aria-label="next_ai_prompt"></textarea>
+          </div>
+        </div>
+      </section>
+
       <!-- Code Context -->
       <section class="card">
         <h2>代码上下文</h2>
@@ -609,11 +651,11 @@ import {
   fetchAgentRuns, createAgentRun, updateAgentRun, submitAgentRunResult,
   fetchAgentReviews, createAgentReview,
   fetchApprovalDecisions,
-  fetchDispatchBatches, previewAnswerSynthesis,
+  fetchDispatchBatches, previewAnswerSynthesis, previewAiHandoff,
   fetchCodeContext,
   applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate, evaluateSandboxGate,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -638,6 +680,10 @@ const dispatchBatchError = ref('')
 const answerSynthesis = ref<AnswerSynthesisPreviewResponse | null>(null)
 const answerSynthesisError = ref('')
 const answerSynthesisLoading = ref(false)
+const aiHandoff = ref<AiHandoffPreviewResponse | null>(null)
+const aiHandoffError = ref('')
+const aiHandoffLoading = ref(false)
+const aiHandoffCopyMessage = ref('')
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -704,6 +750,23 @@ function formatConfidence(value: number | null | undefined) {
   return `${Math.round(value * 100)}%`
 }
 
+function formatHandoffDetails(packet: AiHandoffPreviewResponse) {
+  return JSON.stringify({
+    current_master_commit_hint: packet.current_master_commit_hint,
+    required_handoff_docs: ['AGENTS.md'],
+    project_snapshot: packet.project_snapshot,
+    current_task_summary: packet.current_task_summary,
+    recent_capabilities: packet.recent_capabilities,
+    current_pr_summary: packet.current_pr_summary,
+    recent_dispatch_summary: packet.recent_dispatch_summary,
+    answer_synthesis_summary: packet.answer_synthesis_summary,
+    safety_rules: packet.safety_rules,
+    next_recommended_steps: packet.next_recommended_steps,
+    source_ids: packet.source_ids,
+    safety_notes: packet.safety_notes,
+  }, null, 2)
+}
+
 onMounted(async () => {
   agents.value = await fetchAgents()
   await refresh()
@@ -716,6 +779,7 @@ async function refresh() {
   agentReviews.value = await fetchAgentReviews(id)
   approvalDecisions.value = await fetchApprovalDecisions(id)
   await loadDispatchBatches(id)
+  await loadAiHandoff()
   codeContext.value = await fetchCodeContext(id)
   sandboxResults.value = await fetchSandboxResults(id)
   applyResult.value = null
@@ -767,6 +831,45 @@ async function refreshAnswerSynthesis() {
   const latestBatch = dispatchBatches.value[dispatchBatches.value.length - 1]
   if (!task.value || !latestBatch) return
   await loadAnswerSynthesis(task.value.id, latestBatch.dispatch_batch_id)
+}
+
+async function loadAiHandoff() {
+  if (!task.value?.project_id || !task.value?.id) {
+    aiHandoff.value = null
+    aiHandoffError.value = ''
+    return
+  }
+  aiHandoffLoading.value = true
+  aiHandoffError.value = ''
+  try {
+    aiHandoff.value = await previewAiHandoff({
+      project_id: task.value.project_id,
+      task_id: task.value.id,
+      include_recent_batches: true,
+      include_answer_synthesis: true,
+      include_safety_rules: true,
+      max_chars: 12000,
+    })
+  } catch (e: any) {
+    aiHandoff.value = null
+    aiHandoffError.value = e.message || 'AI 接管包生成失败'
+  } finally {
+    aiHandoffLoading.value = false
+  }
+}
+
+async function refreshAiHandoff() {
+  await loadAiHandoff()
+}
+
+async function copyNextAiPrompt() {
+  if (!aiHandoff.value?.next_ai_prompt) return
+  try {
+    await navigator.clipboard.writeText(aiHandoff.value.next_ai_prompt)
+    aiHandoffCopyMessage.value = 'next_ai_prompt 已复制'
+  } catch {
+    aiHandoffCopyMessage.value = '复制失败，请手动选择文本'
+  }
 }
 
 async function refreshSandboxGate() {
@@ -1055,6 +1158,15 @@ async function handleCreateAgentReview() {
 .synthesis-artifact-item { padding: 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fff; }
 .synthesis-artifact-item span { font-size: 12px; color: var(--color-text-secondary); }
 .synthesis-artifact-item pre { margin-top: 6px; max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+/* AI Handoff */
+.ai-handoff-workspace { margin-top: 12px; }
+.section-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.handoff-panel { display: flex; flex-direction: column; gap: 12px; }
+.handoff-details { margin: 0; max-height: 360px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.45; color: var(--color-text-secondary); padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fff; }
+.handoff-prompt-block { display: flex; flex-direction: column; gap: 6px; }
+.handoff-prompt-block textarea { min-height: 260px; width: 100%; resize: vertical; border: 1px solid var(--color-border); border-radius: var(--radius); padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.45; color: var(--color-text); background: #fff; }
+.copy-message { margin: 0 0 8px; color: var(--color-success); font-size: 12px; }
+.synthesis-list pre { margin: 0; max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--color-text-secondary); }
 /* Code Context */
 .context-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
 .context-stat { font-size: 12px; color: var(--color-text-secondary); margin-left: auto; }
@@ -1115,6 +1227,3 @@ async function handleCreateAgentReview() {
 .btn-archive { background: #607d8b; color: #fff; border-color: #607d8b; }
 .btn-sm { padding: 6px 14px; font-size: 13px; }
 </style>
-
-
-

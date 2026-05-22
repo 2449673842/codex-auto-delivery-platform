@@ -342,3 +342,41 @@ export interface AnswerSynthesisPreviewResponse {
   confidence: number
   safety_notes: string[]
 }
+
+// ── AI Handoff Packet / Next AI Onboarding ──
+export interface AiHandoffPreviewRequest {
+  project_id: number
+  task_id?: number | null
+  include_recent_batches?: boolean
+  include_answer_synthesis?: boolean
+  include_safety_rules?: boolean
+  max_chars?: number
+}
+
+export interface AiHandoffSourceIds {
+  project_id: number
+  task_id: number | null
+  dispatch_batch_ids: number[]
+  dispatch_job_ids: number[]
+  agent_run_ids: number[]
+  artifact_ids: number[]
+}
+
+export interface AiHandoffPreviewResponse {
+  project_id: number
+  task_id: number | null
+  handoff_status: string
+  project_snapshot: Record<string, unknown>
+  current_task_summary: Record<string, unknown>
+  recent_capabilities: string[]
+  current_master_commit_hint: string
+  current_pr_summary: Record<string, unknown>
+  recent_dispatch_summary: Record<string, unknown>
+  answer_synthesis_summary: Record<string, unknown>
+  safety_rules: string[]
+  next_recommended_steps: string[]
+  next_ai_prompt: string
+  source_ids: AiHandoffSourceIds
+  redaction_applied: boolean
+  safety_notes: string[]
+}
