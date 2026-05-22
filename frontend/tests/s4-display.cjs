@@ -342,10 +342,11 @@ async function testMultiAiWorkspaceApiFailure(page, taskId) {
 
 async function testNoUnsafeWorkspaceActions(page) {
   log('\n========== M. No unsafe workspace actions ==========')
-  const unsafeButtons = await page.locator('button:has-text("创建 PR"), button:has-text("merge"), button:has-text("Merge"), button:has-text("deploy"), button:has-text("Deploy"), button:has-text("部署")').count()
-  const unsafeLinks = await page.locator('a:has-text("创建 PR"), a:has-text("merge"), a:has-text("Merge"), a:has-text("deploy"), a:has-text("Deploy"), a:has-text("部署")').count()
-  if (unsafeButtons === 0 && unsafeLinks === 0) pass('M1 No create PR / merge / deploy entry')
-  else fail('M1 Unsafe entry found', `buttons=${unsafeButtons}, links=${unsafeLinks}`)
+  const unsafeButtons = await page.locator('button:has-text("创建 PR"), button:has-text("Create PR"), button:has-text("PR Adapter not implemented"), button:has-text("merge"), button:has-text("Merge"), button:has-text("deploy"), button:has-text("Deploy"), button:has-text("部署")').count()
+  const unsafeLinks = await page.locator('a:has-text("创建 PR"), a:has-text("Create PR"), a:has-text("PR Adapter not implemented"), a:has-text("merge"), a:has-text("Merge"), a:has-text("deploy"), a:has-text("Deploy"), a:has-text("部署")').count()
+  const unsafeText = await page.locator('text=/PR Adapter not implemented|Future step only|No real PR created|Create PR|Deploy|Merge/').count()
+  if (unsafeButtons === 0 && unsafeLinks === 0 && unsafeText === 0) pass('M1 No create PR / merge / deploy entry or stub')
+  else fail('M1 Unsafe entry found', `buttons=${unsafeButtons}, links=${unsafeLinks}, text=${unsafeText}`)
 }
 function printSummary(ce) {
   console.log('\n========== SUMMARY ==========')

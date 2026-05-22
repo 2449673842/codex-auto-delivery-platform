@@ -377,10 +377,7 @@
               </li>
             </ul>
           </div>
-          <div v-if="sandboxGate.passed" class="sandbox-gate-actions">
-            <button class="btn btn-sm" disabled title="PR Adapter not implemented — gate only validates sandbox results">PR Adapter not implemented</button>
-            <span class="sandbox-gate-pending-note">No real PR created · Future step only</span>
-          </div>
+
         </div>
       </section>
 
