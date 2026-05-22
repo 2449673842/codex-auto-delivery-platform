@@ -7,6 +7,7 @@ import type {
   CodeContextResponse, PatchApplyResult, SandboxArtifactEntry,
   SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewRequest, AnswerSynthesisPreviewResponse,
   AiHandoffPreviewRequest, AiHandoffPreviewResponse,
+  AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -146,5 +147,16 @@ export async function previewAnswerSynthesis(body: AnswerSynthesisPreviewRequest
 // ── AI Handoff Packet / Next AI Onboarding ──
 export async function previewAiHandoff(body: AiHandoffPreviewRequest): Promise<AiHandoffPreviewResponse> {
   const { data } = await client.post('/ai-handoff/preview', body)
+  return data.data
+}
+
+// ── Real AI Dispatch Run ──
+export async function dryRunAiDispatch(body: AiDispatchRequest): Promise<AiDispatchDryRunResponse> {
+  const { data } = await client.post('/ai-dispatch/dry-run', body)
+  return data.data
+}
+
+export async function executeAiDispatch(body: AiDispatchRequest): Promise<AiDispatchExecuteResponse> {
+  const { data } = await client.post('/ai-dispatch/execute', body)
   return data.data
 }

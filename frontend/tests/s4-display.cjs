@@ -215,6 +215,73 @@ async function testSandboxSection(page) {
   await checkT(page, 'No PR created', 'G4 No PR created label')
 }
 
+async function testRealAiRun(page, taskId) {
+  log('\n========== R. Real AI Run ==========')
+  const dryCounter = { count: 0 }
+  const executeCounter = { count: 0 }
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
+  await setAiDispatchRoute(page, 'dry-run', aiDryRunPayload(), 200, dryCounter)
+  await setAiDispatchRoute(page, 'execute', aiExecutePayload(taskId), 200, executeCounter)
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await checkT(page, 'Real AI Run / 真实 AI 调用', 'R1 Section')
+  await checkT(page, 'provider: openai', 'R2 provider')
+  await checkT(page, 'model: gpt-4o-mini', 'R3 model')
+  await page.getByRole('button', { name: 'Dry-run' }).click()
+  await page.waitForTimeout(300)
+  if (dryCounter.count === 1) pass('R4 dry-run endpoint called')
+  else fail('R4 dry-run endpoint call count', dryCounter.count)
+  await checkT(page, 'would_dispatch=false', 'R5 would_dispatch false')
+  await checkT(page, 'estimated_tokens=1888', 'R6 token estimate')
+  await checkT(page, 'AI_EXECUTION_ENABLED 未开启', 'R7 execution disabled reason')
+  await checkT(page, 'OPENAI_API_KEY 缺失', 'R8 missing key reason')
+  await page.getByRole('button', { name: 'Execute' }).click()
+  await page.waitForTimeout(500)
+  if (executeCounter.count === 1) pass('R9 execute endpoint called')
+  else fail('R9 execute endpoint call count', executeCounter.count)
+  await checkT(page, 'agent_run_id: 909', 'R10 agent_run_id displayed')
+  await checkT(page, 'Real OpenAI answer saved', 'R11 output summary displayed')
+  await checkT(page, 'patch.diff', 'R12 patch artifact displayed')
+  await checkT(page, 'sandbox_applied=true', 'R13 sandbox applied displayed')
+  await checkT(page, 'sandbox_gate_passed=true', 'R14 sandbox gate passed displayed')
+  await checkT(page, 'Patch is not applied to the real repository. Sandbox only.', 'R15 sandbox only warning')
+  await checkT(page, 'Sandbox Gate passed is required before any PR step.', 'R16 gate before PR warning')
+  await checkT(page, 'sandbox_apply: succeeded (Patch Sandbox Apply)', 'R17 sandbox step displayed')
+  await checkT(page, 'sandbox_gate: succeeded (Sandbox Gate)', 'R18 gate step displayed')
+}
+
+async function testRealAiRunPipelineFailures(page, taskId) {
+  log('\n========== R2. Real AI Run Pipeline Failures ==========')
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
+  await setAiDispatchRoute(page, 'execute', aiExecutePayload(taskId, {
+    pipeline_status: 'sandbox_failed',
+    sandbox_applied: false,
+    sandbox_gate_passed: false,
+    steps: [{ step: 'sandbox_apply', status: 'failed', details: 'sandbox patch failed' }],
+  }))
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await page.getByRole('button', { name: 'Execute' }).click()
+  await page.waitForTimeout(300)
+  await checkT(page, 'pipeline_status: sandbox_failed', 'R2-1 sandbox_failed status')
+  await checkT(page, 'sandbox failed / blocked', 'R2-2 sandbox failed label')
+  await setAiDispatchRoute(page, 'execute', aiExecutePayload(taskId, {
+    pipeline_status: 'sandbox_gate_blocked',
+    sandbox_applied: true,
+    sandbox_gate_passed: false,
+    sandbox_gate_blocked_reasons: ['risk_high', 'manual_review_required'],
+    steps: [{ step: 'sandbox_gate', status: 'blocked', details: 'Sandbox Gate blocked' }],
+  }))
+  await page.getByRole('button', { name: 'Execute' }).click()
+  await page.waitForTimeout(300)
+  await checkT(page, 'pipeline_status: sandbox_gate_blocked', 'R2-3 gate blocked status')
+  await checkT(page, 'gate blocked', 'R2-4 gate blocked label')
+  await checkT(page, 'risk_high', 'R2-5 gate blocked reason risk')
+  await checkT(page, 'manual_review_required', 'R2-6 gate blocked reason manual')
+}
+
 async function testNoCodeContext(page, taskId) {
   log('\n========== I. No Code Context — 404 Recovery ==========')
   await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
@@ -267,6 +334,11 @@ async function setAnswerSynthesisRoute(page, payload, status = 200, counter = nu
 async function setAiHandoffRoute(page, payload, status = 200, counter = null) {
   await page.unroute('**/api/ai-handoff/preview').catch(() => {})
   await page.route('**/api/ai-handoff/preview', route => fulfillJson(route, payload, status, counter))
+}
+
+async function setAiDispatchRoute(page, action, payload, status = 200, counter = null) {
+  await page.unroute(`**/api/ai-dispatch/${action}`).catch(() => {})
+  await page.route(`**/api/ai-dispatch/${action}`, route => fulfillJson(route, payload, status, counter))
 }
 
 async function fulfillJson(route, payload, status, counter) {
@@ -326,6 +398,51 @@ function handoffPayload(taskId, projectId) {
     redaction_applied: true,
     safety_notes: ['verify_current_master_on_github_before_acting', 'Read AGENTS.md before taking over.', 'No AI provider called.', 'No database write.'],
   }, message: 'ok' }
+}
+
+function aiDryRunPayload() {
+  return { success: true, data: {
+    provider: 'openai',
+    model: 'gpt-4o-mini',
+    mode: 'review',
+    prompt_hash: 'dry_prompt_hash',
+    context_packet_hash: 'dry_context_hash',
+    estimated_tokens: 1888,
+    would_dispatch: false,
+    safety_gate: {
+      execution_enabled: false,
+      openai_key_present: false,
+      provider_allowed: true,
+      mode_valid: true,
+      budget_ok: true,
+      gate_passed: false,
+    },
+  }, message: 'ok' }
+}
+
+function aiExecutePayload(taskId, overrides = {}) {
+  const data = {
+    agent_run_id: 909,
+    task_id: taskId,
+    status: 'succeeded',
+    output_summary: 'Real OpenAI answer saved',
+    output_diff: null,
+    artifacts: [{ id: 808, filename: 'patch.diff', artifact_type: 'patch' }],
+    events: [],
+    sandbox_applied: true,
+    sandbox_gate_passed: true,
+    sandbox_gate_blocked_reasons: [],
+    pipeline_status: 'succeeded',
+    prompt_hash: 'exec_prompt_hash',
+    context_packet_hash: 'exec_context_hash',
+    token_usage: { prompt_tokens: 10, completion_tokens: 20 },
+    steps: [
+      { step: 'provider', status: 'succeeded', details: 'fake provider in display test' },
+      { step: 'sandbox_apply', status: 'succeeded', details: 'Patch Sandbox Apply' },
+      { step: 'sandbox_gate', status: 'succeeded', details: 'Sandbox Gate' },
+    ],
+  }
+  return { success: true, data: { ...data, ...overrides }, message: 'ok' }
 }
 
 async function testMultiAiWorkspaceEmpty(page, taskId) {
@@ -533,6 +650,8 @@ async function main() {
   await testArtifacts(page)
   await testCodeContext(page)
   await testSandboxSection(page)
+  await testRealAiRun(page, task.id)
+  await testRealAiRunPipelineFailures(page, task.id)
   await testApprovals(page)
   await testHumanRequired(page)
   await testSandboxApply(page)

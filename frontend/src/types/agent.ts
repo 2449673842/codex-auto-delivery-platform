@@ -380,3 +380,59 @@ export interface AiHandoffPreviewResponse {
   redaction_applied: boolean
   safety_notes: string[]
 }
+
+// ── Real AI Dispatch Run ──
+export type AiDispatchMode = 'planning' | 'review' | 'risk' | 'patch_generation'
+
+export interface AiDispatchRequest {
+  task_goal: string
+  module_name?: string
+  task_type?: string
+  mode: AiDispatchMode
+  task_id?: number | null
+  project_id: number
+}
+
+export interface AiDispatchSafetyGate {
+  execution_enabled: boolean
+  openai_key_present: boolean
+  provider_allowed: boolean
+  mode_valid: boolean
+  budget_ok: boolean
+  gate_passed: boolean
+}
+
+export interface AiDispatchDryRunResponse {
+  provider: string
+  model: string
+  mode: string
+  prompt_hash: string
+  context_packet_hash: string
+  estimated_tokens: number
+  safety_gate: AiDispatchSafetyGate
+  would_dispatch: boolean
+}
+
+export interface AiExecuteStep {
+  step: string
+  status: string
+  details?: string | null
+}
+
+export interface AiDispatchExecuteResponse {
+  agent_run_id: number
+  task_id: number | null
+  status: string
+  output_summary?: string | null
+  output_diff?: string | null
+  artifacts: Record<string, unknown>[]
+  events: Record<string, unknown>[]
+  sandbox_applied: boolean
+  sandbox_gate_passed: boolean
+  sandbox_gate_blocked_reasons: string[]
+  pipeline_status: string
+  prompt_hash: string
+  context_packet_hash: string
+  token_usage: Record<string, unknown>
+  steps: AiExecuteStep[]
+}
