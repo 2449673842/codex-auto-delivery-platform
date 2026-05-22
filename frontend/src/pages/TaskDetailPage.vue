@@ -190,6 +190,58 @@
         </div>
       </section>
 
+      <!-- Multi-AI Answer Workspace -->
+      <section class="card multi-ai-workspace">
+        <div class="section-header">
+          <h2>Multi-AI Answer Workspace / 多 AI 回答工作台</h2>
+          <span class="workspace-readonly">Read-only display</span>
+        </div>
+        <div class="workspace-safety">
+          <span class="label-badge label-ai">Read-only display</span>
+          <span class="label-badge label-provider">No external PR created</span>
+          <span class="label-badge label-merged">No auto merge</span>
+          <span class="label-badge label-applied">Sandbox only</span>
+        </div>
+        <p v-if="dispatchBatchError" class="run-error">{{ dispatchBatchError }}</p>
+        <div v-else-if="dispatchBatches.length === 0" class="empty-state"><p>暂无多 AI Dispatch 记录</p></div>
+        <div v-else class="dispatch-batch-list">
+          <div v-for="batch in dispatchBatches" :key="batch.dispatch_batch_id" class="dispatch-batch-item">
+            <div class="dispatch-batch-header">
+              <strong>Batch #{{ batch.dispatch_batch_id }}</strong>
+              <span class="label-badge label-provider">{{ batch.batch_mode }}</span>
+              <span class="run-status-badge" :class="batch.status">{{ batch.status }}</span>
+            </div>
+            <div class="dispatch-batch-meta">
+              <span>task_goal: {{ batch.task_goal || '-' }}</span>
+              <span>summary: {{ formatSummary(batch.summary) }}</span>
+            </div>
+            <div class="dispatch-job-grid">
+              <div v-for="job in batch.jobs" :key="`${batch.dispatch_batch_id}-${job.sequence_no}-${job.dispatch_job_id || job.question}`" class="dispatch-job-card">
+                <div class="dispatch-job-header">
+                  <strong>#{{ job.sequence_no }} {{ job.question }}</strong>
+                  <span class="run-status-badge" :class="job.status">{{ job.status }}</span>
+                </div>
+                <div class="dispatch-job-meta">
+                  <span>provider: {{ job.provider }}</span>
+                  <span>model: {{ job.model }}</span>
+                  <span>mode: {{ job.mode }}</span>
+                  <span>expected_artifact_type: {{ job.expected_artifact_type || '-' }}</span>
+                </div>
+                <div class="dispatch-job-hashes">
+                  <code>prompt_hash: {{ job.prompt_hash || '-' }}</code>
+                  <code>context_packet_hash: {{ job.context_packet_hash || '-' }}</code>
+                </div>
+                <div class="dispatch-job-meta">
+                  <span>agent_run_id: {{ job.agent_run_id || '-' }}</span>
+                  <span>artifact_ids: {{ formatArtifactIds(job.artifact_ids) }}</span>
+                </div>
+                <p v-if="job.error_message" class="run-error">{{ job.error_message }}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Code Context -->
       <section class="card">
         <h2>代码上下文</h2>
@@ -325,10 +377,7 @@
               </li>
             </ul>
           </div>
-          <div v-if="sandboxGate.passed" class="sandbox-gate-actions">
-            <button class="btn btn-sm" disabled title="PR Adapter not implemented — gate only validates sandbox results">PR Adapter not implemented</button>
-            <span class="sandbox-gate-pending-note">No real PR created · Future step only</span>
-          </div>
+
         </div>
       </section>
 
@@ -470,14 +519,6 @@
         <EventTimeline :task-id="task.id" />
       </section>
 
-      <section class="card stub-section">
-        <h2>集成（预留）</h2>
-        <div class="stub-actions">
-          <button class="btn btn-sm" @click="handleStub('create-pr')">创建 PR (Stub)</button>
-          <button class="btn btn-sm" @click="handleStub('trigger-ci')">触发 CI (Stub)</button>
-          <button class="btn btn-sm" @click="handleStub('trigger-deploy')">部署 (Stub)</button>
-        </div>
-      </section>
     </div>
   </div>
   <div v-else class="loading">加载中...</div>
@@ -492,10 +533,11 @@ import {
   fetchAgentRuns, createAgentRun, updateAgentRun, submitAgentRunResult,
   fetchAgentReviews, createAgentReview,
   fetchApprovalDecisions,
+  fetchDispatchBatches,
   fetchCodeContext,
   applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate, evaluateSandboxGate,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -515,6 +557,8 @@ const agents = ref<AgentProfile[]>([])
 const agentRuns = ref<AgentRun[]>([])
 const agentReviews = ref<AgentReview[]>([])
 const approvalDecisions = ref<ApprovalDecision[]>([])
+const dispatchBatches = ref<DispatchBatchResponse[]>([])
+const dispatchBatchError = ref('')
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -567,6 +611,15 @@ function formatTime(ts: string | null | undefined) {
   return new Date(ts).toLocaleString()
 }
 
+function formatArtifactIds(ids: number[] | undefined) {
+  return ids && ids.length ? ids.join(', ') : '-'
+}
+
+function formatSummary(summary: Record<string, unknown> | null | undefined) {
+  if (!summary || Object.keys(summary).length === 0) return '-'
+  return JSON.stringify(summary)
+}
+
 onMounted(async () => {
   agents.value = await fetchAgents()
   await refresh()
@@ -578,10 +631,21 @@ async function refresh() {
   agentRuns.value = await fetchAgentRuns(id)
   agentReviews.value = await fetchAgentReviews(id)
   approvalDecisions.value = await fetchApprovalDecisions(id)
+  await loadDispatchBatches(id)
   codeContext.value = await fetchCodeContext(id)
   sandboxResults.value = await fetchSandboxResults(id)
   applyResult.value = null
   await loadSandboxGate()
+}
+
+async function loadDispatchBatches(id: number) {
+  dispatchBatchError.value = ''
+  try {
+    dispatchBatches.value = await fetchDispatchBatches(id)
+  } catch (e: any) {
+    dispatchBatches.value = []
+    dispatchBatchError.value = e.message || '多 AI Dispatch 记录加载失败'
+  }
 }
 
 async function refreshSandboxGate() {
@@ -648,14 +712,6 @@ async function doTransition(action: string, extra: Record<string, any> = {}) {
   }
 }
 
-async function handleStub(action: string) {
-  try {
-    const { data } = await (await import('../services/api')).default.post(`/tasks/${task.value.id}/${action}`)
-    alert(data.message || 'Stub endpoint called')
-  } catch (e: any) {
-    alert(e.message)
-  }
-}
 
 // Agent Run actions
 async function handleCreateAgentRun() {
@@ -759,8 +815,6 @@ async function handleCreateAgentReview() {
 .detail-body section h2 { font-size: 16px; font-weight: 600; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--color-border); }
 .description-text { white-space: pre-wrap; font-family: inherit; font-size: 14px; line-height: 1.6; color: var(--color-text-secondary); }
 .roles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; font-size: 14px; }
-.stub-actions { display: flex; gap: 8px; }
-.stub-section { opacity: 0.7; }
 .loading { text-align: center; padding: 60px; color: var(--color-text-secondary); }
 .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--color-border); }
 .section-header h2 { font-size: 16px; font-weight: 600; margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
@@ -844,6 +898,22 @@ async function handleCreateAgentReview() {
 .approval-decision-header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
 .artifact-note { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--color-border); }
 
+
+/* Multi-AI Answer Workspace */
+.workspace-readonly { font-size: 12px; color: var(--color-text-secondary); font-weight: 500; }
+.workspace-safety { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.dispatch-batch-list { display: flex; flex-direction: column; gap: 12px; }
+.dispatch-batch-item { padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
+.dispatch-batch-header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.dispatch-batch-meta { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--color-text-secondary); margin-bottom: 10px; word-break: break-word; }
+.dispatch-job-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.dispatch-job-card { padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fff; }
+.dispatch-job-header { display: flex; gap: 8px; align-items: flex-start; justify-content: space-between; margin-bottom: 6px; }
+.dispatch-job-header strong { font-size: 13px; line-height: 1.4; }
+.dispatch-job-meta { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--color-text-secondary); margin: 6px 0; word-break: break-word; }
+.dispatch-job-hashes { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }
+.dispatch-job-hashes code { font-size: 11px; white-space: normal; word-break: break-all; color: var(--color-text-secondary); }
+.run-status-badge.blocked { background: #fff3e0; color: #e65100; }
 /* Code Context */
 .context-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
 .context-stat { font-size: 12px; color: var(--color-text-secondary); margin-left: auto; }
@@ -904,3 +974,6 @@ async function handleCreateAgentReview() {
 .btn-archive { background: #607d8b; color: #fff; border-color: #607d8b; }
 .btn-sm { padding: 6px 14px; font-size: 13px; }
 </style>
+
+
+
