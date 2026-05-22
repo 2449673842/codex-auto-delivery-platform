@@ -249,6 +249,104 @@ async function testSandboxApply(page) {
   await checkEl(page, '.sandbox-artifact-item', 'H8b Artifact items')
 }
 
+
+async function setDispatchBatchesRoute(page, payload, status = 200) {
+  await page.unroute('**/api/tasks/*/dispatch-batches').catch(() => {})
+  await page.route('**/api/tasks/*/dispatch-batches', route => route.fulfill({
+    status,
+    contentType: 'application/json',
+    body: JSON.stringify(payload),
+  }))
+}
+
+async function testMultiAiWorkspaceEmpty(page, taskId) {
+  log('\n========== J. Multi-AI Answer Workspace Empty ==========')
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await checkT(page, 'Multi-AI Answer Workspace / 多 AI 回答工作台', 'J1 Section')
+  await checkT(page, '暂无多 AI Dispatch 记录', 'J2 Empty state')
+  await checkT(page, 'Read-only display', 'J3 Read-only label')
+  await checkT(page, 'No external PR created', 'J4 No external PR label')
+  await checkT(page, 'No auto merge', 'J5 No auto merge label')
+  await checkT(page, 'Sandbox only', 'J6 Sandbox only label')
+}
+
+async function testMultiAiWorkspaceRouted(page, taskId) {
+  log('\n========== K. Multi-AI Answer Workspace Routed Data ==========')
+  await setDispatchBatchesRoute(page, { success: true, data: [{
+    dispatch_batch_id: 101,
+    task_id: taskId,
+    batch_mode: 'routed',
+    status: 'succeeded',
+    task_goal: 'Review PR #26',
+    summary: { job_count: 2, status_counts: { succeeded: 1, blocked: 1 } },
+    jobs: [
+      {
+        dispatch_job_id: 201,
+        sequence_no: 1,
+        question: 'Check PR body',
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        mode: 'review',
+        status: 'succeeded',
+        prompt_hash: 'prompt1234',
+        context_packet_hash: 'ctx1234',
+        expected_artifact_type: 'review.md',
+        safety_boundary: {},
+        agent_run_id: 301,
+        artifact_ids: [401, 402],
+        error_message: null,
+      },
+      {
+        dispatch_job_id: 202,
+        sequence_no: 2,
+        question: 'Check risk',
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        mode: 'risk',
+        status: 'blocked',
+        prompt_hash: 'prompt5678',
+        context_packet_hash: 'ctx5678',
+        expected_artifact_type: 'risk_report.json',
+        safety_boundary: {},
+        agent_run_id: null,
+        artifact_ids: [403],
+        error_message: 'AI_EXECUTION_ENABLED is not set',
+      },
+    ],
+  }], message: 'ok' })
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await checkT(page, 'routed', 'K1 batch_mode routed')
+  await checkEl(page, 'text=Check PR body', 'K2 question 1')
+  await checkEl(page, 'text=Check risk', 'K3 question 2')
+  await checkT(page, 'provider: openai', 'K4 provider')
+  await checkT(page, 'mode: review', 'K5 review mode')
+  await checkT(page, 'mode: risk', 'K6 risk mode')
+  await checkT(page, 'succeeded', 'K7 succeeded status')
+  await checkT(page, 'blocked', 'K8 blocked status')
+  await checkT(page, 'artifact_ids: 401, 402', 'K9 artifact ids')
+  await checkT(page, 'AI_EXECUTION_ENABLED is not set', 'K10 blocked error')
+}
+
+async function testMultiAiWorkspaceApiFailure(page, taskId) {
+  log('\n========== L. Multi-AI Answer Workspace API Failure ==========')
+  await setDispatchBatchesRoute(page, { detail: 'dispatch batch unavailable' }, 500)
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await checkT(page, 'Multi-AI Answer Workspace / 多 AI 回答工作台', 'L1 Section still visible')
+  await checkT(page, 'dispatch batch unavailable', 'L2 Error message')
+  pass('L3 API failure does not crash TaskDetail')
+}
+
+async function testNoUnsafeWorkspaceActions(page) {
+  log('\n========== M. No unsafe workspace actions ==========')
+  const unsafeButtons = await page.locator('button:has-text("创建 PR"), button:has-text("merge"), button:has-text("Merge"), button:has-text("deploy"), button:has-text("Deploy"), button:has-text("部署")').count()
+  const unsafeLinks = await page.locator('a:has-text("创建 PR"), a:has-text("merge"), a:has-text("Merge"), a:has-text("deploy"), a:has-text("Deploy"), a:has-text("部署")').count()
+  if (unsafeButtons === 0 && unsafeLinks === 0) pass('M1 No create PR / merge / deploy entry')
+  else fail('M1 Unsafe entry found', `buttons=${unsafeButtons}, links=${unsafeLinks}`)
+}
 function printSummary(ce) {
   console.log('\n========== SUMMARY ==========')
   ce.forEach(e => log(`  [ERR] ${e}`))
@@ -297,6 +395,10 @@ async function main() {
   await testApprovals(page)
   await testHumanRequired(page)
   await testSandboxApply(page)
+  await testMultiAiWorkspaceEmpty(page, task.id)
+  await testMultiAiWorkspaceRouted(page, task.id)
+  await testMultiAiWorkspaceApiFailure(page, task.id)
+  await testNoUnsafeWorkspaceActions(page)
   // Create a separate task without code context for 404 test
   const bareTask = await apiPost('/tasks', { project_id: task.project_id, title: 'S4 no-ctx test', planner: 'test', description: 'No code context' })
   if (bareTask.data?.id) await testNoCodeContext(page, bareTask.data.id)
@@ -308,3 +410,5 @@ async function main() {
 }
 
 main().catch(e => { console.error('Test harness error:', e); process.exit(1) })
+
+

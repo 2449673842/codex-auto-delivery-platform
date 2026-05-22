@@ -5,7 +5,7 @@ import type {
   AgentReview, AgentReviewCreate,
   ApprovalPolicy, ApprovalPolicyCreate, ApprovalPolicyUpdate,
   CodeContextResponse, PatchApplyResult, SandboxArtifactEntry,
-  SandboxGateDecision,
+  SandboxGateDecision, DispatchBatchResponse,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -131,3 +131,11 @@ export async function evaluateSandboxGate(taskId: number): Promise<SandboxGateDe
   const { data } = await client.post(`/tasks/${taskId}/sandbox/evaluate-gate`)
   return data.data
 }
+// ── Dispatch Batches / Multi-AI Workspace ──
+export async function fetchDispatchBatches(taskId: number): Promise<DispatchBatchResponse[]> {
+  const { data } = await client.get(`/tasks/${taskId}/dispatch-batches`)
+  return data.data || []
+}
+
+
+

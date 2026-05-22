@@ -272,3 +272,38 @@ export interface ApprovalPolicyUpdate {
   forbid_auto_merge_main?: boolean
   forbid_auto_deploy_prod?: boolean
 }
+// ── Dispatch Batch / Multi-AI Workspace ──
+export type DispatchBatchMode = 'broadcast' | 'routed' | 'pipeline'
+export type DispatchJobStatus = 'preview' | 'queued' | 'running' | 'succeeded' | 'failed' | 'blocked' | string
+
+export interface DispatchJobPreview {
+  dispatch_job_id: number | null
+  sequence_no: number
+  question: string
+  provider: string
+  model: string
+  mode: string
+  status: DispatchJobStatus
+  prompt_hash: string
+  context_packet_hash: string
+  expected_artifact_type: string
+  safety_boundary: Record<string, unknown>
+  agent_run_id: number | null
+  artifact_ids: number[]
+  error_message: string | null
+}
+
+export interface DispatchJob extends DispatchJobPreview {}
+
+export interface DispatchBatchResponse {
+  dispatch_batch_id: number
+  task_id: number
+  batch_mode: DispatchBatchMode | string
+  status: string
+  task_goal: string
+  jobs: DispatchJobPreview[]
+  summary: Record<string, unknown>
+}
+
+export interface DispatchBatch extends DispatchBatchResponse {}
+
