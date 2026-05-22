@@ -259,6 +259,41 @@ async function setDispatchBatchesRoute(page, payload, status = 200) {
   }))
 }
 
+async function setAnswerSynthesisRoute(page, payload, status = 200, counter = null) {
+  await page.unroute('**/api/answer-synthesis/preview').catch(() => {})
+  await page.route('**/api/answer-synthesis/preview', async route => {
+    if (counter) counter.count += 1
+    await route.fulfill({
+      status,
+      contentType: 'application/json',
+      body: JSON.stringify(payload),
+    })
+  })
+}
+
+function synthesisPayload(taskId, batchId) {
+  return { success: true, data: {
+    task_id: taskId,
+    dispatch_batch_id: batchId,
+    synthesis_status: 'attention_required',
+    confidence: 0.72,
+    job_count: 2,
+    succeeded_jobs: 1,
+    failed_jobs: 0,
+    blocked_jobs: 1,
+    common_findings: ['job_201: PR body matches changed files'],
+    disagreements: ['not_all_jobs_succeeded'],
+    risks: ['job_202_blocked: provider allowlist blocked'],
+    recommended_actions: ['Resolve blocked DispatchJob reasons before relying on the synthesis.'],
+    next_questions: ['How should job 202 be unblocked?'],
+    artifact_summaries: [{ artifact_id: 401, filename: 'review.md', artifact_type: 'agent_output', summary: 'Review summary content', is_truncated: false }],
+    source_job_ids: [201, 202],
+    source_agent_run_ids: [301],
+    source_artifact_ids: [401],
+    safety_notes: ['Deterministic rule-based preview; no AI provider called.', 'Stateless preview; no database write.'],
+  }, message: 'ok' }
+}
+
 async function testMultiAiWorkspaceEmpty(page, taskId) {
   log('\n========== J. Multi-AI Answer Workspace Empty ==========')
   await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
@@ -270,10 +305,13 @@ async function testMultiAiWorkspaceEmpty(page, taskId) {
   await checkT(page, 'No external PR created', 'J4 No external PR label')
   await checkT(page, 'No auto merge', 'J5 No auto merge label')
   await checkT(page, 'Sandbox only', 'J6 Sandbox only label')
+  await checkT(page, 'Answer Synthesis / 多 AI 综合结论', 'J7 Synthesis section')
+  await checkT(page, '暂无可综合的多 AI 结果', 'J8 Synthesis empty state')
 }
 
 async function testMultiAiWorkspaceRouted(page, taskId) {
   log('\n========== K. Multi-AI Answer Workspace Routed Data ==========')
+  const synthesisCounter = { count: 0 }
   await setDispatchBatchesRoute(page, { success: true, data: [{
     dispatch_batch_id: 101,
     task_id: taskId,
@@ -316,6 +354,7 @@ async function testMultiAiWorkspaceRouted(page, taskId) {
       },
     ],
   }], message: 'ok' })
+  await setAnswerSynthesisRoute(page, synthesisPayload(taskId, 101), 200, synthesisCounter)
   await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
   await page.waitForTimeout(500)
   await checkT(page, 'routed', 'K1 batch_mode routed')
@@ -328,6 +367,20 @@ async function testMultiAiWorkspaceRouted(page, taskId) {
   await checkT(page, 'blocked', 'K8 blocked status')
   await checkT(page, 'artifact_ids: 401, 402', 'K9 artifact ids')
   await checkT(page, 'AI_EXECUTION_ENABLED is not set', 'K10 blocked error')
+  await checkT(page, 'Answer Synthesis / 多 AI 综合结论', 'K11 synthesis section')
+  await checkT(page, 'attention_required', 'K12 synthesis status')
+  await checkT(page, 'confidence: 72%', 'K13 confidence')
+  await checkT(page, 'job_count: 2', 'K14 job count')
+  await checkT(page, 'job_201: PR body matches changed files', 'K15 common findings')
+  await checkT(page, 'job_202_blocked: provider allowlist blocked', 'K16 risks')
+  await checkT(page, 'Resolve blocked DispatchJob reasons before relying on the synthesis.', 'K17 recommended action')
+  await checkT(page, 'How should job 202 be unblocked?', 'K18 next question')
+  await checkT(page, 'source_job_ids: 201, 202', 'K19 source job ids')
+  await checkT(page, 'source_agent_run_ids: 301', 'K20 source run ids')
+  await checkT(page, 'source_artifact_ids: 401', 'K21 source artifact ids')
+  await checkT(page, 'Review summary content', 'K22 artifact summary')
+  if (synthesisCounter.count > 0) pass('K23 synthesis preview endpoint called')
+  else fail('K23 synthesis preview endpoint not called', '')
 }
 
 async function testMultiAiWorkspaceApiFailure(page, taskId) {
@@ -338,6 +391,22 @@ async function testMultiAiWorkspaceApiFailure(page, taskId) {
   await checkT(page, 'Multi-AI Answer Workspace / 多 AI 回答工作台', 'L1 Section still visible')
   await checkT(page, 'dispatch batch unavailable', 'L2 Error message')
   pass('L3 API failure does not crash TaskDetail')
+}
+
+async function testAnswerSynthesisApiFailure(page, taskId) {
+  log('\n========== M. Answer Synthesis API Failure & Refresh ==========')
+  const counter = { count: 0 }
+  await setDispatchBatchesRoute(page, { success: true, data: [{ dispatch_batch_id: 501, task_id: taskId, batch_mode: 'routed', status: 'succeeded', task_goal: 'Review PR', summary: {}, jobs: [] }], message: 'ok' })
+  await setAnswerSynthesisRoute(page, { detail: 'synthesis unavailable' }, 500, counter)
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await checkT(page, 'Answer Synthesis / 多 AI 综合结论', 'M1 synthesis section still visible')
+  await checkT(page, 'synthesis unavailable', 'M2 synthesis error')
+  const before = counter.count
+  await page.getByRole('button', { name: '重新生成综合结论' }).click()
+  await page.waitForTimeout(300)
+  if (counter.count === before + 1) pass('M3 refresh only calls synthesis preview endpoint')
+  else fail('M3 unexpected synthesis preview call count', `before=${before}, after=${counter.count}`)
 }
 
 async function testNoUnsafeWorkspaceActions(page) {
@@ -399,6 +468,7 @@ async function main() {
   await testMultiAiWorkspaceEmpty(page, task.id)
   await testMultiAiWorkspaceRouted(page, task.id)
   await testMultiAiWorkspaceApiFailure(page, task.id)
+  await testAnswerSynthesisApiFailure(page, task.id)
   await testNoUnsafeWorkspaceActions(page)
   // Create a separate task without code context for 404 test
   const bareTask = await apiPost('/tasks', { project_id: task.project_id, title: 'S4 no-ctx test', planner: 'test', description: 'No code context' })

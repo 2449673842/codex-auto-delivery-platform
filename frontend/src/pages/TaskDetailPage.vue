@@ -242,6 +242,82 @@
         </div>
       </section>
 
+      <!-- Answer Synthesis -->
+      <section class="card answer-synthesis-workspace">
+        <div class="section-header">
+          <h2>Answer Synthesis / 多 AI 综合结论</h2>
+          <button class="btn btn-sm" @click="refreshAnswerSynthesis" :disabled="answerSynthesisLoading || dispatchBatches.length === 0">
+            重新生成综合结论
+          </button>
+        </div>
+        <div class="workspace-safety">
+          <span class="label-badge label-provider">Rule-based preview</span>
+          <span class="label-badge label-exec">No AI provider called</span>
+          <span class="label-badge label-applied">No database write</span>
+          <span class="label-badge label-merged">No auto approve</span>
+          <span class="label-badge label-exec">No PR created</span>
+        </div>
+        <p v-if="answerSynthesisError" class="run-error">{{ answerSynthesisError }}</p>
+        <div v-else-if="dispatchBatches.length === 0" class="empty-state"><p>暂无可综合的多 AI 结果</p></div>
+        <div v-else-if="answerSynthesisLoading && !answerSynthesis" class="empty-state"><p>综合结论生成中...</p></div>
+        <div v-else-if="answerSynthesis" class="synthesis-panel">
+          <div class="synthesis-metrics">
+            <span class="run-status-badge" :class="answerSynthesis.synthesis_status">{{ answerSynthesis.synthesis_status }}</span>
+            <span>confidence: {{ formatConfidence(answerSynthesis.confidence) }}</span>
+            <span>job_count: {{ answerSynthesis.job_count }}</span>
+            <span>succeeded_jobs: {{ answerSynthesis.succeeded_jobs }}</span>
+            <span>failed_jobs: {{ answerSynthesis.failed_jobs }}</span>
+            <span>blocked_jobs: {{ answerSynthesis.blocked_jobs }}</span>
+          </div>
+          <div class="synthesis-grid">
+            <div class="synthesis-list">
+              <strong>common_findings</strong>
+              <p v-if="answerSynthesis.common_findings.length === 0">-</p>
+              <ul v-else><li v-for="item in answerSynthesis.common_findings" :key="item">{{ item }}</li></ul>
+            </div>
+            <div class="synthesis-list">
+              <strong>risks</strong>
+              <p v-if="answerSynthesis.risks.length === 0">-</p>
+              <ul v-else><li v-for="item in answerSynthesis.risks" :key="item">{{ item }}</li></ul>
+            </div>
+            <div class="synthesis-list">
+              <strong>recommended_actions</strong>
+              <p v-if="answerSynthesis.recommended_actions.length === 0">-</p>
+              <ul v-else><li v-for="item in answerSynthesis.recommended_actions" :key="item">{{ item }}</li></ul>
+            </div>
+            <div class="synthesis-list">
+              <strong>next_questions</strong>
+              <p v-if="answerSynthesis.next_questions.length === 0">-</p>
+              <ul v-else><li v-for="item in answerSynthesis.next_questions" :key="item">{{ item }}</li></ul>
+            </div>
+            <div class="synthesis-list">
+              <strong>disagreements</strong>
+              <p v-if="answerSynthesis.disagreements.length === 0">-</p>
+              <ul v-else><li v-for="item in answerSynthesis.disagreements" :key="item">{{ item }}</li></ul>
+            </div>
+            <div class="synthesis-list">
+              <strong>safety_notes</strong>
+              <p v-if="answerSynthesis.safety_notes.length === 0">-</p>
+              <ul v-else><li v-for="item in answerSynthesis.safety_notes" :key="item">{{ item }}</li></ul>
+            </div>
+          </div>
+          <div class="synthesis-source-ids">
+            <code>source_job_ids: {{ formatArtifactIds(answerSynthesis.source_job_ids) }}</code>
+            <code>source_agent_run_ids: {{ formatArtifactIds(answerSynthesis.source_agent_run_ids) }}</code>
+            <code>source_artifact_ids: {{ formatArtifactIds(answerSynthesis.source_artifact_ids) }}</code>
+          </div>
+          <div class="synthesis-artifacts">
+            <strong>artifact_summaries</strong>
+            <div v-if="answerSynthesis.artifact_summaries.length === 0" class="empty-state"><p>-</p></div>
+            <div v-for="artifact in answerSynthesis.artifact_summaries" :key="artifact.artifact_id" class="synthesis-artifact-item">
+              <span>#{{ artifact.artifact_id }} {{ artifact.filename || '-' }} · {{ artifact.artifact_type }}</span>
+              <span v-if="artifact.is_truncated" class="label-badge label-redacted">truncated</span>
+              <pre>{{ artifact.summary || '-' }}</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Code Context -->
       <section class="card">
         <h2>代码上下文</h2>
@@ -533,11 +609,11 @@ import {
   fetchAgentRuns, createAgentRun, updateAgentRun, submitAgentRunResult,
   fetchAgentReviews, createAgentReview,
   fetchApprovalDecisions,
-  fetchDispatchBatches,
+  fetchDispatchBatches, previewAnswerSynthesis,
   fetchCodeContext,
   applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate, evaluateSandboxGate,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -559,6 +635,9 @@ const agentReviews = ref<AgentReview[]>([])
 const approvalDecisions = ref<ApprovalDecision[]>([])
 const dispatchBatches = ref<DispatchBatchResponse[]>([])
 const dispatchBatchError = ref('')
+const answerSynthesis = ref<AnswerSynthesisPreviewResponse | null>(null)
+const answerSynthesisError = ref('')
+const answerSynthesisLoading = ref(false)
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -620,6 +699,11 @@ function formatSummary(summary: Record<string, unknown> | null | undefined) {
   return JSON.stringify(summary)
 }
 
+function formatConfidence(value: number | null | undefined) {
+  if (typeof value !== 'number') return '-'
+  return `${Math.round(value * 100)}%`
+}
+
 onMounted(async () => {
   agents.value = await fetchAgents()
   await refresh()
@@ -642,10 +726,47 @@ async function loadDispatchBatches(id: number) {
   dispatchBatchError.value = ''
   try {
     dispatchBatches.value = await fetchDispatchBatches(id)
+    const latestBatch = dispatchBatches.value[dispatchBatches.value.length - 1]
+    if (latestBatch) {
+      await loadAnswerSynthesis(id, latestBatch.dispatch_batch_id)
+    } else {
+      answerSynthesis.value = null
+      answerSynthesisError.value = ''
+    }
   } catch (e: any) {
     dispatchBatches.value = []
+    answerSynthesis.value = null
     dispatchBatchError.value = e.message || '多 AI Dispatch 记录加载失败'
   }
+}
+
+async function loadAnswerSynthesis(taskId: number, dispatchBatchId?: number | null) {
+  if (!dispatchBatchId) {
+    answerSynthesis.value = null
+    answerSynthesisError.value = ''
+    return
+  }
+  answerSynthesisLoading.value = true
+  answerSynthesisError.value = ''
+  try {
+    answerSynthesis.value = await previewAnswerSynthesis({
+      task_id: taskId,
+      dispatch_batch_id: dispatchBatchId,
+      include_artifacts: true,
+      max_artifact_chars: 2000,
+    })
+  } catch (e: any) {
+    answerSynthesis.value = null
+    answerSynthesisError.value = e.message || '多 AI 综合结论加载失败'
+  } finally {
+    answerSynthesisLoading.value = false
+  }
+}
+
+async function refreshAnswerSynthesis() {
+  const latestBatch = dispatchBatches.value[dispatchBatches.value.length - 1]
+  if (!task.value || !latestBatch) return
+  await loadAnswerSynthesis(task.value.id, latestBatch.dispatch_batch_id)
 }
 
 async function refreshSandboxGate() {
@@ -914,6 +1035,26 @@ async function handleCreateAgentReview() {
 .dispatch-job-hashes { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }
 .dispatch-job-hashes code { font-size: 11px; white-space: normal; word-break: break-all; color: var(--color-text-secondary); }
 .run-status-badge.blocked { background: #fff3e0; color: #e65100; }
+.run-status-badge.ready { background: #e8f5e9; color: #1b5e20; }
+.run-status-badge.attention_required { background: #fff3e0; color: #e65100; }
+.run-status-badge.empty { background: #eeeeee; color: #424242; }
+
+/* Answer Synthesis */
+.answer-synthesis-workspace { margin-top: 12px; }
+.synthesis-panel { display: flex; flex-direction: column; gap: 12px; }
+.synthesis-metrics { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; color: var(--color-text-secondary); }
+.synthesis-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.synthesis-list { padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fff; }
+.synthesis-list strong, .synthesis-artifacts strong { display: block; margin-bottom: 6px; font-size: 13px; }
+.synthesis-list ul { margin: 0; padding-left: 18px; }
+.synthesis-list li { margin: 3px 0; font-size: 12px; line-height: 1.45; word-break: break-word; }
+.synthesis-list p { margin: 0; color: var(--color-text-secondary); }
+.synthesis-source-ids { display: flex; flex-direction: column; gap: 4px; }
+.synthesis-source-ids code { font-size: 11px; white-space: normal; word-break: break-all; color: var(--color-text-secondary); }
+.synthesis-artifacts { display: flex; flex-direction: column; gap: 8px; }
+.synthesis-artifact-item { padding: 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fff; }
+.synthesis-artifact-item span { font-size: 12px; color: var(--color-text-secondary); }
+.synthesis-artifact-item pre { margin-top: 6px; max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
 /* Code Context */
 .context-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
 .context-stat { font-size: 12px; color: var(--color-text-secondary); margin-left: auto; }

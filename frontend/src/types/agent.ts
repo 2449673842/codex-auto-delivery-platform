@@ -306,4 +306,39 @@ export interface DispatchBatchResponse {
 }
 
 export interface DispatchBatch extends DispatchBatchResponse {}
+// ── Answer Synthesis / Multi-AI Decision Support ──
+export interface AnswerSynthesisPreviewRequest {
+  task_id: number
+  dispatch_batch_id?: number | null
+  include_artifacts?: boolean
+  max_artifact_chars?: number
+}
 
+export interface ArtifactSummary {
+  artifact_id: number
+  filename: string | null
+  artifact_type: string
+  summary: string
+  is_truncated: boolean
+}
+
+export interface AnswerSynthesisPreviewResponse {
+  task_id: number
+  dispatch_batch_id: number | null
+  synthesis_status: string
+  job_count: number
+  succeeded_jobs: number
+  failed_jobs: number
+  blocked_jobs: number
+  common_findings: string[]
+  disagreements: string[]
+  risks: string[]
+  recommended_actions: string[]
+  next_questions: string[]
+  artifact_summaries: ArtifactSummary[]
+  source_job_ids: number[]
+  source_agent_run_ids: number[]
+  source_artifact_ids: number[]
+  confidence: number
+  safety_notes: string[]
+}
