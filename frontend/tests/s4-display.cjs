@@ -261,14 +261,17 @@ async function setDispatchBatchesRoute(page, payload, status = 200) {
 
 async function setAnswerSynthesisRoute(page, payload, status = 200, counter = null) {
   await page.unroute('**/api/answer-synthesis/preview').catch(() => {})
-  await page.route('**/api/answer-synthesis/preview', async route => {
-    if (counter) counter.count += 1
-    await route.fulfill({
-      status,
-      contentType: 'application/json',
-      body: JSON.stringify(payload),
-    })
-  })
+  await page.route('**/api/answer-synthesis/preview', route => fulfillJson(route, payload, status, counter))
+}
+
+async function setAiHandoffRoute(page, payload, status = 200, counter = null) {
+  await page.unroute('**/api/ai-handoff/preview').catch(() => {})
+  await page.route('**/api/ai-handoff/preview', route => fulfillJson(route, payload, status, counter))
+}
+
+async function fulfillJson(route, payload, status, counter) {
+  if (counter) counter.count += 1
+  await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(payload) })
 }
 
 function synthesisPayload(taskId, batchId) {
@@ -294,6 +297,37 @@ function synthesisPayload(taskId, batchId) {
   }, message: 'ok' }
 }
 
+function handoffPayload(taskId, projectId) {
+  return { success: true, data: {
+    project_id: projectId,
+    task_id: taskId,
+    handoff_status: 'ready',
+    project_snapshot: {
+      positioning: 'Personal Multi-AI Coding Workbench',
+      last_known_base_commit_hint: '32dcd5a8e11eeef48e0844cf21601561938c2112',
+    },
+    current_task_summary: { task_id: taskId, title: 'S4 display test', status: 'in_progress' },
+    recent_capabilities: ['S15 AI Handoff Packet', 'Answer Synthesis Display'],
+    current_master_commit_hint: 'verify_current_master_on_github_before_acting',
+    current_pr_summary: { note: 'No live GitHub call is made.' },
+    recent_dispatch_summary: { batch_count: 1 },
+    answer_synthesis_summary: { synthesis_status: 'attention_required' },
+    safety_rules: ['Do not read .env.', 'Do not read secret_ref.', 'Do not auto approve or merge.'],
+    next_recommended_steps: ['Verify current master before acting.'],
+    next_ai_prompt: 'Read AGENTS.md first. Current master commit hint: verify_current_master_on_github_before_acting. Do not auto merge.',
+    source_ids: {
+      project_id: projectId,
+      task_id: taskId,
+      dispatch_batch_ids: [101],
+      dispatch_job_ids: [201, 202],
+      agent_run_ids: [301],
+      artifact_ids: [401],
+    },
+    redaction_applied: true,
+    safety_notes: ['verify_current_master_on_github_before_acting', 'Read AGENTS.md before taking over.', 'No AI provider called.', 'No database write.'],
+  }, message: 'ok' }
+}
+
 async function testMultiAiWorkspaceEmpty(page, taskId) {
   log('\n========== J. Multi-AI Answer Workspace Empty ==========')
   await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
@@ -312,6 +346,7 @@ async function testMultiAiWorkspaceEmpty(page, taskId) {
 async function testMultiAiWorkspaceRouted(page, taskId) {
   log('\n========== K. Multi-AI Answer Workspace Routed Data ==========')
   const synthesisCounter = { count: 0 }
+  const handoffCounter = { count: 0 }
   await setDispatchBatchesRoute(page, { success: true, data: [{
     dispatch_batch_id: 101,
     task_id: taskId,
@@ -355,6 +390,7 @@ async function testMultiAiWorkspaceRouted(page, taskId) {
     ],
   }], message: 'ok' })
   await setAnswerSynthesisRoute(page, synthesisPayload(taskId, 101), 200, synthesisCounter)
+  await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200, handoffCounter)
   await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
   await page.waitForTimeout(500)
   await checkT(page, 'routed', 'K1 batch_mode routed')
@@ -381,6 +417,16 @@ async function testMultiAiWorkspaceRouted(page, taskId) {
   await checkT(page, 'Review summary content', 'K22 artifact summary')
   if (synthesisCounter.count > 0) pass('K23 synthesis preview endpoint called')
   else fail('K23 synthesis preview endpoint not called', '')
+  await checkT(page, 'AI Handoff Packet / 下一 AI 接管包', 'K24 handoff section')
+  await checkT(page, 'Stateless preview', 'K25 handoff stateless label')
+  await checkT(page, 'Verify current master before acting', 'K26 verify master label')
+  await checkT(page, 'verify_current_master_on_github_before_acting', 'K27 handoff master verification')
+  await checkT(page, 'AGENTS.md', 'K28 handoff prompt includes AGENTS')
+  await checkT(page, 'Do not read .env.', 'K29 handoff safety rules')
+  await checkT(page, 'next_ai_prompt', 'K30 next ai prompt label')
+  await checkEl(page, 'button:has-text("复制 next_ai_prompt")', 'K31 copy prompt button')
+  if (handoffCounter.count > 0) pass('K32 handoff preview endpoint called')
+  else fail('K32 handoff preview endpoint not called', '')
 }
 
 async function testMultiAiWorkspaceApiFailure(page, taskId) {
@@ -398,15 +444,40 @@ async function testAnswerSynthesisApiFailure(page, taskId) {
   const counter = { count: 0 }
   await setDispatchBatchesRoute(page, { success: true, data: [{ dispatch_batch_id: 501, task_id: taskId, batch_mode: 'routed', status: 'succeeded', task_goal: 'Review PR', summary: {}, jobs: [] }], message: 'ok' })
   await setAnswerSynthesisRoute(page, { detail: 'synthesis unavailable' }, 500, counter)
+  await verifyPreviewFailureRefresh(page, taskId, {
+    section: 'Answer Synthesis / 多 AI 综合结论',
+    error: 'synthesis unavailable',
+    button: '重新生成综合结论',
+    counter,
+    labels: ['M1 synthesis section still visible', 'M2 synthesis error', 'M3 refresh only calls synthesis preview endpoint'],
+  })
+}
+
+async function testAiHandoffApiFailure(page, taskId) {
+  log('\n========== N. AI Handoff API Failure & Refresh ==========')
+  const counter = { count: 0 }
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAnswerSynthesisRoute(page, synthesisPayload(taskId, null), 200)
+  await setAiHandoffRoute(page, { detail: 'handoff unavailable' }, 500, counter)
+  await verifyPreviewFailureRefresh(page, taskId, {
+    section: 'AI Handoff Packet / 下一 AI 接管包',
+    error: 'handoff unavailable',
+    button: '重新生成接管包',
+    counter,
+    labels: ['N1 handoff section still visible', 'N2 handoff error', 'N3 refresh only calls handoff preview endpoint'],
+  })
+}
+
+async function verifyPreviewFailureRefresh(page, taskId, cfg) {
   await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
   await page.waitForTimeout(500)
-  await checkT(page, 'Answer Synthesis / 多 AI 综合结论', 'M1 synthesis section still visible')
-  await checkT(page, 'synthesis unavailable', 'M2 synthesis error')
-  const before = counter.count
-  await page.getByRole('button', { name: '重新生成综合结论' }).click()
+  await checkT(page, cfg.section, cfg.labels[0])
+  await checkT(page, cfg.error, cfg.labels[1])
+  const before = cfg.counter.count
+  await page.getByRole('button', { name: cfg.button }).click()
   await page.waitForTimeout(300)
-  if (counter.count === before + 1) pass('M3 refresh only calls synthesis preview endpoint')
-  else fail('M3 unexpected synthesis preview call count', `before=${before}, after=${counter.count}`)
+  if (cfg.counter.count === before + 1) pass(cfg.labels[2])
+  else fail(cfg.labels[2], `before=${before}, after=${cfg.counter.count}`)
 }
 
 async function testNoUnsafeWorkspaceActions(page) {
@@ -469,6 +540,7 @@ async function main() {
   await testMultiAiWorkspaceRouted(page, task.id)
   await testMultiAiWorkspaceApiFailure(page, task.id)
   await testAnswerSynthesisApiFailure(page, task.id)
+  await testAiHandoffApiFailure(page, task.id)
   await testNoUnsafeWorkspaceActions(page)
   // Create a separate task without code context for 404 test
   const bareTask = await apiPost('/tasks', { project_id: task.project_id, title: 'S4 no-ctx test', planner: 'test', description: 'No code context' })
@@ -481,5 +553,3 @@ async function main() {
 }
 
 main().catch(e => { console.error('Test harness error:', e); process.exit(1) })
-
-

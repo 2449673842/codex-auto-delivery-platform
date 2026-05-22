@@ -6,6 +6,7 @@ import type {
   ApprovalPolicy, ApprovalPolicyCreate, ApprovalPolicyUpdate,
   CodeContextResponse, PatchApplyResult, SandboxArtifactEntry,
   SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewRequest, AnswerSynthesisPreviewResponse,
+  AiHandoffPreviewRequest, AiHandoffPreviewResponse,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -139,5 +140,11 @@ export async function fetchDispatchBatches(taskId: number): Promise<DispatchBatc
 // ── Answer Synthesis / Multi-AI Decision Support ──
 export async function previewAnswerSynthesis(body: AnswerSynthesisPreviewRequest): Promise<AnswerSynthesisPreviewResponse> {
   const { data } = await client.post('/answer-synthesis/preview', body)
+  return data.data
+}
+
+// ── AI Handoff Packet / Next AI Onboarding ──
+export async function previewAiHandoff(body: AiHandoffPreviewRequest): Promise<AiHandoffPreviewResponse> {
+  const { data } = await client.post('/ai-handoff/preview', body)
   return data.data
 }
