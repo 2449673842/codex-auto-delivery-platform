@@ -54,6 +54,95 @@
         <TicketPreview :content="task.ticket_content" />
       </section>
 
+      <!-- Real AI Run -->
+      <section class="card real-ai-run">
+        <div class="section-header">
+          <h2>Real AI Run / 真实 AI 调用</h2>
+          <span class="workspace-readonly">S11 gated execution</span>
+        </div>
+        <div class="workspace-safety">
+          <span class="label-badge label-provider">provider: openai</span>
+          <span class="label-badge label-ai">model: gpt-4o-mini</span>
+          <span class="label-badge label-redacted">AI_EXECUTION_ENABLED required</span>
+          <span class="label-badge label-redacted">OPENAI_API_KEY required</span>
+          <span class="label-badge label-provider">allowlist: openai</span>
+          <span class="label-badge label-merged">No auto merge</span>
+        </div>
+        <div class="real-ai-form">
+          <label>
+            mode
+            <select v-model="realAiMode">
+              <option value="planning">planning</option>
+              <option value="review">review</option>
+              <option value="risk">risk</option>
+              <option value="patch_generation">patch_generation</option>
+            </select>
+          </label>
+          <label>
+            task_goal
+            <textarea v-model="realAiTaskGoal" rows="4"></textarea>
+          </label>
+          <div class="form-actions">
+            <button class="btn btn-sm" @click="runAiDryRun" :disabled="realAiLoading || !task">Dry-run</button>
+            <button class="btn btn-primary btn-sm" @click="executeRealAiRun" :disabled="realAiLoading || !task">Execute</button>
+          </div>
+        </div>
+        <p v-if="realAiError" class="run-error">{{ realAiError }}</p>
+        <div v-if="realAiDryRunResult" class="real-ai-result">
+          <strong>dry-run result</strong>
+          <div class="dispatch-job-hashes">
+            <code>prompt_hash: {{ realAiDryRunResult.prompt_hash || '-' }}</code>
+            <code>context_packet_hash: {{ realAiDryRunResult.context_packet_hash || '-' }}</code>
+          </div>
+          <div class="dispatch-job-meta">
+            <span>would_dispatch={{ realAiDryRunResult.would_dispatch }}</span>
+            <span>estimated_tokens={{ realAiDryRunResult.estimated_tokens }}</span>
+            <span>mode={{ realAiDryRunResult.mode }}</span>
+          </div>
+          <pre>{{ formatSafetyGate(realAiDryRunResult.safety_gate) }}</pre>
+          <div v-if="dryRunBlockedReasons.length" class="run-error">
+            <span>blocked:</span>
+            <span v-for="reason in dryRunBlockedReasons" :key="reason">{{ reason }}</span>
+          </div>
+        </div>
+        <div v-if="realAiExecuteResult" class="real-ai-result">
+          <strong>execute result</strong>
+          <div class="dispatch-job-meta">
+            <span>agent_run_id: {{ realAiExecuteResult.agent_run_id }}</span>
+            <span>status: {{ realAiExecuteResult.status }}</span>
+            <span>pipeline_status: {{ realAiExecuteResult.pipeline_status }}</span>
+          </div>
+          <p v-if="realAiExecuteResult.output_summary" class="run-output">{{ realAiExecuteResult.output_summary }}</p>
+          <div class="dispatch-job-hashes">
+            <code>prompt_hash: {{ realAiExecuteResult.prompt_hash || '-' }}</code>
+            <code>context_packet_hash: {{ realAiExecuteResult.context_packet_hash || '-' }}</code>
+          </div>
+          <div class="dispatch-job-meta">
+            <span>artifacts:</span>
+            <span v-for="name in executeArtifactNames" :key="name">{{ name }}</span>
+          </div>
+          <div class="real-ai-sandbox">
+            <strong>Patch Sandbox / Gate</strong>
+            <p class="section-note">Patch is not applied to the real repository. Sandbox only.</p>
+            <p class="section-note">Sandbox Gate passed is required before any PR step.</p>
+            <div class="dispatch-job-meta">
+              <span>sandbox_applied={{ realAiExecuteResult.sandbox_applied }}</span>
+              <span>sandbox_gate_passed={{ realAiExecuteResult.sandbox_gate_passed }}</span>
+              <span>pipeline_status: {{ realAiExecuteResult.pipeline_status }}</span>
+              <span>{{ pipelineStatusLabel(realAiExecuteResult.pipeline_status) }}</span>
+            </div>
+            <div v-if="realAiExecuteResult.sandbox_gate_blocked_reasons.length" class="run-error">
+              <span>sandbox_gate_blocked_reasons:</span>
+              <span v-for="reason in realAiExecuteResult.sandbox_gate_blocked_reasons" :key="reason">{{ reason }}</span>
+            </div>
+            <div v-if="sandboxGateStepNames.length" class="dispatch-job-meta">
+              <span>steps:</span>
+              <span v-for="step in sandboxGateStepNames" :key="step">{{ step }}</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="card">
         <h2>角色信息</h2>
         <div class="roles">
@@ -652,10 +741,11 @@ import {
   fetchAgentReviews, createAgentReview,
   fetchApprovalDecisions,
   fetchDispatchBatches, previewAnswerSynthesis, previewAiHandoff,
+  dryRunAiDispatch, executeAiDispatch,
   fetchCodeContext,
   applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate, evaluateSandboxGate,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -684,6 +774,12 @@ const aiHandoff = ref<AiHandoffPreviewResponse | null>(null)
 const aiHandoffError = ref('')
 const aiHandoffLoading = ref(false)
 const aiHandoffCopyMessage = ref('')
+const realAiMode = ref<AiDispatchMode>('review')
+const realAiTaskGoal = ref('')
+const realAiLoading = ref(false)
+const realAiError = ref('')
+const realAiDryRunResult = ref<AiDispatchDryRunResponse | null>(null)
+const realAiExecuteResult = ref<AiDispatchExecuteResponse | null>(null)
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -750,6 +846,25 @@ function formatConfidence(value: number | null | undefined) {
   return `${Math.round(value * 100)}%`
 }
 
+const dryRunBlockedReasons = computed(() => {
+  const gate = realAiDryRunResult.value?.safety_gate
+  if (!gate) return ''
+  return aiDispatchBlockedReasons(gate)
+})
+
+const executeArtifactNames = computed(() => {
+  const artifacts = realAiExecuteResult.value?.artifacts || []
+  const names = artifacts.map((artifact) => String(artifact.filename || artifact.id || JSON.stringify(artifact)))
+  return names.length ? names : ['-']
+})
+
+const sandboxGateStepNames = computed(() => {
+  const steps = realAiExecuteResult.value?.steps || []
+  return steps
+    .filter((step) => /sandbox|gate/i.test(`${step.step} ${step.details || ''}`))
+    .map((step) => `${step.step}: ${step.status}${step.details ? ` (${step.details})` : ''}`)
+})
+
 function formatHandoffDetails(packet: AiHandoffPreviewResponse) {
   return JSON.stringify({
     current_master_commit_hint: packet.current_master_commit_hint,
@@ -767,6 +882,49 @@ function formatHandoffDetails(packet: AiHandoffPreviewResponse) {
   }, null, 2)
 }
 
+function buildAiDispatchRequest(): AiDispatchRequest | null {
+  if (!task.value) return null
+  return {
+    task_goal: realAiTaskGoal.value || defaultRealAiTaskGoal(),
+    module_name: task.value.project_name || 'task_detail',
+    task_type: 'task_detail_real_ai_run',
+    mode: realAiMode.value,
+    task_id: task.value.id,
+    project_id: task.value.project_id,
+  }
+}
+
+function defaultRealAiTaskGoal() {
+  if (!task.value) return ''
+  const description = task.value.description ? `\n\n${task.value.description}` : ''
+  return `${task.value.title}${description}`
+}
+
+function aiDispatchBlockedReasons(gate: AiDispatchSafetyGate) {
+  const reasons: string[] = []
+  if (!gate.execution_enabled) reasons.push('AI_EXECUTION_ENABLED 未开启')
+  if (!gate.openai_key_present) reasons.push('OPENAI_API_KEY 缺失')
+  if (!gate.provider_allowed) reasons.push('openai 不在 allowlist')
+  if (!gate.mode_valid) reasons.push('mode 不合法')
+  if (!gate.budget_ok) reasons.push('prompt budget 超限')
+  if (!gate.gate_passed) reasons.push('safety gate blocked')
+  return reasons
+}
+
+function pipelineStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    succeeded: 'succeeded',
+    sandbox_failed: 'sandbox failed / blocked',
+    sandbox_gate_blocked: 'gate blocked',
+    ai_failed: 'AI failed',
+  }
+  return labels[status] || status
+}
+
+function formatSafetyGate(gate: AiDispatchSafetyGate) {
+  return JSON.stringify(gate, null, 2)
+}
+
 onMounted(async () => {
   agents.value = await fetchAgents()
   await refresh()
@@ -775,6 +933,7 @@ onMounted(async () => {
 async function refresh() {
   const id = Number(route.params.id)
   task.value = await taskStore.fetchTask(id)
+  realAiTaskGoal.value = defaultRealAiTaskGoal()
   agentRuns.value = await fetchAgentRuns(id)
   agentReviews.value = await fetchAgentReviews(id)
   approvalDecisions.value = await fetchApprovalDecisions(id)
@@ -783,6 +942,48 @@ async function refresh() {
   codeContext.value = await fetchCodeContext(id)
   sandboxResults.value = await fetchSandboxResults(id)
   applyResult.value = null
+  await loadSandboxGate()
+}
+
+async function runAiDryRun() {
+  const body = buildAiDispatchRequest()
+  if (!body) return
+  realAiLoading.value = true
+  realAiError.value = ''
+  try {
+    realAiDryRunResult.value = await dryRunAiDispatch(body)
+  } catch (e: any) {
+    realAiDryRunResult.value = null
+    realAiError.value = e.message || 'AI dry-run failed'
+  } finally {
+    realAiLoading.value = false
+  }
+}
+
+async function executeRealAiRun() {
+  const body = buildAiDispatchRequest()
+  if (!body) return
+  realAiLoading.value = true
+  realAiError.value = ''
+  try {
+    realAiExecuteResult.value = await executeAiDispatch(body)
+    await refreshAfterRealAiRun()
+  } catch (e: any) {
+    realAiExecuteResult.value = null
+    realAiError.value = e.message || 'AI execute failed'
+  } finally {
+    realAiLoading.value = false
+  }
+}
+
+async function refreshAfterRealAiRun() {
+  if (!task.value) return
+  const id = task.value.id
+  agentRuns.value = await fetchAgentRuns(id)
+  agentReviews.value = await fetchAgentReviews(id)
+  await loadDispatchBatches(id)
+  await loadAiHandoff()
+  sandboxResults.value = await fetchSandboxResults(id)
   await loadSandboxGate()
 }
 
@@ -1038,6 +1239,14 @@ async function handleCreateAgentReview() {
 .detail-body { display: flex; flex-direction: column; gap: 20px; }
 .detail-body section h2 { font-size: 16px; font-weight: 600; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--color-border); }
 .description-text { white-space: pre-wrap; font-family: inherit; font-size: 14px; line-height: 1.6; color: var(--color-text-secondary); }
+.real-ai-run { border-left: 3px solid var(--color-primary); }
+.real-ai-form { display: grid; grid-template-columns: minmax(160px, 220px) 1fr; gap: 12px; align-items: start; margin-top: 12px; }
+.real-ai-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
+.real-ai-form textarea { min-height: 90px; resize: vertical; }
+.real-ai-result { margin-top: 12px; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fff; display: flex; flex-direction: column; gap: 8px; }
+.real-ai-result pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--color-text-secondary); }
+.real-ai-sandbox { padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; display: flex; flex-direction: column; gap: 6px; }
+.real-ai-sandbox strong { font-size: 13px; }
 .roles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; font-size: 14px; }
 .loading { text-align: center; padding: 60px; color: var(--color-text-secondary); }
 .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--color-border); }
