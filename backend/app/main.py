@@ -39,6 +39,7 @@ from app.routers import context_selector as context_selector_router
 from app.routers import ai_context_packet as ai_context_packet_router
 from app.routers import prompt_template as prompt_template_router
 from app.routers import ai_dispatch as ai_dispatch_router
+from app.routers import dispatch_batches as dispatch_batches_router
 
 app.include_router(health.router)
 app.include_router(projects.router)
@@ -60,3 +61,4 @@ app.include_router(context_selector_router.router)
 app.include_router(ai_context_packet_router.router)
 app.include_router(prompt_template_router.router)
 app.include_router(ai_dispatch_router.router)
+app.include_router(dispatch_batches_router.router)
