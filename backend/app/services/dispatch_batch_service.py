@@ -9,6 +9,7 @@ from app.config import settings
 from app.models.dispatch_batch import DispatchBatch
 from app.models.dispatch_job import DispatchJob
 from app.models.task import Task
+from app.models.task_artifact import TaskArtifact
 from app.schemas.ai_context_packet import VALID_MODES
 from app.schemas.dispatch_batch import (
     DispatchBatchPreviewResponse,
@@ -157,13 +158,11 @@ def _preflight_block_reason(job: DispatchJobRequest) -> str | None:
     return None
 
 
-def _job_artifact_ids(response_artifacts: list[dict]) -> list[int]:
-    ids: list[int] = []
-    for artifact in response_artifacts:
-        artifact_id = artifact.get("id")
-        if isinstance(artifact_id, int):
-            ids.append(artifact_id)
-    return ids
+async def _task_artifact_id_set(db: AsyncSession, task_id: int) -> set[int]:
+    result = await db.execute(
+        select(TaskArtifact.id).where(TaskArtifact.task_id == task_id)
+    )
+    return {artifact_id for artifact_id in result.scalars().all() if isinstance(artifact_id, int)}
 
 
 def _job_response_from_model(job: DispatchJob) -> DispatchJobPreview:
@@ -251,6 +250,7 @@ async def execute(db: AsyncSession, body: DispatchBatchRequest) -> DispatchBatch
         dispatch_job.status = "running"
         dispatch_job.started_at = now
         await db.flush()
+        before_artifact_ids = await _task_artifact_id_set(db, task.id)
         result = await ai_dispatch_service.execute(
             db=db,
             task_goal=job_request.question or body.task_goal,
@@ -260,8 +260,10 @@ async def execute(db: AsyncSession, body: DispatchBatchRequest) -> DispatchBatch
             task_id=task.id,
             project_id=task.project_id,
         )
+        after_artifact_ids = await _task_artifact_id_set(db, task.id)
+        new_artifact_ids = sorted(after_artifact_ids - before_artifact_ids)
         dispatch_job.agent_run_id = result.agent_run_id or None
-        dispatch_job.artifact_ids_json = json.dumps(_job_artifact_ids(result.artifacts))
+        dispatch_job.artifact_ids_json = json.dumps(new_artifact_ids)
         dispatch_job.prompt_hash = result.prompt_hash
         dispatch_job.context_packet_hash = result.context_packet_hash
         dispatch_job.status = "succeeded" if result.status == "succeeded" else "failed"
@@ -316,3 +318,4 @@ async def list_for_task(db: AsyncSession, task_id: int) -> list[DispatchBatchRes
             )
         )
     return responses
+

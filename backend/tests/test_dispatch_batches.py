@@ -243,6 +243,31 @@ class TestDispatchBatchExecute:
         assert all(job["prompt_hash"] for job in data["jobs"])
         assert all(job["context_packet_hash"] for job in data["jobs"])
 
+    async def test_execute_records_per_job_artifact_id_delta(self, client, task):
+        response = await client.post(f"{BASE}/execute", json={
+            "task_id": task["id"],
+            "task_goal": "Review PR",
+            "batch_mode": "routed",
+            "jobs": [_job("Check body", "review"), _job("Check risk", "risk")],
+        })
+        assert response.status_code == 200
+        async with get_session_factory()() as session:
+            jobs = (await session.execute(
+                select(DispatchJob).where(DispatchJob.task_id == task["id"]).order_by(DispatchJob.sequence_no)
+            )).scalars().all()
+            artifacts = (await session.execute(
+                select(TaskArtifact).where(TaskArtifact.task_id == task["id"])
+            )).scalars().all()
+        assert len(jobs) == 2
+        job1_ids = json.loads(jobs[0].artifact_ids_json or "[]")
+        job2_ids = json.loads(jobs[1].artifact_ids_json or "[]")
+        artifact_ids = {artifact.id for artifact in artifacts}
+        assert job1_ids
+        assert job2_ids
+        assert set(job1_ids).isdisjoint(set(job2_ids))
+        assert set(job1_ids).issubset(artifact_ids)
+        assert set(job2_ids).issubset(artifact_ids)
+
     async def test_get_task_dispatch_batches(self, client, task):
         response = await client.post(f"{BASE}/execute", json={
             "task_id": task["id"],
@@ -326,3 +351,4 @@ class TestDispatchBatchExecute:
         assert "secret_ref" not in body
         assert "sonar" not in body.lower()
         assert "deploy" not in body.lower()
+
