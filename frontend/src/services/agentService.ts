@@ -5,7 +5,7 @@ import type {
   AgentReview, AgentReviewCreate,
   ApprovalPolicy, ApprovalPolicyCreate, ApprovalPolicyUpdate,
   CodeContextResponse, PatchApplyResult, SandboxArtifactEntry,
-  SandboxGateDecision, DispatchBatchResponse,
+  SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewRequest, AnswerSynthesisPreviewResponse,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -136,6 +136,8 @@ export async function fetchDispatchBatches(taskId: number): Promise<DispatchBatc
   const { data } = await client.get(`/tasks/${taskId}/dispatch-batches`)
   return data.data || []
 }
-
-
-
+// ── Answer Synthesis / Multi-AI Decision Support ──
+export async function previewAnswerSynthesis(body: AnswerSynthesisPreviewRequest): Promise<AnswerSynthesisPreviewResponse> {
+  const { data } = await client.post('/answer-synthesis/preview', body)
+  return data.data
+}
