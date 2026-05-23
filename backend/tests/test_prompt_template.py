@@ -158,6 +158,19 @@ class Tests:
         assert r.status_code == 200
         sys = r.json()["data"]["system_prompt_preview"]
         assert "unified diff only" in sys
+        assert "diff --git a/" in sys
+        assert "Markdown fences" in sys
+
+    async def test_patch_generation_user_prompt_has_diff_checklist(self, cli):
+        r = await self._preview(cli, mode="patch_generation")
+        assert r.status_code == 200
+        user = r.json()["data"]["user_prompt_preview"]
+        assert "Patch Output Checklist" in user
+        assert "diff --git a/" in user
+        assert "--- a/..." in user
+        assert "+++ b/..." in user
+        assert "@@" in user
+        assert "Do not explain the patch" in user
 
     async def test_user_prompt_contains_matched_modules(self, cli):
         r = await self._preview(cli)

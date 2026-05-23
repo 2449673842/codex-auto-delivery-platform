@@ -312,6 +312,10 @@ class TestExecute:
         data = r.json()["data"]
         assert data["status"] == "succeeded"
         assert data["output_diff"].startswith("diff --git")
+        assert data["sandbox_applied"] is True
+        assert data["sandbox_gate_passed"] is True
+        assert data["pipeline_status"] == "succeeded"
+        assert any(step["step"] == "sandbox_apply" and step["status"] == "passed" for step in data["steps"])
 
     async def test_execute_review_success(self, client, project):
         r = await client.post(f"{BASE}/execute", json={
