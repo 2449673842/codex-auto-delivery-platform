@@ -201,6 +201,14 @@
             <input v-model="browserAiForm.response_selector" placeholder="[data-answer]" />
           </label>
           <label>
+            scroll_container_selector
+            <input v-model="browserAiForm.scroll_container_selector" placeholder="optional conversation scroller" />
+          </label>
+          <label>
+            copy_button_selector
+            <input v-model="browserAiForm.copy_button_selector" placeholder="optional copy full answer button" />
+          </label>
+          <label>
             timeout_seconds
             <input v-model.number="browserAiForm.timeout_seconds" type="number" min="1" max="600" />
           </label>
@@ -879,6 +887,8 @@ const browserAiForm = ref<BrowserAiRequest>({
   input_selector: "textarea[name='prompt']",
   send_selector: 'button[data-send]',
   response_selector: '[data-answer]',
+  scroll_container_selector: '',
+  copy_button_selector: '',
   timeout_seconds: 180,
 })
 const browserAiLoading = ref(false)

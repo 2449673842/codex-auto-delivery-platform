@@ -166,6 +166,25 @@ async def test_missing_selector_failed_without_opening_browser(client, valid_bod
 
 
 @pytest.mark.asyncio
+async def test_invalid_prompt_source_blocked_without_opening_browser_or_writing(client, valid_body, monkeypatch):
+    _install_settings(monkeypatch, browser_ai_enabled=True, _browser_ai_provider_allowlist_raw="custom")
+    valid_body["prompt_source"] = "bad_source"
+    before = await _counts()
+
+    dry = await client.post(f"{BASE}/dry-run", json=valid_body)
+    execute = await client.post(f"{BASE}/execute", json=valid_body)
+
+    for resp in (dry, execute):
+        data = resp.json()["data"]
+        assert data["status"] == "blocked"
+        assert data["browser_opened"] is False
+        assert data["persisted"] is False
+        assert data["safety_gate"]["prompt_source_valid"] is False
+        assert "Invalid prompt_source" in data["error_message"]
+    assert before == await _counts()
+
+
+@pytest.mark.asyncio
 async def test_fake_browser_driver_success_creates_agent_run_and_artifact(client, valid_body, monkeypatch):
     from app.services import browser_ai_service
     driver = FakeDriver("Visible answer from mock page")
@@ -223,6 +242,45 @@ async def test_does_not_save_cookie_password_session_or_secret(client, valid_bod
         assert forbidden not in stored
     assert "target_url_hint" in stored
     assert "/mock-browser-ai" not in stored
+
+
+@pytest.mark.asyncio
+async def test_custom_prompt_sensitive_text_not_saved_or_returned(client, valid_body, monkeypatch):
+    from app.services import browser_ai_service
+    sensitive_values = [
+        "password=super-secret-password",
+        "cookie=private-cookie",
+        "session=private-session",
+        "token=private-token",
+        "api_key=private-api-key",
+        "sk-123456789012345678901234567890",
+    ]
+    sensitive_prompt = " ".join(sensitive_values)
+    valid_body["prompt_source"] = "custom_prompt"
+    valid_body["custom_prompt"] = sensitive_prompt
+    browser_ai_service.set_driver_override(FakeDriver(f"answer echoes {sensitive_prompt}"))
+    _install_settings(monkeypatch, browser_ai_enabled=True, _browser_ai_provider_allowlist_raw="custom")
+
+    resp = await client.post(f"{BASE}/execute", json=valid_body)
+
+    assert resp.json()["data"]["status"] == "succeeded"
+    body = json.dumps(resp.json())
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        artifacts = (await session.execute(select(TaskArtifact))).scalars().all()
+        runs = (await session.execute(select(AgentRun))).scalars().all()
+        events = (await session.execute(select(TaskEvent))).scalars().all()
+    stored = json.dumps({
+        "run_input_prompt": [r.input_prompt for r in runs],
+        "run_raw": [r.raw_result_json for r in runs],
+        "artifact_content": [a.content for a in artifacts],
+        "artifact_metadata": [a.metadata_json for a in artifacts],
+        "event_messages": [e.message for e in events],
+    })
+    for secret in sensitive_values:
+        assert secret not in body
+        assert secret not in stored
+    assert all("Browser AI prompt redacted" in r.input_prompt for r in runs)
 
 
 @pytest.mark.asyncio

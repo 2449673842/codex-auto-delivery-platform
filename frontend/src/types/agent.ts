@@ -450,6 +450,8 @@ export interface BrowserAiRequest {
   input_selector: string
   send_selector: string
   response_selector: string
+  scroll_container_selector?: string
+  copy_button_selector?: string
   timeout_seconds: number
 }
 
@@ -457,6 +459,7 @@ export interface BrowserAiSafetyGate {
   browser_ai_enabled: boolean
   provider_allowed: boolean
   provider_valid: boolean
+  prompt_source_valid: boolean
   selectors_present: boolean
   target_url_present: boolean
   timeout_ok: boolean

@@ -22,6 +22,9 @@ SUPPORTED_PROVIDERS = {"custom"}
 PROMPT_SOURCES = {"task_goal", "handoff_packet", "answer_synthesis", "custom_prompt"}
 MAX_TIMEOUT_SECONDS = 600
 ANSWER_PREVIEW_CHARS = 1200
+STABLE_TEXT_POLLS = 3
+STABLE_TEXT_INTERVAL_MS = 500
+SENSITIVE_ASSIGNMENT_KEYS = {"cookie", "session", "password", "token", "api_key"}
 
 
 class BrowserAiDriver(Protocol):
@@ -44,7 +47,18 @@ def _hash_text(text: str) -> str:
 def _redact(text: str | None) -> str:
     if not text:
         return ""
-    return redact_secrets(text)
+    return _redact_sensitive_assignments(redact_secrets(text))
+
+
+def _redact_sensitive_assignments(text: str) -> str:
+    parts = []
+    for part in text.split():
+        key, sep, _value = part.partition("=")
+        if sep and key.lower() in SENSITIVE_ASSIGNMENT_KEYS:
+            parts.append(f"{key}=***REDACTED***")
+        else:
+            parts.append(part)
+    return " ".join(parts)
 
 
 def _is_safe_target_url(url: str) -> bool:
@@ -66,6 +80,7 @@ def _timeout_seconds(request: BrowserAiRequest) -> int:
 
 def _safety_gate(request: BrowserAiRequest, *, for_execute: bool) -> BrowserAiSafetyGate:
     provider = (request.provider or "").strip()
+    prompt_source = (request.prompt_source or "").strip()
     provider_allowlist = settings.browser_ai_provider_allowlist
     selectors_present = all([
         bool((request.input_selector or "").strip()),
@@ -77,6 +92,7 @@ def _safety_gate(request: BrowserAiRequest, *, for_execute: bool) -> BrowserAiSa
         browser_ai_enabled=settings.browser_ai_enabled,
         provider_allowed=provider in provider_allowlist,
         provider_valid=provider in SUPPORTED_PROVIDERS,
+        prompt_source_valid=prompt_source in PROMPT_SOURCES,
         selectors_present=selectors_present,
         target_url_present=_is_safe_target_url(request.target_url or ""),
         timeout_ok=1 <= timeout <= MAX_TIMEOUT_SECONDS,
@@ -87,6 +103,8 @@ def _safety_gate(request: BrowserAiRequest, *, for_execute: bool) -> BrowserAiSa
         gate.blocked_reasons.append(f"Unsupported browser AI provider '{provider}'")
     if not gate.provider_allowed:
         gate.blocked_reasons.append(f"Provider '{provider}' is not in BROWSER_AI_PROVIDER_ALLOWLIST")
+    if not gate.prompt_source_valid:
+        gate.blocked_reasons.append(f"Invalid prompt_source '{prompt_source}'")
     if not gate.target_url_present:
         gate.blocked_reasons.append("target_url must be http(s)")
     if not gate.selectors_present:
@@ -285,7 +303,7 @@ async def _create_run(
         agent_id=agent.id,
         run_type="review",
         status=AgentRunStatus.RUNNING.value,
-        input_prompt=prompt,
+        input_prompt=f"Browser AI prompt redacted; prompt_hash={prompt_hash}; prompt_source={request.prompt_source}",
         started_at=datetime.now(timezone.utc),
         raw_result_json=_redact(json.dumps({
             "provider": request.provider,
@@ -367,10 +385,34 @@ class PlaywrightBrowserAiDriver:
                     arg=[request.response_selector, previous_answer],
                     timeout=timeout_ms,
                 )
-                answer = await page.locator(request.response_selector).first.inner_text(timeout=timeout_ms)
+                if request.scroll_container_selector:
+                    await page.locator(request.scroll_container_selector).first.evaluate(
+                        "node => { node.scrollTop = node.scrollHeight; }",
+                        timeout=timeout_ms,
+                    )
+                answer = await _read_answer_text(page, request, timeout_ms)
                 return answer.strip()
             finally:
                 if context is not None:
                     await context.close()
                 if browser is not None:
                     await browser.close()
+
+
+async def _read_answer_text(page, request: BrowserAiRequest, timeout_ms: int) -> str:
+    response_box = page.locator(request.response_selector).first
+    answer = (await response_box.inner_text(timeout=timeout_ms)).strip()
+    for _ in range(STABLE_TEXT_POLLS):
+        await page.wait_for_timeout(STABLE_TEXT_INTERVAL_MS)
+        latest = (await response_box.inner_text(timeout=timeout_ms)).strip()
+        if latest == answer:
+            break
+        answer = latest
+    if not request.copy_button_selector:
+        return answer
+    try:
+        await page.locator(request.copy_button_selector).first.click(timeout=timeout_ms)
+        copied = (await page.evaluate("navigator.clipboard.readText()")).strip()
+        return copied or answer
+    except Exception:
+        return answer

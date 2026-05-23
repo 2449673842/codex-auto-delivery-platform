@@ -5,6 +5,7 @@ class BrowserAiSafetyGate(BaseModel):
     browser_ai_enabled: bool = False
     provider_allowed: bool = False
     provider_valid: bool = False
+    prompt_source_valid: bool = False
     selectors_present: bool = False
     target_url_present: bool = False
     timeout_ok: bool = False
@@ -22,6 +23,8 @@ class BrowserAiRequest(BaseModel):
     input_selector: str = ""
     send_selector: str = ""
     response_selector: str = ""
+    scroll_container_selector: str = ""
+    copy_button_selector: str = ""
     timeout_seconds: int | None = None
 
 
