@@ -10,7 +10,7 @@ from app.main import app
 @pytest.fixture
 async def client():
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(transport=transport, base_url="https://test") as ac:
         yield ac
 
 
@@ -32,7 +32,7 @@ async def test_runtime_status_reports_credential_presence_without_secret(client,
         openai_api_key=fake_secret,
         _provider_allowlist_raw="sandbox,openai",
         openai_model="gpt-5.5",
-        openai_base_url="http://localhost:8081",
+        openai_base_url="https://provider.example",
         openai_wire_api="responses",
     )
 
