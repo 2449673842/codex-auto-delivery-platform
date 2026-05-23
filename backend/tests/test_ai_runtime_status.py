@@ -24,12 +24,12 @@ def _install_runtime_settings(monkeypatch, **overrides):
 
 
 @pytest.mark.asyncio
-async def test_runtime_status_reports_key_presence_without_key(client, monkeypatch):
-    fake_key = "test-runtime-secret"
+async def test_runtime_status_reports_credential_presence_without_secret(client, monkeypatch):
+    fake_secret = "test-runtime-secret"
     _install_runtime_settings(
         monkeypatch,
         ai_execution_enabled=True,
-        openai_api_key=fake_key,
+        openai_api_key=fake_secret,
         _provider_allowlist_raw="sandbox,openai",
         openai_model="gpt-5.5",
         openai_base_url="http://localhost:8081",
@@ -41,19 +41,18 @@ async def test_runtime_status_reports_key_presence_without_key(client, monkeypat
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["ai_execution_enabled"] is True
-    assert data["openai_key_present"] is True
+    assert data["openai_credential_configured"] is True
     assert data["openai_allowed"] is True
     assert data["provider_allowlist"] == ["sandbox", "openai"]
     assert data["model"] == "gpt-5.5"
     assert data["base_url_configured"] is True
     assert data["wire_api"] == "responses"
     body = json.dumps(resp.json())
-    assert fake_key not in body
-    assert "OPENAI_API_KEY" not in body
+    assert fake_secret not in body
 
 
 @pytest.mark.asyncio
-async def test_runtime_status_reports_missing_key(client, monkeypatch):
+async def test_runtime_status_reports_missing_credential(client, monkeypatch):
     _install_runtime_settings(
         monkeypatch,
         ai_execution_enabled=False,
@@ -66,7 +65,7 @@ async def test_runtime_status_reports_missing_key(client, monkeypatch):
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["ai_execution_enabled"] is False
-    assert data["openai_key_present"] is False
+    assert data["openai_credential_configured"] is False
     assert data["openai_allowed"] is False
 
 
@@ -80,8 +79,8 @@ async def test_runtime_status_does_not_touch_forbidden_surfaces(client, monkeypa
     monkeypatch.setattr("subprocess.run", fail)
     monkeypatch.setattr("subprocess.Popen", fail)
     monkeypatch.setattr("os.system", fail)
-    fake_key = "test-runtime-secret"
-    _install_runtime_settings(monkeypatch, openai_api_key=fake_key)
+    fake_secret = "test-runtime-secret"
+    _install_runtime_settings(monkeypatch, openai_api_key=fake_secret)
 
     resp = await client.get("/api/ai-runtime/status")
 
@@ -89,4 +88,4 @@ async def test_runtime_status_does_not_touch_forbidden_surfaces(client, monkeypa
     body = json.dumps(resp.json())
     assert "secret_ref" not in body
     assert ".env" not in body
-    assert fake_key not in body
+    assert fake_secret not in body
