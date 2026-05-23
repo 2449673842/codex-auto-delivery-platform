@@ -39,6 +39,7 @@ from app.routers import context_selector as context_selector_router
 from app.routers import ai_context_packet as ai_context_packet_router
 from app.routers import prompt_template as prompt_template_router
 from app.routers import ai_dispatch as ai_dispatch_router
+from app.routers import ai_runtime as ai_runtime_router
 from app.routers import dispatch_batches as dispatch_batches_router
 from app.routers import answer_synthesis as answer_synthesis_router
 from app.routers import ai_handoff as ai_handoff_router
@@ -63,6 +64,7 @@ app.include_router(context_selector_router.router)
 app.include_router(ai_context_packet_router.router)
 app.include_router(prompt_template_router.router)
 app.include_router(ai_dispatch_router.router)
+app.include_router(ai_runtime_router.router)
 app.include_router(dispatch_batches_router.router)
 app.include_router(answer_synthesis_router.router)
 app.include_router(ai_handoff_router.router)
