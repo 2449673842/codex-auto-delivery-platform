@@ -14,7 +14,7 @@ async def get_ai_runtime_status():
     provider_allowlist = settings.provider_allowlist
     data = AIRuntimeStatusResponse(
         ai_execution_enabled=settings.ai_execution_enabled,
-        openai_key_present=bool(settings.openai_api_key),
+        openai_credential_configured=bool(settings.openai_api_key),
         provider_allowlist=provider_allowlist,
         openai_allowed="openai" in provider_allowlist,
         model=settings.openai_model,
