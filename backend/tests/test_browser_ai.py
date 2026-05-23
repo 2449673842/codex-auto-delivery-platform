@@ -109,6 +109,28 @@ async def _counts():
     return len(runs), len(artifacts), len(events)
 
 
+async def _stored_browser_ai_payload() -> str:
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        artifacts = (await session.execute(select(TaskArtifact))).scalars().all()
+        runs = (await session.execute(select(AgentRun))).scalars().all()
+        events = (await session.execute(select(TaskEvent))).scalars().all()
+    return json.dumps({
+        "run_input_prompt": [r.input_prompt for r in runs],
+        "run_raw": [r.raw_result_json for r in runs],
+        "artifact_content": [a.content for a in artifacts],
+        "artifact_metadata": [a.metadata_json for a in artifacts],
+        "event_messages": [e.message for e in events],
+    })
+
+
+def _assert_absent_from_response_and_storage(resp, stored: str, values: list[str]) -> None:
+    body = json.dumps(resp.json())
+    for value in values:
+        assert value not in body
+        assert value not in stored
+
+
 @pytest.mark.asyncio
 async def test_dry_run_default_disabled_does_not_open_browser_or_write(client, valid_body):
     before = await _counts()
@@ -274,22 +296,11 @@ async def test_custom_prompt_sensitive_text_not_saved_or_returned(client, valid_
     resp = await client.post(f"{BASE}/execute", json=valid_body)
 
     assert resp.json()["data"]["status"] == "succeeded"
-    body = json.dumps(resp.json())
+    stored = await _stored_browser_ai_payload()
+    _assert_absent_from_response_and_storage(resp, stored, sensitive_values)
     session_factory = get_session_factory()
     async with session_factory() as session:
-        artifacts = (await session.execute(select(TaskArtifact))).scalars().all()
         runs = (await session.execute(select(AgentRun))).scalars().all()
-        events = (await session.execute(select(TaskEvent))).scalars().all()
-    stored = json.dumps({
-        "run_input_prompt": [r.input_prompt for r in runs],
-        "run_raw": [r.raw_result_json for r in runs],
-        "artifact_content": [a.content for a in artifacts],
-        "artifact_metadata": [a.metadata_json for a in artifacts],
-        "event_messages": [e.message for e in events],
-    })
-    for secret in sensitive_values:
-        assert secret not in body
-        assert secret not in stored
     assert all("Browser AI prompt redacted" in r.input_prompt for r in runs)
 
 
@@ -330,23 +341,11 @@ async def test_copy_button_unrelated_clipboard_falls_back_and_is_not_saved(clien
     data = resp.json()["data"]
     assert data["status"] == "succeeded"
     assert data["answer_preview"] == "Visible response selector answer"
-    body = json.dumps(resp.json())
-    session_factory = get_session_factory()
-    async with session_factory() as session:
-        artifacts = (await session.execute(select(TaskArtifact))).scalars().all()
-        runs = (await session.execute(select(AgentRun))).scalars().all()
-        events = (await session.execute(select(TaskEvent))).scalars().all()
-    stored = json.dumps({
-        "run_input_prompt": [r.input_prompt for r in runs],
-        "run_raw": [r.raw_result_json for r in runs],
-        "artifact_content": [a.content for a in artifacts],
-        "artifact_metadata": [a.metadata_json for a in artifacts],
-        "event_messages": [e.message for e in events],
-    })
-    assert unrelated_clipboard not in body
-    assert unrelated_clipboard not in stored
-    assert "clipboard-secret" not in stored
-    assert "clipboard-session" not in stored
+    _assert_absent_from_response_and_storage(
+        resp,
+        await _stored_browser_ai_payload(),
+        [unrelated_clipboard, "clipboard-secret", "clipboard-session"],
+    )
 
 
 @pytest.mark.asyncio
