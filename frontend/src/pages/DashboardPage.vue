@@ -53,8 +53,8 @@
         </div>
         <div>
           <span>OPENAI_API_KEY</span>
-          <strong :class="aiRuntimeStatus.openai_key_present ? 'ok' : 'warn'">
-            {{ aiRuntimeStatus.openai_key_present ? 'configured' : 'missing' }}
+          <strong :class="aiRuntimeStatus.openai_credential_configured ? 'ok' : 'warn'">
+            {{ aiRuntimeStatus.openai_credential_configured ? 'configured' : 'missing' }}
           </strong>
         </div>
         <div>
@@ -230,7 +230,7 @@ import client from '../services/api'
 
 interface AiRuntimeStatus {
   ai_execution_enabled: boolean
-  openai_key_present: boolean
+  openai_credential_configured: boolean
   provider_allowlist: string[]
   openai_allowed: boolean
   model: string
