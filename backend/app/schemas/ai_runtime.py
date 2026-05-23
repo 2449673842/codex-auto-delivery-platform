@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 class AIRuntimeStatusResponse(BaseModel):
     ai_execution_enabled: bool
-    openai_key_present: bool
+    openai_credential_configured: bool
     provider_allowlist: list[str]
     openai_allowed: bool
     model: str
