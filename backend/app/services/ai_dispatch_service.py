@@ -619,9 +619,12 @@ async def execute(
             sandbox_applied = sandbox_result.success
             if not sandbox_applied:
                 pipeline_status = "sandbox_failed"
+            report = getattr(sandbox_result, "report", None)
+            sandbox_errors = getattr(report, "errors", []) if report is not None else []
+            sandbox_detail = "Patch applied" if sandbox_applied else "; ".join(sandbox_errors) or "Apply failed"
             _step("sandbox_apply",
                   "passed" if sandbox_applied else "failed",
-                  sandbox_result.error_message or "Patch applied" if sandbox_applied else "Apply failed")
+                  sandbox_detail)
         except Exception as e:
             pipeline_status = "sandbox_failed"
             _step("sandbox_apply", "failed", str(e))

@@ -68,6 +68,10 @@ _MODE_SYSTEM_TEMPLATES = {
     "patch_generation": _build_template(
         "code generation assistant",
         "patch.diff (unified diff only)",
+        "Output ONLY raw unified diff text; do not wrap it in Markdown fences",
+        "The first non-empty line MUST start with: diff --git a/",
+        "Include --- a/path, +++ b/path, and at least one @@ hunk",
+        "Do not include explanations, summaries, file trees, or prose before or after the diff",
     ),
     "review": _build_template(
         "code review assistant",
@@ -116,6 +120,7 @@ def _build_user_prompt(
     task_type: str,
     module_name: str,
     context_packet: dict,
+    mode: str = "",
 ) -> str:
     cs = context_packet.get("context_selector", {})
     oc = context_packet.get("output_contract", {})
@@ -134,7 +139,7 @@ def _build_user_prompt(
     def _fmt(items):
         return "\n".join(f"- {x}" for x in items) if items else _NONE
 
-    return (
+    prompt = (
         f"## Task Goal\n{task_goal or _NOT_SPECIFIED}\n\n"
         f"## Task Type\n{task_type or _NOT_SPECIFIED}\n\n"
         f"## Module\n{module_name or _NOT_SPECIFIED}\n\n"
@@ -148,6 +153,16 @@ def _build_user_prompt(
         f"- Estimated context tokens: {tb.get('estimated_context_tokens', 0)}\n"
         f"- Budget status: {tb.get('budget_status', 'ok')}"
     )
+    if mode == "patch_generation":
+        prompt += (
+            "\n\n## Patch Output Checklist\n"
+            "- Return only a raw unified diff.\n"
+            "- Start the answer with `diff --git a/... b/...`.\n"
+            "- Include `--- a/...`, `+++ b/...`, and an `@@` hunk.\n"
+            "- Do not use Markdown code fences.\n"
+            "- Do not explain the patch."
+        )
+    return prompt
 
 
 def _hash_text(text: str) -> str:
@@ -184,7 +199,7 @@ def preview(
 
     safety_boundaries = packet_dict.get("project_brief", {}).get("safety_boundaries", [])
     system_prompt = _build_system_prompt(mode, safety_boundaries)
-    user_prompt = _build_user_prompt(task_goal, task_type, module_name, packet_dict)
+    user_prompt = _build_user_prompt(task_goal, task_type, module_name, packet_dict, mode)
 
     combined = system_prompt + "\n" + user_prompt
     system_hash = _hash_text(system_prompt)
