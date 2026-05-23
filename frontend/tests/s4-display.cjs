@@ -397,7 +397,7 @@ async function testRealAiRun(page, taskId) {
   await checkT(page, 'Real AI Run / 真实 AI 调用', 'R1 Section')
   await checkT(page, 'provider: openai', 'R2 provider')
   await checkT(page, 'model backend configured', 'R3 model')
-  await page.getByRole('button', { name: 'Dry-run' }).click()
+  await page.locator('.real-ai-run').getByRole('button', { name: 'Dry-run' }).click()
   await page.waitForTimeout(300)
   if (dryCounter.count === 1) pass('R4 dry-run endpoint called')
   else fail('R4 dry-run endpoint call count', dryCounter.count)
@@ -406,7 +406,7 @@ async function testRealAiRun(page, taskId) {
   await checkT(page, 'model: gpt-4o-mini', 'R6b dry-run model')
   await checkT(page, 'AI_EXECUTION_ENABLED 未开启', 'R7 execution disabled reason')
   await checkT(page, 'OPENAI_API_KEY 缺失', 'R8 missing key reason')
-  await page.getByRole('button', { name: 'Execute' }).click()
+  await page.locator('.real-ai-run').getByRole('button', { name: 'Execute' }).click()
   await page.waitForTimeout(500)
   if (executeCounter.count === 1) pass('R9 execute endpoint called')
   else fail('R9 execute endpoint call count', executeCounter.count)
@@ -433,7 +433,7 @@ async function testRealAiRunPipelineFailures(page, taskId) {
   }))
   await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
   await page.waitForTimeout(500)
-  await page.getByRole('button', { name: 'Execute' }).click()
+  await page.locator('.real-ai-run').getByRole('button', { name: 'Execute' }).click()
   await page.waitForTimeout(300)
   await checkT(page, 'pipeline_status: sandbox_failed', 'R2-1 sandbox_failed status')
   await checkT(page, 'sandbox failed / blocked', 'R2-2 sandbox failed label')
@@ -444,12 +444,93 @@ async function testRealAiRunPipelineFailures(page, taskId) {
     sandbox_gate_blocked_reasons: ['risk_high', 'manual_review_required'],
     steps: [{ step: 'sandbox_gate', status: 'blocked', details: 'Sandbox Gate blocked' }],
   }))
-  await page.getByRole('button', { name: 'Execute' }).click()
+  await page.locator('.real-ai-run').getByRole('button', { name: 'Execute' }).click()
   await page.waitForTimeout(300)
   await checkT(page, 'pipeline_status: sandbox_gate_blocked', 'R2-3 gate blocked status')
   await checkT(page, 'gate blocked', 'R2-4 gate blocked label')
   await checkT(page, 'risk_high', 'R2-5 gate blocked reason risk')
   await checkT(page, 'manual_review_required', 'R2-6 gate blocked reason manual')
+}
+
+async function testBrowserAiRun(page, taskId) {
+  log('\n========== BA. Browser AI Run ==========')
+  const dryCounter = { count: 0 }
+  const executeCounter = { count: 0 }
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
+  await setBrowserAiRoute(page, 'dry-run', browserAiPayload({
+    status: 'blocked',
+    answer_preview: '',
+    agent_run_id: null,
+    artifact_id: null,
+    browser_opened: false,
+    persisted: false,
+    error_message: 'BROWSER_AI_ENABLED is not true',
+    safety_gate: browserAiSafetyGate({
+      browser_ai_enabled: false,
+      gate_passed: false,
+      blocked_reasons: ['BROWSER_AI_ENABLED is not true'],
+    }),
+  }), 200, dryCounter)
+  await setBrowserAiRoute(page, 'execute', browserAiPayload(), 200, executeCounter)
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await checkT(page, 'Browser AI / 网页 AI', 'BA1 section')
+  await checkT(page, 'Local browser only', 'BA2 local browser label')
+  await checkT(page, 'User-controlled login', 'BA3 user login label')
+  await checkT(page, 'No password stored', 'BA4 no password label')
+  await checkT(page, 'No cookies stored in DB', 'BA5 no cookies label')
+  await checkT(page, 'No hidden API', 'BA6 no hidden API label')
+  await page.locator('.browser-ai-run').getByRole('button', { name: 'Dry-run' }).click()
+  await page.waitForTimeout(300)
+  if (dryCounter.count === 1) pass('BA7 dry-run endpoint called')
+  else fail('BA7 dry-run endpoint call count', dryCounter.count)
+  await checkT(page, 'browser dry-run result', 'BA8 dry-run result shown')
+  await checkT(page, 'prompt_hash: browser_prompt_hash', 'BA9 prompt hash shown')
+  await checkT(page, 'browser_opened=false', 'BA10 dry-run does not open browser')
+  await checkT(page, 'persisted=false', 'BA11 dry-run not persisted')
+  await checkT(page, 'BROWSER_AI_ENABLED is not true', 'BA12 disabled reason displayed')
+  await page.locator('.browser-ai-run').getByRole('button', { name: 'Execute' }).click()
+  await page.waitForTimeout(300)
+  if (executeCounter.count === 1) pass('BA13 execute endpoint called')
+  else fail('BA13 execute endpoint call count', executeCounter.count)
+  await checkT(page, 'browser execute result', 'BA14 execute result shown')
+  await checkT(page, 'agent_run_id: 707', 'BA15 agent run id shown')
+  await checkT(page, 'artifact_id: 808', 'BA16 artifact id shown')
+  await checkT(page, 'Mock browser visible answer', 'BA17 answer preview shown')
+}
+
+async function testBrowserAiFailures(page, taskId) {
+  log('\n========== BA2. Browser AI Failures ==========')
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
+  await setBrowserAiRoute(page, 'execute', browserAiPayload({
+    status: 'failed',
+    answer_preview: '',
+    agent_run_id: 708,
+    artifact_id: null,
+    error_message: 'selector not found',
+    browser_opened: true,
+    persisted: false,
+  }))
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await page.locator('.browser-ai-run').getByRole('button', { name: 'Execute' }).click()
+  await page.waitForTimeout(300)
+  await checkT(page, 'status: failed', 'BA2-1 failed status shown')
+  await checkT(page, 'selector not found', 'BA2-2 selector error shown')
+  await setBrowserAiRoute(page, 'execute', browserAiPayload({
+    status: 'failed',
+    answer_preview: '',
+    agent_run_id: 709,
+    artifact_id: null,
+    error_message: 'timeout waiting response',
+    browser_opened: true,
+    persisted: false,
+  }))
+  await page.locator('.browser-ai-run').getByRole('button', { name: 'Execute' }).click()
+  await page.waitForTimeout(300)
+  await checkT(page, 'timeout waiting response', 'BA2-3 timeout error shown')
 }
 
 async function testNoCodeContext(page, taskId) {
@@ -509,6 +590,11 @@ async function setAiHandoffRoute(page, payload, status = 200, counter = null) {
 async function setAiDispatchRoute(page, action, payload, status = 200, counter = null) {
   await page.unroute(`**/api/ai-dispatch/${action}`).catch(() => {})
   await page.route(`**/api/ai-dispatch/${action}`, route => fulfillJson(route, payload, status, counter))
+}
+
+async function setBrowserAiRoute(page, action, payload, status = 200, counter = null) {
+  await page.unroute(`**/api/browser-ai/${action}`).catch(() => {})
+  await page.route(`**/api/browser-ai/${action}`, route => fulfillJson(route, payload, status, counter))
 }
 
 async function fulfillJson(route, payload, status, counter) {
@@ -613,6 +699,37 @@ function aiExecutePayload(taskId, overrides = {}) {
     ],
   }
   return { success: true, data: { ...data, ...overrides }, message: 'ok' }
+}
+
+function browserAiSafetyGate(overrides = {}) {
+  return {
+    browser_ai_enabled: true,
+    provider_allowed: true,
+    provider_valid: true,
+    selectors_present: true,
+    target_url_present: true,
+    timeout_ok: true,
+    gate_passed: true,
+    blocked_reasons: [],
+    ...overrides,
+  }
+}
+
+function browserAiPayload(overrides = {}) {
+  const data = {
+    status: 'succeeded',
+    provider: 'custom',
+    prompt_hash: 'browser_prompt_hash',
+    answer_preview: 'Mock browser visible answer',
+    agent_run_id: 707,
+    artifact_id: 808,
+    error_message: null,
+    safety_gate: browserAiSafetyGate(),
+    browser_opened: true,
+    persisted: true,
+    ...overrides,
+  }
+  return { success: true, data, message: 'ok' }
 }
 
 async function testMultiAiWorkspaceEmpty(page, taskId) {
@@ -827,6 +944,8 @@ async function main() {
   await testSandboxSection(page)
   await testRealAiRun(page, task.id)
   await testRealAiRunPipelineFailures(page, task.id)
+  await testBrowserAiRun(page, task.id)
+  await testBrowserAiFailures(page, task.id)
   await testApprovals(page)
   await testHumanRequired(page)
   await testSandboxApply(page)
