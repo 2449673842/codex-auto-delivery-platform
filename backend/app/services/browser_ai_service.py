@@ -413,6 +413,12 @@ async def _read_answer_text(page, request: BrowserAiRequest, timeout_ms: int) ->
     try:
         await page.locator(request.copy_button_selector).first.click(timeout=timeout_ms)
         copied = (await page.evaluate("navigator.clipboard.readText()")).strip()
-        return copied or answer
+        return _prefer_related_clipboard_answer(answer, copied)
     except Exception:
         return answer
+
+
+def _prefer_related_clipboard_answer(answer: str, copied: str) -> str:
+    if copied and answer and (answer in copied or copied in answer):
+        return copied
+    return answer

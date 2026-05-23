@@ -30,6 +30,16 @@ class FailingDriver:
         raise RuntimeError("selector not found")
 
 
+class ClipboardDriver:
+    def __init__(self, answer: str, copied: str):
+        self.answer = answer
+        self.copied = copied
+
+    async def run(self, request, prompt: str, timeout_seconds: int) -> str:
+        from app.services.browser_ai_service import _prefer_related_clipboard_answer
+        return _prefer_related_clipboard_answer(self.answer, self.copied)
+
+
 @pytest.fixture(autouse=True)
 async def _reset_db():
     engine = get_engine()
@@ -281,6 +291,62 @@ async def test_custom_prompt_sensitive_text_not_saved_or_returned(client, valid_
         assert secret not in body
         assert secret not in stored
     assert all("Browser AI prompt redacted" in r.input_prompt for r in runs)
+
+
+@pytest.mark.asyncio
+async def test_copy_button_related_clipboard_can_return_full_answer(client, valid_body, monkeypatch):
+    from app.services import browser_ai_service
+    browser_ai_service.set_driver_override(ClipboardDriver(
+        answer="Short visible answer",
+        copied="Short visible answer with extra copied detail",
+    ))
+    _install_settings(monkeypatch, browser_ai_enabled=True, _browser_ai_provider_allowlist_raw="custom")
+    valid_body["copy_button_selector"] = "button[data-copy]"
+
+    resp = await client.post(f"{BASE}/execute", json=valid_body)
+
+    data = resp.json()["data"]
+    assert data["status"] == "succeeded"
+    assert data["answer_preview"] == "Short visible answer with extra copied detail"
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        artifact = (await session.execute(select(TaskArtifact))).scalars().one()
+    assert artifact.content == "Short visible answer with extra copied detail"
+
+
+@pytest.mark.asyncio
+async def test_copy_button_unrelated_clipboard_falls_back_and_is_not_saved(client, valid_body, monkeypatch):
+    from app.services import browser_ai_service
+    unrelated_clipboard = "unrelated clipboard private note cookie=clipboard-secret session=clipboard-session"
+    browser_ai_service.set_driver_override(ClipboardDriver(
+        answer="Visible response selector answer",
+        copied=unrelated_clipboard,
+    ))
+    _install_settings(monkeypatch, browser_ai_enabled=True, _browser_ai_provider_allowlist_raw="custom")
+    valid_body["copy_button_selector"] = "button[data-copy]"
+
+    resp = await client.post(f"{BASE}/execute", json=valid_body)
+
+    data = resp.json()["data"]
+    assert data["status"] == "succeeded"
+    assert data["answer_preview"] == "Visible response selector answer"
+    body = json.dumps(resp.json())
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        artifacts = (await session.execute(select(TaskArtifact))).scalars().all()
+        runs = (await session.execute(select(AgentRun))).scalars().all()
+        events = (await session.execute(select(TaskEvent))).scalars().all()
+    stored = json.dumps({
+        "run_input_prompt": [r.input_prompt for r in runs],
+        "run_raw": [r.raw_result_json for r in runs],
+        "artifact_content": [a.content for a in artifacts],
+        "artifact_metadata": [a.metadata_json for a in artifacts],
+        "event_messages": [e.message for e in events],
+    })
+    assert unrelated_clipboard not in body
+    assert unrelated_clipboard not in stored
+    assert "clipboard-secret" not in stored
+    assert "clipboard-session" not in stored
 
 
 @pytest.mark.asyncio
