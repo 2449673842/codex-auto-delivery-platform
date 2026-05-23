@@ -39,6 +39,15 @@ class Settings:
     # --- OpenAI ---
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")  # NOSONAR
 
+    # --- OpenAI-compatible provider settings ---
+    openai_model_provider: str = os.getenv("OPENAI_MODEL_PROVIDER", "openai")  # NOSONAR
+    openai_base_url: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")  # NOSONAR
+    openai_wire_api: str = os.getenv("OPENAI_WIRE_API", "chat_completions")  # NOSONAR
+    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # NOSONAR
+    openai_reasoning_effort: str = os.getenv("OPENAI_REASONING_EFFORT", "")  # NOSONAR
+    openai_disable_response_storage: bool = os.getenv("OPENAI_DISABLE_RESPONSE_STORAGE", "").lower() in ("1", "true", "yes")  # NOSONAR
+    openai_service_tier: str = os.getenv("OPENAI_SERVICE_TIER", "")  # NOSONAR
+
     # --- AI Provider 白名单（逗号分隔） ---
     _provider_allowlist_raw: str = os.getenv("AI_PROVIDER_ALLOWLIST", "sandbox")  # NOSONAR
 

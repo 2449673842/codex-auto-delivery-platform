@@ -91,6 +91,37 @@ async def _mock_openai_review(self, sys_prompt, user_prompt):
 async def _mock_openai_empty(self, sys_prompt, user_prompt):
     return ""
 
+
+class _FakeHttpResponse:
+    def __init__(self, data):
+        self._data = data
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._data
+
+
+def _fake_async_client_factory(seen, response_data):
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers, json):
+            seen["url"] = url
+            seen["headers"] = headers
+            seen["json"] = json
+            return _FakeHttpResponse(response_data)
+
+    return FakeAsyncClient
+
 @pytest.mark.asyncio
 async def test_openai_mocked_plan(client, task, monkeypatch):
     """OpenAI provider with mocked API should produce plan.md"""
@@ -110,6 +141,78 @@ async def test_openai_mocked_plan(client, task, monkeypatch):
     assert run["status"] == "succeeded"
     assert run["output_summary"] is not None
     assert "plan" in (run["raw_result_json"] or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_openai_default_chat_completions_request(monkeypatch):
+    from app.services.openai_provider import OpenAIProvider
+    import httpx
+
+    seen = {}
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")  # NOSONAR - mock key for tests
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        _fake_async_client_factory(
+            seen,
+            {"choices": [{"message": {"content": "# Chat response"}}]},
+        ),
+    )
+
+    provider = OpenAIProvider()
+    text = await provider._call_openai("system prompt", "user prompt")
+
+    assert text == "# Chat response"
+    assert seen["url"].endswith("/chat/completions")
+    assert seen["json"]["model"] == "gpt-4o-mini"
+    assert seen["json"]["messages"][0]["content"] == "system prompt"
+    assert seen["json"]["messages"][1]["content"] == "user prompt"
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_wire_api_request_for_sub2api(monkeypatch):
+    from dataclasses import replace
+    from app.services.openai_provider import OpenAIProvider
+    import app.services.openai_provider as provider_module
+    import httpx
+
+    seen = {}
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock")  # NOSONAR - mock key for tests
+    monkeypatch.setattr(
+        provider_module,
+        "settings",
+        replace(
+            provider_module.settings,
+            openai_model_provider="sub2api",
+            openai_base_url="http://localhost:8081",
+            openai_wire_api="responses",
+            openai_model="gpt-5.5",
+            openai_reasoning_effort="high",
+            openai_disable_response_storage=True,
+            openai_service_tier="default",
+        ),
+    )
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        _fake_async_client_factory(
+            seen,
+            {"output_text": "# Responses response"},
+        ),
+    )
+
+    provider = OpenAIProvider()
+    text = await provider._call_openai("system prompt", "user prompt")
+
+    assert text == "# Responses response"
+    assert seen["url"] == "http://localhost:8081/responses"
+    assert seen["json"]["model"] == "gpt-5.5"
+    assert seen["json"]["instructions"] == "system prompt"
+    assert seen["json"]["input"] == "user prompt"
+    assert seen["json"]["reasoning"] == {"effort": "high"}
+    assert seen["json"]["store"] is False
+    assert seen["json"]["service_tier"] == "default"
+    assert "sk-test-mock" not in str(seen["json"])
 
 @pytest.mark.asyncio
 async def test_openai_mocked_creates_artifacts(client, task, monkeypatch):

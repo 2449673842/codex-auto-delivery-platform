@@ -93,7 +93,7 @@ def _redact_result_for_storage(result):
 def _dispatch_metadata(preview, mode: str) -> dict:
     return {
         "provider": "openai",
-        "model": "gpt-4o-mini",
+        "model": settings.openai_model,
         "mode": mode,
         "prompt_hash": preview.prompt_hash,
         "context_packet_hash": preview.context_packet_hash,
@@ -392,7 +392,7 @@ def dry_run(
     )
     return AiDispatchDryRunResponse(
         provider="openai",
-        model="gpt-4o-mini",
+        model=settings.openai_model,
         mode=mode,
         prompt_hash=preview.prompt_hash,
         context_packet_hash=preview.context_packet_hash,
@@ -417,7 +417,7 @@ async def _find_or_create_openai_agent(db: AsyncSession, mode: str) -> AgentProf
         name=f"openai-{agent_type}",
         agent_type=agent_type,
         provider="openai",
-        model_name="gpt-4o-mini",
+        model_name=settings.openai_model,
     )
     db.add(agent)
     await db.flush()
