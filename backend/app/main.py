@@ -43,6 +43,7 @@ from app.routers import ai_runtime as ai_runtime_router
 from app.routers import dispatch_batches as dispatch_batches_router
 from app.routers import answer_synthesis as answer_synthesis_router
 from app.routers import ai_handoff as ai_handoff_router
+from app.routers import browser_ai as browser_ai_router
 
 app.include_router(health.router)
 app.include_router(projects.router)
@@ -68,3 +69,4 @@ app.include_router(ai_runtime_router.router)
 app.include_router(dispatch_batches_router.router)
 app.include_router(answer_synthesis_router.router)
 app.include_router(ai_handoff_router.router)
+app.include_router(browser_ai_router.router)

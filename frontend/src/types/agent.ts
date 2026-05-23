@@ -436,3 +436,43 @@ export interface AiDispatchExecuteResponse {
   token_usage: Record<string, unknown>
   steps: AiExecuteStep[]
 }
+
+// ── Browser AI / Local Web AI Provider ──
+export type BrowserAiPromptSource = 'task_goal' | 'handoff_packet' | 'answer_synthesis' | 'custom_prompt'
+
+export interface BrowserAiRequest {
+  project_id: number
+  task_id: number
+  provider: 'custom'
+  target_url: string
+  prompt_source: BrowserAiPromptSource
+  custom_prompt?: string
+  input_selector: string
+  send_selector: string
+  response_selector: string
+  timeout_seconds: number
+}
+
+export interface BrowserAiSafetyGate {
+  browser_ai_enabled: boolean
+  provider_allowed: boolean
+  provider_valid: boolean
+  selectors_present: boolean
+  target_url_present: boolean
+  timeout_ok: boolean
+  gate_passed: boolean
+  blocked_reasons: string[]
+}
+
+export interface BrowserAiResponse {
+  status: string
+  provider: string
+  prompt_hash: string
+  answer_preview: string
+  agent_run_id: number | null
+  artifact_id: number | null
+  error_message: string | null
+  safety_gate: BrowserAiSafetyGate
+  browser_opened: boolean
+  persisted: boolean
+}

@@ -55,5 +55,16 @@ class Settings:
     def provider_allowlist(self) -> list[str]:
         return [x.strip() for x in self._provider_allowlist_raw.split(",") if x.strip()]
 
+    # --- Browser AI Provider ---
+    browser_ai_enabled: bool = os.getenv("BROWSER_AI_ENABLED", "").lower() in ("1", "true", "yes")  # NOSONAR
+    browser_ai_headless: bool = os.getenv("BROWSER_AI_HEADLESS", "").lower() in ("1", "true", "yes")  # NOSONAR
+    _browser_ai_provider_allowlist_raw: str = os.getenv("BROWSER_AI_PROVIDER_ALLOWLIST", "custom")  # NOSONAR
+    browser_ai_default_timeout_seconds: int = int(os.getenv("BROWSER_AI_DEFAULT_TIMEOUT_SECONDS", "180"))  # NOSONAR
+    browser_ai_user_data_dir: str = os.getenv("BROWSER_AI_USER_DATA_DIR", "")  # NOSONAR
+
+    @property
+    def browser_ai_provider_allowlist(self) -> list[str]:
+        return [x.strip() for x in self._browser_ai_provider_allowlist_raw.split(",") if x.strip()]
+
 
 settings = Settings()

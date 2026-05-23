@@ -154,6 +154,93 @@
         </div>
       </section>
 
+      <!-- Browser AI -->
+      <section class="card browser-ai-run">
+        <div class="section-header">
+          <h2>Browser AI / 网页 AI</h2>
+          <span class="workspace-readonly">Local browser provider</span>
+        </div>
+        <div class="workspace-safety">
+          <span class="label-badge label-provider">Local browser only</span>
+          <span class="label-badge label-ai">User-controlled login</span>
+          <span class="label-badge label-redacted">No password stored</span>
+          <span class="label-badge label-redacted">No cookies stored in DB</span>
+          <span class="label-badge label-provider">No hidden API</span>
+          <span class="label-badge label-merged">No auto merge</span>
+        </div>
+        <div class="browser-ai-form">
+          <label>
+            provider
+            <select v-model="browserAiForm.provider">
+              <option value="custom">custom</option>
+            </select>
+          </label>
+          <label>
+            prompt_source
+            <select v-model="browserAiForm.prompt_source">
+              <option value="task_goal">task_goal</option>
+              <option value="handoff_packet">handoff_packet</option>
+              <option value="answer_synthesis">answer_synthesis</option>
+              <option value="custom_prompt">custom_prompt</option>
+            </select>
+          </label>
+          <label class="wide">
+            target_url
+            <input v-model="browserAiForm.target_url" placeholder="http://127.0.0.1:9999/mock-browser-ai" />
+          </label>
+          <label>
+            input_selector
+            <input v-model="browserAiForm.input_selector" placeholder="textarea[name='prompt']" />
+          </label>
+          <label>
+            send_selector
+            <input v-model="browserAiForm.send_selector" placeholder="button[data-send]" />
+          </label>
+          <label>
+            response_selector
+            <input v-model="browserAiForm.response_selector" placeholder="[data-answer]" />
+          </label>
+          <label>
+            timeout_seconds
+            <input v-model.number="browserAiForm.timeout_seconds" type="number" min="1" max="600" />
+          </label>
+          <label class="wide" v-if="browserAiForm.prompt_source === 'custom_prompt'">
+            custom_prompt
+            <textarea v-model="browserAiForm.custom_prompt" rows="4"></textarea>
+          </label>
+          <div class="form-actions wide">
+            <button class="btn btn-sm" @click="runBrowserAiDryRun" :disabled="browserAiLoading || !task">Dry-run</button>
+            <button class="btn btn-primary btn-sm" @click="executeBrowserAiRun" :disabled="browserAiLoading || !task">Execute</button>
+          </div>
+        </div>
+        <p v-if="browserAiError" class="run-error">{{ browserAiError }}</p>
+        <div v-if="browserAiDryRunResult" class="real-ai-result">
+          <strong>browser dry-run result</strong>
+          <div class="dispatch-job-hashes">
+            <code>prompt_hash: {{ browserAiDryRunResult.prompt_hash || '-' }}</code>
+          </div>
+          <div class="dispatch-job-meta">
+            <span>status: {{ browserAiDryRunResult.status }}</span>
+            <span>browser_opened={{ browserAiDryRunResult.browser_opened }}</span>
+            <span>persisted={{ browserAiDryRunResult.persisted }}</span>
+          </div>
+          <pre>{{ formatBrowserAiSafetyGate(browserAiDryRunResult.safety_gate) }}</pre>
+          <p v-if="browserAiDryRunResult.error_message" class="run-error">{{ browserAiDryRunResult.error_message }}</p>
+        </div>
+        <div v-if="browserAiExecuteResult" class="real-ai-result">
+          <strong>browser execute result</strong>
+          <div class="dispatch-job-meta">
+            <span>status: {{ browserAiExecuteResult.status }}</span>
+            <span>agent_run_id: {{ browserAiExecuteResult.agent_run_id || '-' }}</span>
+            <span>artifact_id: {{ browserAiExecuteResult.artifact_id || '-' }}</span>
+            <span>browser_opened={{ browserAiExecuteResult.browser_opened }}</span>
+            <span>persisted={{ browserAiExecuteResult.persisted }}</span>
+          </div>
+          <p v-if="browserAiExecuteResult.answer_preview" class="run-output">{{ browserAiExecuteResult.answer_preview }}</p>
+          <p v-if="browserAiExecuteResult.error_message" class="run-error">{{ browserAiExecuteResult.error_message }}</p>
+        </div>
+      </section>
+
       <!-- Agent Runs -->
       <section class="card">
         <div class="section-header">
@@ -743,10 +830,11 @@ import {
   fetchApprovalDecisions,
   fetchDispatchBatches, previewAnswerSynthesis, previewAiHandoff,
   dryRunAiDispatch, executeAiDispatch,
+  dryRunBrowserAi, executeBrowserAi,
   fetchCodeContext,
   applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate, evaluateSandboxGate,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -781,6 +869,22 @@ const realAiLoading = ref(false)
 const realAiError = ref('')
 const realAiDryRunResult = ref<AiDispatchDryRunResponse | null>(null)
 const realAiExecuteResult = ref<AiDispatchExecuteResponse | null>(null)
+const browserAiForm = ref<BrowserAiRequest>({
+  project_id: 0,
+  task_id: 0,
+  provider: 'custom',
+  target_url: 'http://127.0.0.1:9999/mock-browser-ai',
+  prompt_source: 'task_goal',
+  custom_prompt: '',
+  input_selector: "textarea[name='prompt']",
+  send_selector: 'button[data-send]',
+  response_selector: '[data-answer]',
+  timeout_seconds: 180,
+})
+const browserAiLoading = ref(false)
+const browserAiError = ref('')
+const browserAiDryRunResult = ref<BrowserAiResponse | null>(null)
+const browserAiExecuteResult = ref<BrowserAiResponse | null>(null)
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -926,6 +1030,19 @@ function formatSafetyGate(gate: AiDispatchSafetyGate) {
   return JSON.stringify(gate, null, 2)
 }
 
+function formatBrowserAiSafetyGate(gate: BrowserAiSafetyGate) {
+  return JSON.stringify(gate, null, 2)
+}
+
+function buildBrowserAiRequest(): BrowserAiRequest | null {
+  if (!task.value) return null
+  return {
+    ...browserAiForm.value,
+    project_id: task.value.project_id,
+    task_id: task.value.id,
+  }
+}
+
 onMounted(async () => {
   agents.value = await fetchAgents()
   await refresh()
@@ -935,6 +1052,8 @@ async function refresh() {
   const id = Number(route.params.id)
   task.value = await taskStore.fetchTask(id)
   realAiTaskGoal.value = defaultRealAiTaskGoal()
+  browserAiForm.value.project_id = task.value.project_id
+  browserAiForm.value.task_id = task.value.id
   agentRuns.value = await fetchAgentRuns(id)
   agentReviews.value = await fetchAgentReviews(id)
   approvalDecisions.value = await fetchApprovalDecisions(id)
@@ -974,6 +1093,39 @@ async function executeRealAiRun() {
     realAiError.value = e.message || 'AI execute failed'
   } finally {
     realAiLoading.value = false
+  }
+}
+
+async function runBrowserAiDryRun() {
+  const body = buildBrowserAiRequest()
+  if (!body) return
+  browserAiLoading.value = true
+  browserAiError.value = ''
+  try {
+    browserAiDryRunResult.value = await dryRunBrowserAi(body)
+  } catch (e: any) {
+    browserAiDryRunResult.value = null
+    browserAiError.value = e.message || 'Browser AI dry-run failed'
+  } finally {
+    browserAiLoading.value = false
+  }
+}
+
+async function executeBrowserAiRun() {
+  const body = buildBrowserAiRequest()
+  if (!body) return
+  browserAiLoading.value = true
+  browserAiError.value = ''
+  try {
+    browserAiExecuteResult.value = await executeBrowserAi(body)
+    if (browserAiExecuteResult.value.persisted) {
+      await refreshAfterRealAiRun()
+    }
+  } catch (e: any) {
+    browserAiExecuteResult.value = null
+    browserAiError.value = e.message || 'Browser AI execute failed'
+  } finally {
+    browserAiLoading.value = false
   }
 }
 
@@ -1248,6 +1400,11 @@ async function handleCreateAgentReview() {
 .real-ai-result pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--color-text-secondary); }
 .real-ai-sandbox { padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; display: flex; flex-direction: column; gap: 6px; }
 .real-ai-sandbox strong { font-size: 13px; }
+.browser-ai-run { border-left: 3px solid #00897b; }
+.browser-ai-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
+.browser-ai-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
+.browser-ai-form .wide { grid-column: 1 / -1; }
+.browser-ai-form textarea { min-height: 90px; resize: vertical; }
 .roles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; font-size: 14px; }
 .loading { text-align: center; padding: 60px; color: var(--color-text-secondary); }
 .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--color-border); }
