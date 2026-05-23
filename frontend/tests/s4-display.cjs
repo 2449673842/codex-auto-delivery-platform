@@ -149,6 +149,7 @@ async function testDashboardFirstUsableWorkflow(page) {
     data: {
       ai_execution_enabled: true,
       openai_key_present: true,
+      api_key_value: 'SHOULD_NOT_RENDER_RUNTIME_SECRET',
       provider_allowlist: ['openai'],
       openai_allowed: true,
       model: 'gpt-5.5',
@@ -248,7 +249,7 @@ async function testDashboardFirstUsableWorkflow(page) {
   await checkT(page, 'configured', 'D0-5 key configured label')
   await checkT(page, 'gpt-5.5', 'D0-6 model visible')
   await checkT(page, 'Base URL', 'D0-7 base URL label')
-  const leakedKey = await page.locator('text=/sk-[A-Za-z0-9_-]+/').count()
+  const leakedKey = await page.locator('text="SHOULD_NOT_RENDER_RUNTIME_SECRET"').count()
   if (leakedKey === 0) pass('D0-8 API key value not displayed')
   else fail('D0-8 API key leaked in dashboard', leakedKey)
 
