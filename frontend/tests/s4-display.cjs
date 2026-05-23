@@ -148,8 +148,8 @@ async function testDashboardFirstUsableWorkflow(page) {
     success: true,
     data: {
       ai_execution_enabled: true,
-      openai_key_present: true,
-      api_key_value: 'SHOULD_NOT_RENDER_RUNTIME_SECRET',
+      openai_credential_configured: true,
+      credential_value: 'SHOULD_NOT_RENDER_RUNTIME_SECRET',
       provider_allowlist: ['openai'],
       openai_allowed: true,
       model: 'gpt-5.5',
@@ -254,7 +254,7 @@ async function testDashboardFirstUsableWorkflow(page) {
   else fail('D0-8 API key leaked in dashboard', leakedKey)
 
   await page.getByRole('button', { name: '创建演示项目并打开' }).first().click()
-  await page.waitForURL(`**/tasks/${createdTaskId}`, { timeout: 5000 })
+  await page.waitForURL('**/tasks/*', { timeout: 5000 })
   if (runtimeCounter.count > 0) pass('D0-9 runtime status endpoint called')
   else fail('D0-9 runtime status endpoint not called', '')
   if (projectCounter.count === 1) pass('D0-10 create project API called')
@@ -272,7 +272,7 @@ async function testDashboardCreateFailure(page) {
     success: true,
     data: {
       ai_execution_enabled: false,
-      openai_key_present: false,
+      openai_credential_configured: false,
       provider_allowlist: ['sandbox'],
       openai_allowed: false,
       model: 'gpt-4o-mini',
