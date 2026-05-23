@@ -30,6 +30,16 @@ class FailingDriver:
         raise RuntimeError("selector not found")
 
 
+class StepFailingDriver:
+    def __init__(self, step: str, message: str):
+        self.step = step
+        self.message = message
+
+    async def run(self, request, prompt: str, timeout_seconds: int) -> str:
+        from app.services.browser_ai_service import BrowserAiStepError
+        raise BrowserAiStepError(self.step, self.message)
+
+
 class ClipboardDriver:
     def __init__(self, answer: str, copied: str):
         self.answer = answer
@@ -131,6 +141,14 @@ def _assert_absent_from_response_and_storage(resp, stored: str, values: list[str
         assert value not in stored
 
 
+def _step(data: dict, name: str) -> dict:
+    return next(step for step in data["steps"] if step["name"] == name)
+
+
+def _assert_step(data: dict, name: str, status: str) -> None:
+    assert _step(data, name)["status"] == status
+
+
 @pytest.mark.asyncio
 async def test_dry_run_default_disabled_does_not_open_browser_or_write(client, valid_body):
     before = await _counts()
@@ -143,6 +161,8 @@ async def test_dry_run_default_disabled_does_not_open_browser_or_write(client, v
     assert data["browser_opened"] is False
     assert data["persisted"] is False
     assert data["safety_gate"]["browser_ai_enabled"] is False
+    _assert_step(data, "validate_request", "passed")
+    _assert_step(data, "build_prompt", "passed")
     assert before == after
 
 
@@ -159,6 +179,8 @@ async def test_dry_run_enabled_ready_without_opening_browser_or_writing(client, 
     assert data["browser_opened"] is False
     assert data["persisted"] is False
     assert data["safety_gate"]["gate_passed"] is True
+    _assert_step(data, "validate_request", "passed")
+    _assert_step(data, "build_prompt", "passed")
     assert before == await _counts()
 
 
@@ -171,6 +193,7 @@ async def test_execute_default_disabled_blocked(client, valid_body):
     assert data["status"] == "blocked"
     assert data["browser_opened"] is False
     assert "BROWSER_AI_ENABLED" in data["error_message"]
+    _assert_step(data, "validate_request", "failed")
 
 
 @pytest.mark.asyncio
@@ -182,6 +205,7 @@ async def test_provider_not_allowlisted_blocked(client, valid_body, monkeypatch)
     data = resp.json()["data"]
     assert data["status"] == "blocked"
     assert "not in BROWSER_AI_PROVIDER_ALLOWLIST" in data["error_message"]
+    _assert_step(data, "validate_request", "failed")
 
 
 @pytest.mark.asyncio
@@ -195,6 +219,7 @@ async def test_missing_selector_failed_without_opening_browser(client, valid_bod
     assert data["status"] == "blocked"
     assert data["browser_opened"] is False
     assert "selector" in data["error_message"]
+    _assert_step(data, "validate_request", "failed")
 
 
 @pytest.mark.asyncio
@@ -213,6 +238,7 @@ async def test_invalid_prompt_source_blocked_without_opening_browser_or_writing(
         assert data["persisted"] is False
         assert data["safety_gate"]["prompt_source_valid"] is False
         assert "Invalid prompt_source" in data["error_message"]
+        _assert_step(data, "validate_request", "failed")
     assert before == await _counts()
 
 
@@ -233,6 +259,20 @@ async def test_fake_browser_driver_success_creates_agent_run_and_artifact(client
     assert data["agent_run_id"] > 0
     assert data["artifact_id"] > 0
     assert "Visible answer" in data["answer_preview"]
+    for step_name in [
+        "validate_request",
+        "build_prompt",
+        "create_agent_run",
+        "open_browser",
+        "navigate",
+        "fill_prompt",
+        "click_send",
+        "wait_response",
+        "capture_answer",
+        "persist_artifact",
+        "finish_run",
+    ]:
+        _assert_step(data, step_name, "passed")
     assert len(driver.calls) == 1
     runs, artifacts, events = await _counts()
     assert runs == 1
@@ -253,6 +293,59 @@ async def test_failing_driver_returns_clear_error(client, valid_body, monkeypatc
     assert data["browser_opened"] is True
     assert data["persisted"] is False
     assert "selector not found" in data["error_message"]
+    _assert_step(data, "capture_answer", "failed")
+
+
+@pytest.mark.asyncio
+async def test_step_driver_fill_prompt_failure_marks_failed_step(client, valid_body, monkeypatch):
+    from app.services import browser_ai_service
+    browser_ai_service.set_driver_override(StepFailingDriver("fill_prompt", "input selector not found"))
+    _install_settings(monkeypatch, browser_ai_enabled=True, _browser_ai_provider_allowlist_raw="custom")
+
+    resp = await client.post(f"{BASE}/execute", json=valid_body)
+
+    data = resp.json()["data"]
+    assert data["status"] == "failed"
+    _assert_step(data, "fill_prompt", "failed")
+    _assert_step(data, "click_send", "skipped")
+    assert "input selector not found" in _step(data, "fill_prompt")["message"]
+
+
+@pytest.mark.asyncio
+async def test_step_driver_wait_response_timeout_marks_failed_step(client, valid_body, monkeypatch):
+    from app.services import browser_ai_service
+    browser_ai_service.set_driver_override(StepFailingDriver(
+        "wait_response",
+        "timeout waiting for response; login may be required or selector may be wrong",
+    ))
+    _install_settings(monkeypatch, browser_ai_enabled=True, _browser_ai_provider_allowlist_raw="custom")
+
+    resp = await client.post(f"{BASE}/execute", json=valid_body)
+
+    data = resp.json()["data"]
+    assert data["status"] == "failed"
+    _assert_step(data, "wait_response", "failed")
+    _assert_step(data, "capture_answer", "skipped")
+    assert "login may be required" in _step(data, "wait_response")["message"]
+
+
+@pytest.mark.asyncio
+async def test_step_messages_are_redacted(client, valid_body, monkeypatch):
+    from app.services import browser_ai_service
+    forbidden = [
+        "password=step-secret",
+        "cookie=step-cookie",
+        "session=step-session",
+        "sk-123456789012345678901234567890",
+    ]
+    browser_ai_service.set_driver_override(StepFailingDriver("wait_response", " ".join(forbidden)))
+    _install_settings(monkeypatch, browser_ai_enabled=True, _browser_ai_provider_allowlist_raw="custom")
+
+    resp = await client.post(f"{BASE}/execute", json=valid_body)
+
+    body = json.dumps(resp.json()["data"]["steps"])
+    for value in forbidden:
+        assert value not in body
 
 
 @pytest.mark.asyncio

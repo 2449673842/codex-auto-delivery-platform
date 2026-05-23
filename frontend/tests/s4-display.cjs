@@ -135,6 +135,12 @@ async function checkT(page, text, label) {
   else fail(`${label}: "${text}" not found`, '')
 }
 
+async function checkBodyIncludes(page, text, label) {
+  const body = await page.locator('body').innerText()
+  if (body.includes(text)) pass(`${label}: "${text}"`)
+  else fail(`${label}: "${text}" not found`, '')
+}
+
 async function testDashboardFirstUsableWorkflow(page) {
   log('\n========== D0. Dashboard First Usable Workflow ==========')
   const projectCounter = { count: 0 }
@@ -490,6 +496,9 @@ async function testBrowserAiRun(page, taskId) {
   await checkT(page, 'browser_opened=false', 'BA10 dry-run does not open browser')
   await checkT(page, 'persisted=false', 'BA11 dry-run not persisted')
   await checkT(page, 'BROWSER_AI_ENABLED is not true', 'BA12 disabled reason displayed')
+  await checkT(page, 'run steps', 'BA12a steps area shown')
+  await checkT(page, 'validate_request', 'BA12b validate step shown')
+  await checkT(page, 'build_prompt', 'BA12c build prompt step shown')
   await page.locator('.browser-ai-run').getByRole('button', { name: 'Execute' }).click()
   await page.waitForTimeout(300)
   if (executeCounter.count === 1) pass('BA13 execute endpoint called')
@@ -498,6 +507,9 @@ async function testBrowserAiRun(page, taskId) {
   await checkT(page, 'agent_run_id: 707', 'BA15 agent run id shown')
   await checkT(page, 'artifact_id: 808', 'BA16 artifact id shown')
   await checkT(page, 'Mock browser visible answer', 'BA17 answer preview shown')
+  await checkT(page, 'open_browser', 'BA18 open browser step shown')
+  await checkT(page, 'capture_answer', 'BA19 capture answer step shown')
+  await checkT(page, 'persist_artifact', 'BA20 persist artifact step shown')
 }
 
 async function testBrowserAiFailures(page, taskId) {
@@ -512,6 +524,9 @@ async function testBrowserAiFailures(page, taskId) {
     error_message: 'selector not found',
     browser_opened: true,
     persisted: false,
+    steps: browserAiSteps({ fill_prompt: 'failed', click_send: 'skipped' }, {
+      fill_prompt: 'Input box was not found or could not be filled.',
+    }),
   }))
   await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
   await page.waitForTimeout(500)
@@ -519,6 +534,9 @@ async function testBrowserAiFailures(page, taskId) {
   await page.waitForTimeout(300)
   await checkT(page, 'status: failed', 'BA2-1 failed status shown')
   await checkT(page, 'selector not found', 'BA2-2 selector error shown')
+  await checkT(page, 'fill_prompt', 'BA2-2a failed step name shown')
+  await checkT(page, 'failed', 'BA2-2b failed step status shown')
+  await checkBodyIncludes(page, 'input box or send button is not found', 'BA2-2b human selector hint shown')
   await setBrowserAiRoute(page, 'execute', browserAiPayload({
     status: 'failed',
     answer_preview: '',
@@ -527,10 +545,15 @@ async function testBrowserAiFailures(page, taskId) {
     error_message: 'timeout waiting response',
     browser_opened: true,
     persisted: false,
+    steps: browserAiSteps({ wait_response: 'failed', capture_answer: 'skipped' }, {
+      wait_response: 'Timed out waiting for an answer; manual login may be required or selector may be wrong.',
+    }),
   }))
   await page.locator('.browser-ai-run').getByRole('button', { name: 'Execute' }).click()
   await page.waitForTimeout(300)
   await checkT(page, 'timeout waiting response', 'BA2-3 timeout error shown')
+  await checkT(page, 'wait_response', 'BA2-4 wait response failed step shown')
+  await checkBodyIncludes(page, 'manual login may be required', 'BA2-5 login hint shown')
 }
 
 async function testNoCodeContext(page, taskId) {
@@ -727,9 +750,31 @@ function browserAiPayload(overrides = {}) {
     safety_gate: browserAiSafetyGate(),
     browser_opened: true,
     persisted: true,
+    steps: browserAiSteps(),
     ...overrides,
   }
   return { success: true, data, message: 'ok' }
+}
+
+function browserAiSteps(statusOverrides = {}, messageOverrides = {}) {
+  return [
+    'validate_request',
+    'build_prompt',
+    'create_agent_run',
+    'open_browser',
+    'navigate',
+    'fill_prompt',
+    'click_send',
+    'wait_response',
+    'capture_answer',
+    'persist_artifact',
+    'finish_run',
+  ].map(name => ({
+    name,
+    status: statusOverrides[name] || 'passed',
+    message: messageOverrides[name] || `${name} completed`,
+    sensitive: false,
+  }))
 }
 
 async function testMultiAiWorkspaceEmpty(page, taskId) {
