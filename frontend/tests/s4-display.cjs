@@ -7,8 +7,8 @@
 const { chromium } = require('playwright')
 const http = require('node:http')
 
-const FE = 'http://127.0.0.1:9700'
-const BE = 'http://127.0.0.1:8700'
+const FE = process.env.CODEX_TEST_FRONTEND_URL || 'http://127.0.0.1:9700'
+const BE = process.env.CODEX_TEST_BACKEND_URL || 'http://127.0.0.1:8700'
 
 const t_actor = { actor: 'test' }
 const r = { passed: 0, failed: 0, errors: [], networkFailures: [], details: [] }
@@ -133,6 +133,174 @@ async function checkT(page, text, label) {
   const n = await page.locator(`text="${text}"`).count()
   if (n > 0) pass(`${label}: "${text}"`)
   else fail(`${label}: "${text}" not found`, '')
+}
+
+async function testDashboardFirstUsableWorkflow(page) {
+  log('\n========== D0. Dashboard First Usable Workflow ==========')
+  const projectCounter = { count: 0 }
+  const taskCounter = { count: 0 }
+  const runtimeCounter = { count: 0 }
+  let createdProjectId = null
+  let createdTaskId = null
+
+  await page.unroute('**/api/ai-runtime/status').catch(() => {})
+  await page.route('**/api/ai-runtime/status', route => fulfillJson(route, {
+    success: true,
+    data: {
+      ai_execution_enabled: true,
+      openai_key_present: true,
+      provider_allowlist: ['openai'],
+      openai_allowed: true,
+      model: 'gpt-5.5',
+      base_url_configured: true,
+      wire_api: 'responses',
+    },
+    message: 'ok',
+  }, 200, runtimeCounter))
+
+  await page.unroute('**/api/projects').catch(() => {})
+  await page.route('**/api/projects', async route => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback()
+      return
+    }
+    projectCounter.count += 1
+    const body = route.request().postDataJSON()
+    createdProjectId = 61001
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        data: {
+          id: createdProjectId,
+          name: body.name,
+          display_name: body.display_name,
+          root_path: body.root_path,
+          repo_url: null,
+          default_branch: 'main',
+          current_branch: 'main',
+          package_manager: null,
+          dev_command: null,
+          build_command: null,
+          test_command: null,
+          ci_provider: null,
+          ci_url: null,
+          deploy_provider: null,
+          deploy_url: null,
+          is_active: true,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          task_count: 0,
+        },
+        message: 'ok',
+      }),
+    })
+  })
+
+  await page.unroute('**/api/tasks').catch(() => {})
+  await page.route('**/api/tasks', async route => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback()
+      return
+    }
+    taskCounter.count += 1
+    const body = route.request().postDataJSON()
+    createdTaskId = 62001
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        data: {
+          id: createdTaskId,
+          project_id: body.project_id,
+          title: body.title,
+          description: body.description,
+          status: 'draft',
+          priority: 'medium',
+          source: body.source || 'manual',
+          planner: body.planner || null,
+          executor: null,
+          reviewer: null,
+          human_approver: null,
+          ticket_content: null,
+          result_summary: null,
+          pr_url: null,
+          ci_url: null,
+          deploy_url: null,
+          target_branch: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          project_name: 'Demo AI Workbench',
+        },
+        message: 'ok',
+      }),
+    })
+  })
+
+  await page.goto(`${FE}/`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await checkT(page, '个人多 AI 编码工作台', 'D0-1 Dashboard title')
+  await checkT(page, '创建第一个项目', 'D0-2 create first project button')
+  await checkT(page, '创建演示项目并打开', 'D0-3 create demo button')
+  await checkT(page, 'AI Runtime Status / AI 运行状态', 'D0-4 runtime status section')
+  await checkT(page, 'configured', 'D0-5 key configured label')
+  await checkT(page, 'gpt-5.5', 'D0-6 model visible')
+  await checkT(page, 'Base URL', 'D0-7 base URL label')
+  const leakedKey = await page.locator('text=/sk-[A-Za-z0-9_-]+/').count()
+  if (leakedKey === 0) pass('D0-8 API key value not displayed')
+  else fail('D0-8 API key leaked in dashboard', leakedKey)
+
+  await page.getByRole('button', { name: '创建演示项目并打开' }).first().click()
+  await page.waitForURL(`**/tasks/${createdTaskId}`, { timeout: 5000 })
+  if (runtimeCounter.count > 0) pass('D0-9 runtime status endpoint called')
+  else fail('D0-9 runtime status endpoint not called', '')
+  if (projectCounter.count === 1) pass('D0-10 create project API called')
+  else fail('D0-10 create project API call count', projectCounter.count)
+  if (taskCounter.count === 1) pass('D0-11 create task API called')
+  else fail('D0-11 create task API call count', taskCounter.count)
+  if (page.url().includes(`/tasks/${createdTaskId}`)) pass('D0-12 navigated to TaskDetail')
+  else fail('D0-12 TaskDetail navigation failed', page.url())
+}
+
+async function testDashboardCreateFailure(page) {
+  log('\n========== D0b. Dashboard Create Failure ==========')
+  await page.unroute('**/api/ai-runtime/status').catch(() => {})
+  await page.route('**/api/ai-runtime/status', route => fulfillJson(route, {
+    success: true,
+    data: {
+      ai_execution_enabled: false,
+      openai_key_present: false,
+      provider_allowlist: ['sandbox'],
+      openai_allowed: false,
+      model: 'gpt-4o-mini',
+      base_url_configured: false,
+      wire_api: 'chat_completions',
+    },
+    message: 'ok',
+  }, 200))
+  await page.unroute('**/api/projects').catch(() => {})
+  await page.route('**/api/projects', async route => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback()
+      return
+    }
+    await fulfillJson(route, { detail: 'project create failed' }, 500)
+  })
+
+  await page.goto(`${FE}/`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await page.getByRole('button', { name: '创建演示项目并打开' }).first().click()
+  await page.waitForTimeout(500)
+  await checkT(page, 'project create failed', 'D0b-1 create failure displayed')
+  pass('D0b-2 Dashboard stays usable after create failure')
+}
+
+async function clearDashboardRoutes(page) {
+  await page.unroute('**/api/ai-runtime/status').catch(() => {})
+  await page.unroute('**/api/projects').catch(() => {})
+  await page.unroute('**/api/tasks').catch(() => {})
 }
 
 async function testGovernance(page) {
@@ -646,6 +814,11 @@ async function main() {
   }
   await page.waitForTimeout(1000)
 
+  await testDashboardFirstUsableWorkflow(page)
+  await testDashboardCreateFailure(page)
+  await clearDashboardRoutes(page)
+  await page.goto(`${FE}/tasks/${task.id}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
   await testGovernance(page)
   await testLabels(page)
   await testArtifacts(page)
