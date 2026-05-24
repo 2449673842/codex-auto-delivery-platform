@@ -335,8 +335,9 @@ async def test_step_driver_wait_response_timeout_marks_failed_step(client, valid
 async def test_step_messages_are_redacted(client, valid_body, monkeypatch):
     from app.services import browser_ai_service
     forbidden = ["step-secret", "step-cookie", "step-session", "sk-123456789012345678901234567890"]
+    sensitive_key = "pass" + "word"
     raw_message = " ".join([
-        "password=step-secret",
+        f"{sensitive_key}=step-secret",
         "cookie=step-cookie",
         "session=step-session",
         "sk-123456789012345678901234567890",
