@@ -10,6 +10,11 @@ from app.services import browser_ai_service
 router = APIRouter(prefix="/api/browser-ai", tags=["browser_ai"])
 
 
+@router.get("/provider-profiles")
+async def provider_profiles() -> ApiEnvelope:
+    return ApiEnvelope(data=[profile.model_dump() for profile in browser_ai_service.list_provider_profiles()])
+
+
 @router.post("/dry-run")
 async def dry_run(body: BrowserAiRequest, db: AsyncSession = Depends(get_session)) -> ApiEnvelope:
     result = await browser_ai_service.dry_run(db, body)

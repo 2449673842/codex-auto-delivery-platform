@@ -35,6 +35,22 @@ class BrowserAiRequest(BaseModel):
     timeout_seconds: int | None = None
 
 
+class BrowserAiProviderProfile(BaseModel):
+    provider: str
+    display_name: str
+    target_url: str = ""
+    target_url_hint: str = ""
+    input_selector: str = ""
+    send_selector: str = ""
+    response_selector: str = ""
+    scroll_container_selector: str = ""
+    copy_button_selector: str = ""
+    selectors_configured: bool = False
+    login_required_hint: bool = False
+    editable: bool = True
+    best_effort_note: str = ""
+
+
 class BrowserAiResponse(BaseModel):
     status: str
     provider: str = "custom"

@@ -8,7 +8,7 @@ import type {
   SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewRequest, AnswerSynthesisPreviewResponse,
   AiHandoffPreviewRequest, AiHandoffPreviewResponse,
   AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse,
-  BrowserAiRequest, BrowserAiResponse,
+  BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -163,6 +163,11 @@ export async function executeAiDispatch(body: AiDispatchRequest): Promise<AiDisp
 }
 
 // ── Browser AI / Local Web AI Provider ──
+export async function fetchBrowserAiProviderProfiles(): Promise<BrowserAiProviderProfile[]> {
+  const { data } = await client.get('/browser-ai/provider-profiles')
+  return data.data || []
+}
+
 export async function dryRunBrowserAi(body: BrowserAiRequest): Promise<BrowserAiResponse> {
   const { data } = await client.post('/browser-ai/dry-run', body)
   return data.data

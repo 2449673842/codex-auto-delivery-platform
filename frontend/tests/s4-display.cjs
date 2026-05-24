@@ -147,6 +147,12 @@ async function checkBodyExcludes(page, text, label) {
   else pass(`${label}: "${text}" absent`)
 }
 
+async function checkInputValue(page, selector, expected, label) {
+  const values = await page.locator(selector).evaluateAll(nodes => nodes.map(node => node.value || ''))
+  if (values.includes(expected)) pass(`${label}: "${expected}"`)
+  else fail(`${label}: "${expected}" not found`, values.join(' | '))
+}
+
 async function testDashboardFirstUsableWorkflow(page) {
   log('\n========== D0. Dashboard First Usable Workflow ==========')
   const projectCounter = { count: 0 }
@@ -471,6 +477,7 @@ async function testBrowserAiRun(page, taskId) {
   const runsCounter = { count: 0 }
   const artifactsCounter = { count: 0 }
   const synthesisCounter = { count: 0 }
+  await setBrowserAiProfilesRoute(page)
   await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
   await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
   await setAgentRunsRoute(page, [{
@@ -544,6 +551,31 @@ async function testBrowserAiRun(page, taskId) {
   await checkT(page, 'No password stored', 'BA4 no password label')
   await checkT(page, 'No cookies stored in DB', 'BA5 no cookies label')
   await checkT(page, 'No hidden API', 'BA6 no hidden API label')
+  await checkT(page, 'Built-in selectors are best-effort and may break when the website changes. Switch to custom if needed.', 'BA6a best-effort selector note shown')
+  const providerSelect = page.locator('.browser-ai-run select').first()
+  for (const label of ['Custom', 'ChatGPT Web', 'Claude Web', 'Gemini Web', 'DeepSeek Web', 'Kimi Web']) {
+    const count = await providerSelect.locator('option', { hasText: label }).count()
+    if (count > 0) pass(`BA6b provider option ${label} shown`)
+    else fail(`BA6b provider option ${label} missing`, '')
+  }
+  await providerSelect.selectOption('chatgpt_web')
+  await checkInputValue(page, '.browser-ai-run input', 'https://chatgpt.com/', 'BA6c ChatGPT target_url autofilled')
+  await checkInputValue(page, '.browser-ai-run input', "textarea[data-testid='prompt-textarea'], div[contenteditable='true']", 'BA6d ChatGPT input selector autofilled')
+  await providerSelect.selectOption('claude_web')
+  await checkInputValue(page, '.browser-ai-run input', 'https://claude.ai/new', 'BA6e Claude target_url autofilled')
+  await providerSelect.selectOption('gemini_web')
+  await checkInputValue(page, '.browser-ai-run input', 'https://gemini.google.com/app', 'BA6f Gemini target_url autofilled')
+  await providerSelect.selectOption('deepseek_web')
+  await checkInputValue(page, '.browser-ai-run input', 'https://chat.deepseek.com/', 'BA6g DeepSeek target_url autofilled')
+  await providerSelect.selectOption('kimi_web')
+  await checkInputValue(page, '.browser-ai-run input', 'https://www.kimi.com/chat/', 'BA6h Kimi target_url autofilled')
+  await page.locator('.browser-ai-run input').nth(3).fill('textarea[name="manual"]')
+  await checkInputValue(page, '.browser-ai-run input', 'textarea[name="manual"]', 'BA6i advanced selector remains editable')
+  await providerSelect.selectOption('custom')
+  await page.locator('.browser-ai-run input').nth(1).fill('http://127.0.0.1:9999/mock-browser-ai')
+  await page.locator('.browser-ai-run input').nth(2).fill("textarea[name='prompt']")
+  await page.locator('.browser-ai-run input').nth(3).fill('button[data-send]')
+  await page.locator('.browser-ai-run input').nth(4).fill('[data-answer]')
   await page.locator('.browser-ai-run').getByRole('button', { name: 'Dry-run' }).click()
   await page.waitForTimeout(300)
   if (dryCounter.count === 1) pass('BA7 dry-run endpoint called')
@@ -695,6 +727,15 @@ async function setBrowserAiRoute(page, action, payload, status = 200, counter = 
   await page.route(`**/api/browser-ai/${action}`, route => fulfillJson(route, payload, status, counter))
 }
 
+async function setBrowserAiProfilesRoute(page) {
+  await page.unroute('**/api/browser-ai/provider-profiles').catch(() => {})
+  await page.route('**/api/browser-ai/provider-profiles', route => fulfillJson(route, {
+    success: true,
+    data: browserAiProfilesPayload(),
+    message: 'ok',
+  }, 200))
+}
+
 async function setAgentRunsRoute(page, runs, status = 200, counter = null) {
   await page.unroute('**/api/tasks/*/agent-runs').catch(() => {})
   await page.route('**/api/tasks/*/agent-runs', route => fulfillJson(route, { success: true, data: runs, message: 'ok' }, status, counter))
@@ -738,6 +779,35 @@ function synthesisPayload(taskId, batchId, overrides = {}) {
     safety_notes: ['Deterministic rule-based preview; no AI provider called.', 'Stateless preview; no database write.'],
     ...overrides,
   }, message: 'ok' }
+}
+
+function browserAiProfilesPayload() {
+  return [
+    browserAiProfile('custom', 'Custom', '', '', '', '', false),
+    browserAiProfile('chatgpt_web', 'ChatGPT Web', 'https://chatgpt.com/', "textarea[data-testid='prompt-textarea'], div[contenteditable='true']", "button[data-testid='send-button']", "[data-message-author-role='assistant']"),
+    browserAiProfile('claude_web', 'Claude Web', 'https://claude.ai/new', "div[contenteditable='true'], textarea", "button[aria-label*='Send']", "[data-testid='message-content'], .font-claude-message"),
+    browserAiProfile('gemini_web', 'Gemini Web', 'https://gemini.google.com/app', "rich-textarea div[contenteditable='true'], textarea", "button[aria-label*='Send']", "message-content, .model-response-text"),
+    browserAiProfile('deepseek_web', 'DeepSeek Web', 'https://chat.deepseek.com/', "textarea, div[contenteditable='true']", "button[aria-label*='Send'], button[type='submit']", ".ds-markdown, [class*='markdown']"),
+    browserAiProfile('kimi_web', 'Kimi Web', 'https://www.kimi.com/chat/', "textarea, div[contenteditable='true']", "button[aria-label*='Send'], button[type='submit']", ".markdown, [class*='markdown']"),
+  ]
+}
+
+function browserAiProfile(provider, displayName, targetUrl, inputSelector, sendSelector, responseSelector, loginRequired = true) {
+  return {
+    provider,
+    display_name: displayName,
+    target_url: targetUrl,
+    target_url_hint: targetUrl,
+    input_selector: inputSelector,
+    send_selector: sendSelector,
+    response_selector: responseSelector,
+    scroll_container_selector: provider === 'custom' ? '' : 'main',
+    copy_button_selector: provider === 'custom' ? '' : "button[aria-label*='Copy']",
+    selectors_configured: Boolean(inputSelector && sendSelector && responseSelector),
+    login_required_hint: loginRequired,
+    editable: true,
+    best_effort_note: provider === 'custom' ? '' : 'Built-in selectors are best-effort and may break when the website changes. Switch to custom if needed.',
+  }
 }
 
 function handoffPayload(taskId, projectId) {
