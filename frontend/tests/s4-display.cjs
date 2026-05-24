@@ -546,7 +546,7 @@ async function testBrowserAiFailures(page, taskId) {
     browser_opened: true,
     persisted: false,
     steps: browserAiSteps({ wait_response: 'failed', capture_answer: 'skipped' }, {
-      wait_response: 'Timed out waiting for an answer; manual login may be required or selector may be wrong.',
+      wait_response: 'Timed out waiting for a stable answer; the page may still be generating, manual login may be required, or selector may be wrong.',
     }),
   }))
   await page.locator('.browser-ai-run').getByRole('button', { name: 'Execute' }).click()
@@ -554,6 +554,7 @@ async function testBrowserAiFailures(page, taskId) {
   await checkT(page, 'timeout waiting response', 'BA2-3 timeout error shown')
   await checkT(page, 'wait_response', 'BA2-4 wait response failed step shown')
   await checkBodyIncludes(page, 'manual login may be required', 'BA2-5 login hint shown')
+  await checkBodyIncludes(page, 'stable answer', 'BA2-6 stable answer timeout hint shown')
 }
 
 async function testNoCodeContext(page, taskId) {

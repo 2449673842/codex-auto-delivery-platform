@@ -169,7 +169,7 @@
           <span class="label-badge label-merged">No auto merge</span>
         </div>
         <p class="browser-ai-help">
-          If the input box or send button is not found, check selectors. If waiting for an answer times out, manual login may be required.
+          If the input box or send button is not found, check selectors. If stable response capture times out, the page may still be generating or manual login may be required.
         </p>
         <div class="browser-ai-form">
           <label>
@@ -1084,7 +1084,7 @@ function stepHint(name: string, status: string) {
       navigate: 'Target page could not be loaded.',
       fill_prompt: 'Input box was not found or could not be filled.',
       click_send: 'Send button was not found or could not be clicked.',
-      wait_response: 'Timed out waiting for an answer; manual login may be required or selector may be wrong.',
+      wait_response: 'Timed out waiting for a stable answer; the page may still be generating, manual login may be required, or selector may be wrong.',
       capture_answer: 'Visible answer could not be captured from response_selector.',
       persist_artifact: 'Answer could not be saved.',
     }

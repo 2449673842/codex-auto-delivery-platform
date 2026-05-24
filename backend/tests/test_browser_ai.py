@@ -52,6 +52,78 @@ class ClipboardDriver:
         return _prefer_related_clipboard_answer(self.answer, self.copied)
 
 
+class FakeResponseLocator:
+    @property
+    def first(self):
+        return self
+
+    def __init__(self, page):
+        self.page = page
+
+    async def inner_text(self, *args, **kwargs):
+        await asyncio.sleep(0)
+        return self.page.next_text()
+
+
+class FakeStablePage:
+    def __init__(self, texts: list[str], interval_ms: int = 100):
+        self.texts = texts
+        self.interval_ms = interval_ms
+        self.index = 0
+        self.now_ms = 0
+
+    def locator(self, selector: str):
+        return FakeResponseLocator(self)
+
+    async def wait_for_selector(self, selector: str, *args, **kwargs):
+        await asyncio.sleep(0)
+
+    async def wait_for_timeout(self, interval_ms: int):
+        self.now_ms += self.interval_ms
+        await asyncio.sleep(0)
+
+    async def evaluate(self, expression: str):
+        await asyncio.sleep(0)
+        if expression == "Date.now()":
+            return self.now_ms
+        return ""
+
+    def next_text(self) -> str:
+        if self.index >= len(self.texts):
+            return self.texts[-1] if self.texts else ""
+        text = self.texts[self.index]
+        self.index += 1
+        return text
+
+
+class StableCaptureDriver:
+    def __init__(self, texts: list[str], timeout_ms: int = 5000):
+        self.texts = texts
+        self.timeout_ms = timeout_ms
+
+    async def run(self, request, prompt: str, timeout_seconds: int) -> str:
+        from app.services import browser_ai_service
+        page = FakeStablePage(self.texts)
+        await browser_ai_service._wait_for_stable_answer(page, request, "", self.timeout_ms)
+        return await browser_ai_service._read_answer_text(page, request, self.timeout_ms)
+
+
+class StableTimeoutDriver:
+    def __init__(self, texts: list[str], timeout_ms: int = 250):
+        self.texts = texts
+        self.timeout_ms = timeout_ms
+
+    async def run(self, request, prompt: str, timeout_seconds: int) -> str:
+        from app.services import browser_ai_service
+        from app.services.browser_ai_service import BrowserAiStepError
+        page = FakeStablePage(self.texts)
+        try:
+            await browser_ai_service._wait_for_stable_answer(page, request, "", self.timeout_ms)
+        except Exception as exc:
+            raise BrowserAiStepError("wait_response", str(exc)) from exc
+        return await browser_ai_service._read_answer_text(page, request, self.timeout_ms)
+
+
 @pytest.fixture(autouse=True)
 async def _reset_db():
     engine = get_engine()
@@ -318,7 +390,7 @@ async def test_step_driver_wait_response_timeout_marks_failed_step(client, valid
     from app.services import browser_ai_service
     browser_ai_service.set_driver_override(StepFailingDriver(
         "wait_response",
-        "timeout waiting for response; login may be required or selector may be wrong",
+        "timeout waiting for stable response; page may still be generating, login may be required, or selector may be wrong",
     ))
     _install_settings(monkeypatch, browser_ai_enabled=True, _browser_ai_provider_allowlist_raw="custom")
 
@@ -329,6 +401,93 @@ async def test_step_driver_wait_response_timeout_marks_failed_step(client, valid
     _assert_step(data, "wait_response", "failed")
     _assert_step(data, "capture_answer", "skipped")
     assert "login may be required" in _step(data, "wait_response")["message"]
+
+
+@pytest.mark.asyncio
+async def test_stable_response_waits_for_final_answer_before_saving(client, valid_body, monkeypatch):
+    from app.services import browser_ai_service
+    partial_answer = "half answer"
+    final_answer = "full answer after stable browser generation"
+    browser_ai_service.set_driver_override(StableCaptureDriver([
+        partial_answer,
+        final_answer,
+        final_answer,
+        final_answer,
+        final_answer,
+        final_answer,
+        final_answer,
+    ]))
+    _install_settings(
+        monkeypatch,
+        browser_ai_enabled=True,
+        _browser_ai_provider_allowlist_raw="custom",
+        browser_ai_stable_polls=3,
+        browser_ai_stable_interval_ms=100,
+    )
+
+    resp = await client.post(f"{BASE}/execute", json=valid_body)
+
+    data = resp.json()["data"]
+    assert data["status"] == "succeeded"
+    assert data["answer_preview"] == final_answer
+    _assert_step(data, "wait_response", "passed")
+    _assert_step(data, "capture_answer", "passed")
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        artifact = (await session.execute(select(TaskArtifact))).scalars().one()
+    assert artifact.content == final_answer
+    assert artifact.content != partial_answer
+
+
+@pytest.mark.asyncio
+async def test_changing_response_until_timeout_marks_wait_response_failed(client, valid_body, monkeypatch):
+    from app.services import browser_ai_service
+    browser_ai_service.set_driver_override(StableTimeoutDriver([
+        "token 1",
+        "token 2",
+        "token 3",
+        "token 4",
+        "token 5",
+        "token 6",
+    ]))
+    _install_settings(
+        monkeypatch,
+        browser_ai_enabled=True,
+        _browser_ai_provider_allowlist_raw="custom",
+        browser_ai_stable_polls=3,
+        browser_ai_stable_interval_ms=100,
+    )
+
+    resp = await client.post(f"{BASE}/execute", json=valid_body)
+
+    data = resp.json()["data"]
+    assert data["status"] == "failed"
+    assert data["persisted"] is False
+    assert "stable response" in data["error_message"]
+    _assert_step(data, "wait_response", "failed")
+    _assert_step(data, "capture_answer", "skipped")
+    runs, artifacts, _events = await _counts()
+    assert runs == 1
+    assert artifacts == 0
+
+
+@pytest.mark.asyncio
+async def test_empty_response_marks_capture_answer_failed(client, valid_body, monkeypatch):
+    from app.services import browser_ai_service
+    browser_ai_service.set_driver_override(FakeDriver("   "))
+    _install_settings(monkeypatch, browser_ai_enabled=True, _browser_ai_provider_allowlist_raw="custom")
+
+    resp = await client.post(f"{BASE}/execute", json=valid_body)
+
+    data = resp.json()["data"]
+    assert data["status"] == "failed"
+    assert data["persisted"] is False
+    assert "empty response" in data["error_message"]
+    _assert_step(data, "wait_response", "passed")
+    _assert_step(data, "capture_answer", "failed")
+    runs, artifacts, _events = await _counts()
+    assert runs == 1
+    assert artifacts == 0
 
 
 @pytest.mark.asyncio
