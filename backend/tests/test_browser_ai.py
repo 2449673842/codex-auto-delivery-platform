@@ -60,7 +60,7 @@ class FakeResponseLocator:
     def __init__(self, page):
         self.page = page
 
-    async def inner_text(self, timeout: int):
+    async def inner_text(self, *args, **kwargs):
         await asyncio.sleep(0)
         return self.page.next_text()
 
@@ -75,7 +75,7 @@ class FakeStablePage:
     def locator(self, selector: str):
         return FakeResponseLocator(self)
 
-    async def wait_for_selector(self, selector: str, timeout: int):
+    async def wait_for_selector(self, selector: str, *args, **kwargs):
         await asyncio.sleep(0)
 
     async def wait_for_timeout(self, interval_ms: int):
