@@ -64,6 +64,13 @@ async def _seed_agent(session: AsyncSession) -> AgentProfile:
     return agent
 
 
+async def _seed_browser_agent(session: AsyncSession) -> AgentProfile:
+    agent = AgentProfile(name="browser-ai-custom", agent_type="reviewer", provider="browser_ai", model_name="custom")
+    session.add(agent)
+    await session.flush()
+    return agent
+
+
 async def _seed_run(
     session: AsyncSession,
     task: dict,
@@ -150,6 +157,29 @@ async def _seed_artifact(
     session.add(artifact)
     await session.flush()
     return artifact
+
+
+async def _seed_browser_ai_answer(session: AsyncSession, task: dict, *, content: str = "Browser AI visible answer") -> dict:
+    agent = await _seed_browser_agent(session)
+    run = await _seed_run(
+        session,
+        task,
+        agent,
+        summary=content,
+        raw={"provider": "custom", "safety": "local_browser_only_no_auth_persistence"},
+    )
+    artifact = TaskArtifact(
+        task_id=task["id"],
+        artifact_type="browser_ai_answer",
+        content=content,
+        filename=f"browser_ai_run_{run.id}_answer.md",
+        size_bytes=len(content.encode("utf-8")),
+        sha256="1" * 64,
+        metadata_json=json.dumps({"provider": "custom", "source": "visible_response_selector"}),
+    )
+    session.add(artifact)
+    await session.flush()
+    return {"agent": agent, "run": run, "artifact": artifact}
 
 
 async def _with_session(builder: Callable[[AsyncSession], Awaitable[dict]]) -> dict:
@@ -258,6 +288,44 @@ class TestAnswerSynthesisPreview:
         before = await _counts()
         await _preview(client, task["id"], seeded["batch"].id)
         assert await _counts() == before
+
+    async def test_browser_ai_artifact_without_batch_is_included_in_synthesis(self, client, task):
+        seeded = await _with_session(lambda session: _seed_browser_ai_answer(
+            session,
+            task,
+            content="Browser AI recommends waiting for stable response before saving.",
+        ))
+        before = await _counts()
+
+        data = await _preview(client, task["id"], include_artifacts=True, max_artifact_chars=120)
+
+        assert data["dispatch_batch_id"] is None
+        assert data["job_count"] == 0
+        assert data["synthesis_status"] == "ready"
+        assert data["source_agent_run_ids"] == [seeded["run"].id]
+        assert data["source_artifact_ids"] == [seeded["artifact"].id]
+        assert data["artifact_summaries"][0]["artifact_type"] == "browser_ai_answer"
+        assert "stable response" in data["artifact_summaries"][0]["summary"]
+        assert any(f"browser_ai_run_{seeded['run'].id}" in item for item in data["common_findings"])
+        assert await _counts() == before
+
+    async def test_browser_ai_artifact_is_merged_with_dispatch_batch_synthesis(self, client, task):
+        async def build(session, batch, agent):
+            run = await _seed_run(session, task, agent, summary="Dispatch review summary")
+            artifact = await _seed_artifact(session, task, content="Dispatch artifact content")
+            job = await _seed_job(session, task, batch, run=run, artifacts=[artifact])
+            browser = await _seed_browser_ai_answer(session, task, content="Browser AI answer content")
+            return {"job": job, "run": run, "artifact": artifact, "browser": browser}
+
+        seeded = await _seed_basic_batch(task, build)
+        data = await _preview(client, task["id"], seeded["batch"].id, include_artifacts=True)
+
+        assert data["source_job_ids"] == [seeded["job"].id]
+        assert sorted(data["source_agent_run_ids"]) == sorted([seeded["run"].id, seeded["browser"]["run"].id])
+        assert sorted(data["source_artifact_ids"]) == sorted([seeded["artifact"].id, seeded["browser"]["artifact"].id])
+        summaries = {item["artifact_type"]: item["summary"] for item in data["artifact_summaries"]}
+        assert "Dispatch artifact content" in summaries["agent_output"]
+        assert "Browser AI answer content" in summaries["browser_ai_answer"]
 
     async def test_no_root_env_secret_subprocess_provider_or_external_calls(self, client, task, monkeypatch):
         seeded = await _with_session(lambda session: _seed_blocked_batch(session, task, f"blocked {FAKE_KEY}"))

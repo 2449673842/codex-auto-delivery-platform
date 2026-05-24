@@ -16,6 +16,7 @@
       <div v-for="a in filteredArtifacts" :key="a.id" class="artifact-item">
         <div class="artifact-meta">
           <span class="artifact-type">{{ a.artifact_type }}</span>
+          <span v-if="a.filename" class="artifact-file">{{ a.filename }}</span>
           <span class="artifact-size">{{ a.size_bytes }} bytes</span>
         </div>
         <DiffViewer :content="a.content" :is-truncated="a.is_truncated" />
@@ -53,13 +54,14 @@ import DiffViewer from './DiffViewer.vue'
 const props = defineProps<{ taskId: number; taskStatus?: string }>()
 const taskStore = useTaskStore()
 const artifacts = ref<any[]>([])
-const activeTab = ref('diff')
+const activeTab = ref('browser_ai_answer')
 const showUploadForm = ref(false)
 const uploadForm = ref({ artifact_type: 'diff', content: '' })
 
 const isArchived = computed(() => props.taskStatus === 'archived')
 
 const tabs = computed(() => [
+  { key: 'browser_ai_answer', label: 'Browser AI', count: artifacts.value.filter((a) => a.artifact_type === 'browser_ai_answer').length },
   { key: 'diff', label: 'Diff', count: artifacts.value.filter((a) => a.artifact_type === 'diff').length },
   { key: 'execution_log', label: '执行日志', count: artifacts.value.filter((a) => a.artifact_type === 'execution_log').length },
   { key: 'review_note', label: '审查备注', count: artifacts.value.filter((a) => a.artifact_type === 'review_note').length },

@@ -261,6 +261,9 @@
           </div>
           <p v-if="browserAiExecuteResult.answer_preview" class="run-output">{{ browserAiExecuteResult.answer_preview }}</p>
           <p v-if="browserAiExecuteResult.error_message" class="run-error">{{ browserAiExecuteResult.error_message }}</p>
+          <div v-if="browserAiRefreshMessages.length" class="browser-ai-refresh-status">
+            <span v-for="message in browserAiRefreshMessages" :key="message" class="label-badge label-ai">{{ message }}</span>
+          </div>
           <div class="browser-ai-steps">
             <strong>run steps</strong>
             <ul>
@@ -461,7 +464,7 @@
       <section class="card answer-synthesis-workspace">
         <div class="section-header">
           <h2>Answer Synthesis / 多 AI 综合结论</h2>
-          <button class="btn btn-sm" @click="refreshAnswerSynthesis" :disabled="answerSynthesisLoading || dispatchBatches.length === 0">
+          <button class="btn btn-sm" @click="refreshAnswerSynthesis" :disabled="answerSynthesisLoading || !task">
             重新生成综合结论
           </button>
         </div>
@@ -473,7 +476,6 @@
           <span class="label-badge label-exec">No PR created</span>
         </div>
         <p v-if="answerSynthesisError" class="run-error">{{ answerSynthesisError }}</p>
-        <div v-else-if="dispatchBatches.length === 0" class="empty-state"><p>暂无可综合的多 AI 结果</p></div>
         <div v-else-if="answerSynthesisLoading && !answerSynthesis" class="empty-state"><p>综合结论生成中...</p></div>
         <div v-else-if="answerSynthesis" class="synthesis-panel">
           <div class="synthesis-metrics">
@@ -531,6 +533,7 @@
             </div>
           </div>
         </div>
+        <div v-else class="empty-state"><p>暂无可综合的多 AI 结果</p></div>
       </section>
 
       <!-- AI Handoff Packet -->
@@ -832,7 +835,7 @@
       <!-- AI Artifacts -->
       <section class="card">
         <h2>AI 产物</h2>
-        <ArtifactTab :task-id="task.id" :task-status="task.status" />
+        <ArtifactTab :key="artifactRefreshKey" :task-id="task.id" :task-status="task.status" />
         <div class="artifact-note">
           <span class="label-badge label-ai">AI-generated</span>
           <span class="label-badge label-redacted">Secret redacted</span>
@@ -925,7 +928,9 @@ const browserAiLoading = ref(false)
 const browserAiError = ref('')
 const browserAiDryRunResult = ref<BrowserAiResponse | null>(null)
 const browserAiExecuteResult = ref<BrowserAiResponse | null>(null)
+const browserAiRefreshMessages = ref<string[]>([])
 const browserAiFailedStep = computed(() => browserAiExecuteResult.value?.steps.find(step => step.status === 'failed') || null)
+const artifactRefreshKey = ref(0)
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -1177,10 +1182,11 @@ async function executeBrowserAiRun() {
   if (!body) return
   browserAiLoading.value = true
   browserAiError.value = ''
+  browserAiRefreshMessages.value = []
   try {
     browserAiExecuteResult.value = await executeBrowserAi(body)
-    if (browserAiExecuteResult.value.persisted) {
-      await refreshAfterRealAiRun()
+    if (browserAiExecuteResult.value.status === 'succeeded' && browserAiExecuteResult.value.persisted) {
+      await refreshAfterBrowserAiRun()
     }
   } catch (e: any) {
     browserAiExecuteResult.value = null
@@ -1201,17 +1207,33 @@ async function refreshAfterRealAiRun() {
   await loadSandboxGate()
 }
 
+async function refreshAfterBrowserAiRun() {
+  if (!task.value) return
+  const id = task.value.id
+  const messages = ['Browser AI answer saved']
+  agentRuns.value = await fetchAgentRuns(id)
+  messages.push('AgentRuns refreshed')
+  artifactRefreshKey.value += 1
+  messages.push('Artifacts refreshed')
+  agentReviews.value = await fetchAgentReviews(id)
+  await loadDispatchBatches(id)
+  await loadAnswerSynthesis(id, latestDispatchBatchId())
+  if (answerSynthesis.value) {
+    messages.push('Answer Synthesis refreshed')
+  } else {
+    messages.push(answerSynthesisError.value || 'Answer Synthesis not refreshed: no Browser AI artifact or dispatch source available')
+  }
+  await loadAiHandoff()
+  sandboxResults.value = await fetchSandboxResults(id)
+  await loadSandboxGate()
+  browserAiRefreshMessages.value = messages
+}
+
 async function loadDispatchBatches(id: number) {
   dispatchBatchError.value = ''
   try {
     dispatchBatches.value = await fetchDispatchBatches(id)
-    const latestBatch = dispatchBatches.value[dispatchBatches.value.length - 1]
-    if (latestBatch) {
-      await loadAnswerSynthesis(id, latestBatch.dispatch_batch_id)
-    } else {
-      answerSynthesis.value = null
-      answerSynthesisError.value = ''
-    }
+    await loadAnswerSynthesis(id, latestDispatchBatchId())
   } catch (e: any) {
     dispatchBatches.value = []
     answerSynthesis.value = null
@@ -1220,11 +1242,6 @@ async function loadDispatchBatches(id: number) {
 }
 
 async function loadAnswerSynthesis(taskId: number, dispatchBatchId?: number | null) {
-  if (!dispatchBatchId) {
-    answerSynthesis.value = null
-    answerSynthesisError.value = ''
-    return
-  }
   answerSynthesisLoading.value = true
   answerSynthesisError.value = ''
   try {
@@ -1236,16 +1253,21 @@ async function loadAnswerSynthesis(taskId: number, dispatchBatchId?: number | nu
     })
   } catch (e: any) {
     answerSynthesis.value = null
-    answerSynthesisError.value = e.message || '多 AI 综合结论加载失败'
+    const message = e.message || '多 AI 综合结论加载失败'
+    answerSynthesisError.value = message === 'dispatch_batch_not_found' ? '' : message
   } finally {
     answerSynthesisLoading.value = false
   }
 }
 
 async function refreshAnswerSynthesis() {
+  if (!task.value) return
+  await loadAnswerSynthesis(task.value.id, latestDispatchBatchId())
+}
+
+function latestDispatchBatchId() {
   const latestBatch = dispatchBatches.value[dispatchBatches.value.length - 1]
-  if (!task.value || !latestBatch) return
-  await loadAnswerSynthesis(task.value.id, latestBatch.dispatch_batch_id)
+  return latestBatch?.dispatch_batch_id || null
 }
 
 async function loadAiHandoff() {

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.agent_run import AgentRun
+from app.models.agent_profile import AgentProfile
 from app.models.dispatch_batch import DispatchBatch
 from app.models.dispatch_job import DispatchJob
 from app.models.task import Task
@@ -128,18 +129,29 @@ async def preview(
         raise HTTPException(status_code=404, detail="task_not_found")
 
     batch = await _select_batch(db, body.task_id, body.dispatch_batch_id)
-    if not batch:
+    if body.dispatch_batch_id is not None and not batch:
         raise HTTPException(status_code=404, detail="dispatch_batch_not_found")
 
-    jobs = sorted(batch.jobs, key=lambda item: item.sequence_no)
+    browser_run_ids, browser_artifact_ids = await _browser_ai_sources(db, body.task_id)
+    if not batch and not browser_artifact_ids:
+        raise HTTPException(status_code=404, detail="dispatch_batch_not_found")
+
+    jobs = sorted(batch.jobs, key=lambda item: item.sequence_no) if batch else []
     source_job_ids = [job.id for job in jobs]
-    source_agent_run_ids = sorted({job.agent_run_id for job in jobs if job.agent_run_id})
-    artifact_ids = sorted({artifact_id for job in jobs for artifact_id in _loads_list(job.artifact_ids_json)})
+    source_agent_run_ids = sorted({
+        *[job.agent_run_id for job in jobs if job.agent_run_id],
+        *browser_run_ids,
+    })
+    artifact_ids = sorted({
+        *[artifact_id for job in jobs for artifact_id in _loads_list(job.artifact_ids_json)],
+        *browser_artifact_ids,
+    })
 
     runs_by_id = await _runs_by_id(db, source_agent_run_ids)
     artifacts_by_id = await _artifacts_by_id(db, artifact_ids)
     counts = _job_counts(jobs)
     common_findings, risks, next_questions, modes, statuses = _summarize_jobs(jobs, runs_by_id)
+    _summarize_browser_runs(browser_run_ids, runs_by_id, common_findings, risks)
     artifact_summaries = _summarize_artifacts(body, artifact_ids, artifacts_by_id, risks)
     unique_risks = list(dict.fromkeys(_redact(risk) for risk in risks if risk))
     recommended_actions = _recommended_actions(
@@ -150,8 +162,8 @@ async def preview(
 
     return AnswerSynthesisPreviewResponse(
         task_id=body.task_id,
-        dispatch_batch_id=batch.id,
-        synthesis_status=_synthesis_status(jobs, counts, unique_risks),
+        dispatch_batch_id=batch.id if batch else None,
+        synthesis_status=_synthesis_status(jobs, counts, unique_risks, artifact_ids),
         job_count=len(jobs),
         succeeded_jobs=counts["succeeded"],
         failed_jobs=counts["failed"],
@@ -165,7 +177,7 @@ async def preview(
         source_job_ids=source_job_ids,
         source_agent_run_ids=source_agent_run_ids,
         source_artifact_ids=artifact_ids,
-        confidence=_confidence(jobs, counts, unique_risks),
+        confidence=_confidence(jobs, counts, unique_risks, artifact_ids),
         safety_notes=[
             "Deterministic rule-based preview; no AI provider called.",
             "Stateless preview; no AgentRun, TaskArtifact, or TaskEvent is created.",
@@ -186,6 +198,27 @@ async def _artifacts_by_id(db: AsyncSession, artifact_ids: list[int]) -> dict[in
         return {}
     result = await db.execute(select(TaskArtifact).where(TaskArtifact.id.in_(artifact_ids)))
     return {artifact.id: artifact for artifact in result.scalars().all()}
+
+
+async def _browser_ai_sources(db: AsyncSession, task_id: int) -> tuple[list[int], list[int]]:
+    run_result = await db.execute(
+        select(AgentRun.id)
+        .join(AgentProfile, AgentRun.agent_id == AgentProfile.id)
+        .where(
+            AgentRun.task_id == task_id,
+            AgentProfile.provider == "browser_ai",
+        )
+    )
+    artifact_result = await db.execute(
+        select(TaskArtifact.id).where(
+            TaskArtifact.task_id == task_id,
+            TaskArtifact.artifact_type == "browser_ai_answer",
+        )
+    )
+    return (
+        sorted(run_result.scalars().all()),
+        sorted(artifact_result.scalars().all()),
+    )
 
 
 def _job_counts(jobs: list[DispatchJob]) -> dict[str, int]:
@@ -213,6 +246,23 @@ def _summarize_jobs(
         _collect_job_risk(job, run, risks, questions)
         risks.extend(_risk_from_run(run))
     return findings, risks, questions, modes, statuses
+
+
+def _summarize_browser_runs(
+    run_ids: list[int],
+    runs_by_id: dict[int, AgentRun],
+    findings: list[str],
+    risks: list[str],
+) -> None:
+    for run_id in run_ids:
+        run = runs_by_id.get(run_id)
+        if not run:
+            continue
+        if run.status == "succeeded" and run.output_summary:
+            findings.append(f"browser_ai_run_{run.id}: {_short(run.output_summary)}")
+        if run.status == "failed":
+            risks.append(f"browser_ai_run_{run.id}_failed: {_short(run.error_message or 'failed')}")
+        risks.extend(_risk_from_run(run))
 
 
 def _collect_success_finding(job: DispatchJob, run: AgentRun | None, findings: list[str]) -> None:
@@ -280,8 +330,13 @@ def _disagreements(statuses: set[str], modes: set[str], counts: dict[str, int]) 
     return disagreements
 
 
-def _synthesis_status(jobs: list[DispatchJob], counts: dict[str, int], risks: list[str]) -> str:
-    if not jobs:
+def _synthesis_status(
+    jobs: list[DispatchJob],
+    counts: dict[str, int],
+    risks: list[str],
+    artifact_ids: list[int],
+) -> str:
+    if not jobs and not artifact_ids:
         return "empty"
     if counts["failed"] or counts["blocked"] or risks:
         return "attention_required"
@@ -313,7 +368,16 @@ def _recommended_actions(
     return actions
 
 
-def _confidence(jobs: list[DispatchJob], counts: dict[str, int], risks: list[str]) -> float:
+def _confidence(
+    jobs: list[DispatchJob],
+    counts: dict[str, int],
+    risks: list[str],
+    artifact_ids: list[int],
+) -> float:
+    if not jobs and artifact_ids:
+        score = 0.65
+        score -= min(0.3, 0.05 * len(risks))
+        return round(max(0.0, min(1.0, score)), 2)
     if not jobs:
         return 0.0
     score = counts["succeeded"] / len(jobs)

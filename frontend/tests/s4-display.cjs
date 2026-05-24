@@ -141,6 +141,12 @@ async function checkBodyIncludes(page, text, label) {
   else fail(`${label}: "${text}" not found`, '')
 }
 
+async function checkBodyExcludes(page, text, label) {
+  const body = await page.locator('body').innerText()
+  if (!body.includes(text)) pass(`${label}: "${text}" absent`)
+  else fail(`${label}: "${text}" should be absent`, '')
+}
+
 async function testDashboardFirstUsableWorkflow(page) {
   log('\n========== D0. Dashboard First Usable Workflow ==========')
   const projectCounter = { count: 0 }
@@ -462,8 +468,59 @@ async function testBrowserAiRun(page, taskId) {
   log('\n========== BA. Browser AI Run ==========')
   const dryCounter = { count: 0 }
   const executeCounter = { count: 0 }
+  const runsCounter = { count: 0 }
+  const artifactsCounter = { count: 0 }
+  const synthesisCounter = { count: 0 }
   await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
   await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
+  await setAgentRunsRoute(page, [{
+    id: 707,
+    task_id: taskId,
+    project_id: 1,
+    agent_id: 77,
+    run_type: 'review',
+    status: 'succeeded',
+    input_prompt: 'Browser AI prompt redacted; prompt_hash=browser_prompt_hash; prompt_source=task_goal',
+    output_summary: 'Mock browser visible answer',
+    output_diff: null,
+    output_log: 'Browser AI visible response captured from response_selector.',
+    raw_result_json: '{}',
+    branch: null,
+    commit_sha: null,
+    pr_url: null,
+    risk_level: 'low',
+    attempt_no: 1,
+    duration_ms: null,
+    error_message: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }], 200, runsCounter)
+  await setArtifactsRoute(page, [{
+    id: 808,
+    task_id: taskId,
+    artifact_type: 'browser_ai_answer',
+    storage_type: 'sqlite',
+    content: 'Mock browser visible answer',
+    file_path: null,
+    filename: 'browser_ai_run_707_answer.md',
+    size_bytes: 27,
+    sha256: '1'.repeat(64),
+    is_truncated: false,
+    metadata_json: '{}',
+    created_at: new Date().toISOString(),
+  }], 200, artifactsCounter)
+  await setAnswerSynthesisRoute(page, synthesisPayload(taskId, null, {
+    job_count: 0,
+    succeeded_jobs: 0,
+    blocked_jobs: 0,
+    common_findings: ['browser_ai_run_707: Mock browser visible answer'],
+    risks: [],
+    recommended_actions: ['Review related artifacts and verify Patch Sandbox / Sandbox Gate status.'],
+    artifact_summaries: [{ artifact_id: 808, filename: 'browser_ai_run_707_answer.md', artifact_type: 'browser_ai_answer', summary: 'Mock browser visible answer', is_truncated: false }],
+    source_job_ids: [],
+    source_agent_run_ids: [707],
+    source_artifact_ids: [808],
+  }), 200, synthesisCounter)
   await setBrowserAiRoute(page, 'dry-run', browserAiPayload({
     status: 'blocked',
     answer_preview: '',
@@ -510,6 +567,22 @@ async function testBrowserAiRun(page, taskId) {
   await checkT(page, 'open_browser', 'BA18 open browser step shown')
   await checkT(page, 'capture_answer', 'BA19 capture answer step shown')
   await checkT(page, 'persist_artifact', 'BA20 persist artifact step shown')
+  await checkT(page, 'Browser AI answer saved', 'BA21 saved refresh message shown')
+  await checkT(page, 'AgentRuns refreshed', 'BA22 agent runs refreshed message shown')
+  await checkT(page, 'Artifacts refreshed', 'BA23 artifacts refreshed message shown')
+  await checkT(page, 'Answer Synthesis refreshed', 'BA24 synthesis refreshed message shown')
+  await checkT(page, 'browser_ai_answer', 'BA25 browser ai artifact type shown')
+  await checkT(page, 'browser_ai_run_707_answer.md', 'BA26 browser ai artifact filename shown')
+  await checkT(page, 'browser_ai_run_707: Mock browser visible answer', 'BA27 browser ai synthesis finding shown')
+  await checkT(page, 'source_agent_run_ids: 707', 'BA28 browser ai source run id shown')
+  await checkT(page, 'source_artifact_ids: 808', 'BA29 browser ai source artifact id shown')
+  if (runsCounter.count > 0) pass('BA30 agent runs refresh endpoint called')
+  else fail('BA30 agent runs refresh endpoint not called', '')
+  if (artifactsCounter.count > 0) pass('BA31 artifacts refresh endpoint called')
+  else fail('BA31 artifacts refresh endpoint not called', '')
+  if (synthesisCounter.count > 0) pass('BA32 synthesis refresh endpoint called')
+  else fail('BA32 synthesis refresh endpoint not called', '')
+  await clearBrowserAiRefreshRoutes(page)
 }
 
 async function testBrowserAiFailures(page, taskId) {
@@ -555,6 +628,7 @@ async function testBrowserAiFailures(page, taskId) {
   await checkT(page, 'wait_response', 'BA2-4 wait response failed step shown')
   await checkBodyIncludes(page, 'manual login may be required', 'BA2-5 login hint shown')
   await checkBodyIncludes(page, 'stable answer', 'BA2-6 stable answer timeout hint shown')
+  await checkBodyExcludes(page, 'Browser AI answer saved', 'BA2-7 failed execute does not show success refresh message')
 }
 
 async function testNoCodeContext(page, taskId) {
@@ -621,12 +695,28 @@ async function setBrowserAiRoute(page, action, payload, status = 200, counter = 
   await page.route(`**/api/browser-ai/${action}`, route => fulfillJson(route, payload, status, counter))
 }
 
+async function setAgentRunsRoute(page, runs, status = 200, counter = null) {
+  await page.unroute('**/api/tasks/*/agent-runs').catch(() => {})
+  await page.route('**/api/tasks/*/agent-runs', route => fulfillJson(route, { success: true, data: runs, message: 'ok' }, status, counter))
+}
+
+async function setArtifactsRoute(page, artifacts, status = 200, counter = null) {
+  await page.unroute('**/api/tasks/*/artifacts').catch(() => {})
+  await page.route('**/api/tasks/*/artifacts', route => fulfillJson(route, { success: true, data: artifacts, message: 'ok' }, status, counter))
+}
+
+async function clearBrowserAiRefreshRoutes(page) {
+  await page.unroute('**/api/tasks/*/agent-runs').catch(() => {})
+  await page.unroute('**/api/tasks/*/artifacts').catch(() => {})
+  await page.unroute('**/api/answer-synthesis/preview').catch(() => {})
+}
+
 async function fulfillJson(route, payload, status, counter) {
   if (counter) counter.count += 1
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(payload) })
 }
 
-function synthesisPayload(taskId, batchId) {
+function synthesisPayload(taskId, batchId, overrides = {}) {
   return { success: true, data: {
     task_id: taskId,
     dispatch_batch_id: batchId,
@@ -646,6 +736,7 @@ function synthesisPayload(taskId, batchId) {
     source_agent_run_ids: [301],
     source_artifact_ids: [401],
     safety_notes: ['Deterministic rule-based preview; no AI provider called.', 'Stateless preview; no database write.'],
+    ...overrides,
   }, message: 'ok' }
 }
 
