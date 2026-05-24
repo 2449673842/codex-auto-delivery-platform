@@ -165,11 +165,15 @@
           <span class="label-badge label-ai">User-controlled login</span>
           <span class="label-badge label-redacted">No password stored</span>
           <span class="label-badge label-redacted">No cookies stored in DB</span>
+          <span class="label-badge label-redacted">No captcha bypass</span>
           <span class="label-badge label-provider">No hidden API</span>
           <span class="label-badge label-merged">No auto merge</span>
         </div>
         <p class="browser-ai-help">
           If the input box or send button is not found, check selectors. If stable response capture times out, the page may still be generating or manual login may be required.
+        </p>
+        <p class="browser-ai-help">
+          Complete login in the opened browser, then retry Execute. The platform will not auto login or store passwords/cookies.
         </p>
         <p class="browser-ai-help">
           Built-in selectors are best-effort and may break when the website changes. Switch to custom if needed.
@@ -221,6 +225,10 @@
             <input v-model="browserAiForm.copy_button_selector" placeholder="optional copy full answer button" />
           </label>
           <label>
+            login_hint_selector
+            <input v-model="browserAiForm.login_hint_selector" placeholder="optional login hint selector" />
+          </label>
+          <label>
             timeout_seconds
             <input v-model.number="browserAiForm.timeout_seconds" type="number" min="1" max="600" />
           </label>
@@ -270,6 +278,9 @@
           </div>
           <p v-if="browserAiExecuteResult.answer_preview" class="run-output">{{ browserAiExecuteResult.answer_preview }}</p>
           <p v-if="browserAiExecuteResult.error_message" class="run-error">{{ browserAiExecuteResult.error_message }}</p>
+          <p v-if="browserAiLoginRequired" class="run-error">
+            Manual login may be required. Complete login in the opened browser, then retry Execute.
+          </p>
           <div v-if="browserAiRefreshMessages.length" class="browser-ai-refresh-status">
             <span v-for="message in browserAiRefreshMessages" :key="message" class="label-badge label-ai">{{ message }}</span>
           </div>
@@ -931,6 +942,7 @@ const browserAiForm = ref<BrowserAiRequest>({
   response_selector: '[data-answer]',
   scroll_container_selector: '',
   copy_button_selector: '',
+  login_hint_selector: '',
   timeout_seconds: 180,
 })
 const browserAiLoading = ref(false)
@@ -951,6 +963,8 @@ const browserAiProfiles = ref<BrowserAiProviderProfile[]>([
     response_selector: '',
     scroll_container_selector: '',
     copy_button_selector: '',
+    login_hint_selector: '',
+    login_hint_text: '',
     selectors_configured: false,
     login_required_hint: false,
     editable: true,
@@ -958,11 +972,17 @@ const browserAiProfiles = ref<BrowserAiProviderProfile[]>([
   },
 ])
 const selectedBrowserAiProfile = computed(() => browserAiProfiles.value.find(profile => profile.provider === browserAiForm.value.provider) || null)
+const browserAiLoginRequired = computed(() => {
+  const result = browserAiExecuteResult.value
+  if (!result) return false
+  const text = `${result.status} ${result.error_message || ''} ${result.steps.map(step => `${step.name} ${step.status} ${step.message}`).join(' ')}`
+  return /manual login may be required|detect_login|login_required/i.test(text)
+})
 const selectedBrowserAiProfileStatus = computed(() => {
   const profile = selectedBrowserAiProfile.value
   if (!profile) return 'unknown profile'
   const configured = profile.selectors_configured ? 'selectors configured' : 'custom selectors required'
-  const login = profile.login_required_hint ? 'login may be required' : 'login not required'
+  const login = profile.login_required_hint ? (profile.login_hint_text || 'login may be required') : 'login not required'
   return `${configured}; ${login}`
 })
 const codeContext = ref<CodeContextResponse | null>(null)
@@ -1121,6 +1141,7 @@ function stepHint(name: string, status: string) {
       build_prompt: 'Task context could not be loaded.',
       open_browser: 'Browser launch failed.',
       navigate: 'Target page could not be loaded.',
+      detect_login: 'Manual login may be required. Complete login in the opened browser, then retry Execute.',
       fill_prompt: 'Input box was not found or could not be filled.',
       click_send: 'Send button was not found or could not be clicked.',
       wait_response: 'Timed out waiting for a stable answer; the page may still be generating, manual login may be required, or selector may be wrong.',
@@ -1167,6 +1188,7 @@ function applyBrowserAiProfile() {
   browserAiForm.value.response_selector = profile.response_selector || browserAiForm.value.response_selector
   browserAiForm.value.scroll_container_selector = profile.scroll_container_selector || ''
   browserAiForm.value.copy_button_selector = profile.copy_button_selector || ''
+  browserAiForm.value.login_hint_selector = profile.login_hint_selector || ''
 }
 
 async function refresh() {

@@ -550,7 +550,9 @@ async function testBrowserAiRun(page, taskId) {
   await checkT(page, 'User-controlled login', 'BA3 user login label')
   await checkT(page, 'No password stored', 'BA4 no password label')
   await checkT(page, 'No cookies stored in DB', 'BA5 no cookies label')
+  await checkT(page, 'No captcha bypass', 'BA5a no captcha bypass label')
   await checkT(page, 'No hidden API', 'BA6 no hidden API label')
+  await checkBodyIncludes(page, 'Complete login in the opened browser, then retry Execute', 'BA6a login assist retry note shown')
   await checkT(page, 'Built-in selectors are best-effort and may break when the website changes. Switch to custom if needed.', 'BA6a best-effort selector note shown')
   const providerSelect = page.locator('.browser-ai-run select').first()
   for (const label of ['Custom', 'ChatGPT Web', 'Claude Web', 'Gemini Web', 'DeepSeek Web', 'Kimi Web']) {
@@ -561,6 +563,8 @@ async function testBrowserAiRun(page, taskId) {
   await providerSelect.selectOption('chatgpt_web')
   await checkInputValue(page, '.browser-ai-run input', 'https://chatgpt.com/', 'BA6c ChatGPT target_url autofilled')
   await checkInputValue(page, '.browser-ai-run input', "textarea[data-testid='prompt-textarea'], div[contenteditable='true']", 'BA6d ChatGPT input selector autofilled')
+  await checkInputValue(page, '.browser-ai-run input', 'text=/log\\s*in/i, text=/sign\\s*in/i', 'BA6d2 ChatGPT login hint selector autofilled')
+  await checkBodyIncludes(page, 'login may be required', 'BA6d3 provider login hint shown')
   await providerSelect.selectOption('claude_web')
   await checkInputValue(page, '.browser-ai-run input', 'https://claude.ai/new', 'BA6e Claude target_url autofilled')
   await providerSelect.selectOption('gemini_web')
@@ -660,7 +664,26 @@ async function testBrowserAiFailures(page, taskId) {
   await checkT(page, 'wait_response', 'BA2-4 wait response failed step shown')
   await checkBodyIncludes(page, 'manual login may be required', 'BA2-5 login hint shown')
   await checkBodyIncludes(page, 'stable answer', 'BA2-6 stable answer timeout hint shown')
-  await checkBodyExcludes(page, 'Browser AI answer saved', 'BA2-7 failed execute does not show success refresh message')
+  await setBrowserAiRoute(page, 'execute', browserAiPayload({
+    status: 'failed',
+    answer_preview: '',
+    agent_run_id: 710,
+    artifact_id: null,
+    error_message: 'Manual login may be required. Please complete login in the opened browser, then retry Execute.',
+    browser_opened: true,
+    persisted: false,
+    steps: browserAiSteps({ detect_login: 'failed', fill_prompt: 'skipped', click_send: 'skipped' }, {
+      detect_login: 'Manual login may be required. Please complete login in the opened browser, then retry Execute.',
+    }),
+  }))
+  await page.locator('.browser-ai-run').getByRole('button', { name: 'Execute' }).click()
+  await page.waitForTimeout(300)
+  await checkT(page, 'detect_login', 'BA2-7 login required failed step shown')
+  await checkBodyIncludes(page, 'Complete login in the opened browser, then retry Execute', 'BA2-8 retry login instruction shown')
+  const retryButtons = await page.locator('.browser-ai-run').getByRole('button', { name: 'Execute' }).count()
+  if (retryButtons > 0) pass('BA2-9 Retry Execute button remains available')
+  else fail('BA2-9 Retry Execute button missing', '')
+  await checkBodyExcludes(page, 'Browser AI answer saved', 'BA2-10 failed execute does not show success refresh message')
 }
 
 async function testNoCodeContext(page, taskId) {
@@ -803,6 +826,8 @@ function browserAiProfile(provider, displayName, targetUrl, inputSelector, sendS
     response_selector: responseSelector,
     scroll_container_selector: provider === 'custom' ? '' : 'main',
     copy_button_selector: provider === 'custom' ? '' : "button[aria-label*='Copy']",
+    login_hint_selector: provider === 'custom' ? '' : "text=/log\\s*in/i, text=/sign\\s*in/i",
+    login_hint_text: loginRequired ? 'Manual login may be required' : '',
     selectors_configured: Boolean(inputSelector && sendSelector && responseSelector),
     login_required_hint: loginRequired,
     editable: true,
@@ -925,6 +950,7 @@ function browserAiSteps(statusOverrides = {}, messageOverrides = {}) {
     'create_agent_run',
     'open_browser',
     'navigate',
+    'detect_login',
     'fill_prompt',
     'click_send',
     'wait_response',

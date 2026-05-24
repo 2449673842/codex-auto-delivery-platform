@@ -453,6 +453,7 @@ export interface BrowserAiRequest {
   response_selector: string
   scroll_container_selector?: string
   copy_button_selector?: string
+  login_hint_selector?: string
   timeout_seconds: number
 }
 
@@ -466,6 +467,8 @@ export interface BrowserAiProviderProfile {
   response_selector: string
   scroll_container_selector: string
   copy_button_selector: string
+  login_hint_selector: string
+  login_hint_text: string
   selectors_configured: boolean
   login_required_hint: boolean
   editable: boolean

@@ -32,6 +32,7 @@ class BrowserAiRequest(BaseModel):
     response_selector: str = ""
     scroll_container_selector: str = ""
     copy_button_selector: str = ""
+    login_hint_selector: str = ""
     timeout_seconds: int | None = None
 
 
@@ -45,6 +46,8 @@ class BrowserAiProviderProfile(BaseModel):
     response_selector: str = ""
     scroll_container_selector: str = ""
     copy_button_selector: str = ""
+    login_hint_selector: str = ""
+    login_hint_text: str = ""
     selectors_configured: bool = False
     login_required_hint: bool = False
     editable: bool = True
