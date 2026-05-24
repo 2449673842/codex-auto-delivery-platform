@@ -26,6 +26,12 @@ from app.services.event_service import create_event
 
 BEST_EFFORT_SELECTOR_NOTE = "Built-in selectors are best-effort and may break when the website changes. Switch to custom if needed."
 COPY_BUTTON_SELECTOR = "button[aria-label*='Copy']"
+LOGIN_ASSIST_MESSAGE = "Manual login may be required. Please complete login in the opened browser, then retry Execute."
+LOGIN_HINT_TEXT = "Manual login may be required"
+GENERIC_LOGIN_HINT_SELECTOR = (
+    "text=/log\\s*in/i, text=/sign\\s*in/i, "
+    "a[href*='login'], a[href*='signin'], button:has-text('Log in'), button:has-text('Sign in')"
+)
 PROFILE_DEFINITIONS: dict[str, dict[str, object]] = {
     "custom": {
         "display_name": "Custom",
@@ -35,6 +41,7 @@ PROFILE_DEFINITIONS: dict[str, dict[str, object]] = {
         "response_selector": "",
         "scroll_container_selector": "",
         "copy_button_selector": "",
+        "login_hint_selector": "",
         "login_required_hint": False,
         "editable": True,
     },
@@ -46,6 +53,7 @@ PROFILE_DEFINITIONS: dict[str, dict[str, object]] = {
         "response_selector": "[data-message-author-role='assistant']",
         "scroll_container_selector": "main",
         "copy_button_selector": COPY_BUTTON_SELECTOR,
+        "login_hint_selector": GENERIC_LOGIN_HINT_SELECTOR,
         "login_required_hint": True,
         "editable": True,
     },
@@ -57,6 +65,7 @@ PROFILE_DEFINITIONS: dict[str, dict[str, object]] = {
         "response_selector": "[data-testid='message-content'], .font-claude-message",
         "scroll_container_selector": "main",
         "copy_button_selector": COPY_BUTTON_SELECTOR,
+        "login_hint_selector": GENERIC_LOGIN_HINT_SELECTOR,
         "login_required_hint": True,
         "editable": True,
     },
@@ -68,6 +77,7 @@ PROFILE_DEFINITIONS: dict[str, dict[str, object]] = {
         "response_selector": "message-content, .model-response-text",
         "scroll_container_selector": "main",
         "copy_button_selector": COPY_BUTTON_SELECTOR,
+        "login_hint_selector": GENERIC_LOGIN_HINT_SELECTOR,
         "login_required_hint": True,
         "editable": True,
     },
@@ -79,6 +89,7 @@ PROFILE_DEFINITIONS: dict[str, dict[str, object]] = {
         "response_selector": ".ds-markdown, [class*='markdown']",
         "scroll_container_selector": "main",
         "copy_button_selector": COPY_BUTTON_SELECTOR,
+        "login_hint_selector": GENERIC_LOGIN_HINT_SELECTOR,
         "login_required_hint": True,
         "editable": True,
     },
@@ -90,6 +101,7 @@ PROFILE_DEFINITIONS: dict[str, dict[str, object]] = {
         "response_selector": ".markdown, [class*='markdown']",
         "scroll_container_selector": "main",
         "copy_button_selector": COPY_BUTTON_SELECTOR,
+        "login_hint_selector": GENERIC_LOGIN_HINT_SELECTOR,
         "login_required_hint": True,
         "editable": True,
     },
@@ -106,6 +118,7 @@ STEP_ORDER = [
     "create_agent_run",
     "open_browser",
     "navigate",
+    "detect_login",
     "fill_prompt",
     "click_send",
     "wait_response",
@@ -239,6 +252,8 @@ def _profile_response(provider: str, data: dict[str, object]) -> BrowserAiProvid
         response_selector=str(data.get("response_selector") or ""),
         scroll_container_selector=str(data.get("scroll_container_selector") or ""),
         copy_button_selector=str(data.get("copy_button_selector") or ""),
+        login_hint_selector=str(data.get("login_hint_selector") or ""),
+        login_hint_text=LOGIN_HINT_TEXT if bool(data.get("login_required_hint")) else "",
         selectors_configured=selectors_configured,
         login_required_hint=bool(data.get("login_required_hint")),
         editable=bool(data.get("editable", True)),
@@ -255,6 +270,7 @@ def _profile_defaults(provider: str) -> dict[str, str]:
         "response_selector": str(raw.get("response_selector") or ""),
         "scroll_container_selector": str(raw.get("scroll_container_selector") or ""),
         "copy_button_selector": str(raw.get("copy_button_selector") or ""),
+        "login_hint_selector": str(raw.get("login_hint_selector") or ""),
     }
 
 
@@ -425,6 +441,7 @@ async def execute(db: AsyncSession, request: BrowserAiRequest) -> BrowserAiRespo
         for name in [
             "open_browser",
             "navigate",
+            "detect_login",
             "fill_prompt",
             "click_send",
             "wait_response",
@@ -645,10 +662,14 @@ class PlaywrightBrowserAiDriver:
                     await page.goto(request.target_url, wait_until="domcontentloaded", timeout=timeout_ms)
                 except Exception as exc:
                     raise BrowserAiStepError("navigate", "navigation timeout or target page failed to load") from exc
+                if await _login_hint_visible(page, request):
+                    raise BrowserAiStepError("detect_login", LOGIN_ASSIST_MESSAGE)
                 try:
                     input_box = page.locator(request.input_selector).first
                     await input_box.fill(prompt, timeout=timeout_ms)
                 except Exception as exc:
+                    if await _login_hint_visible(page, request):
+                        raise BrowserAiStepError("detect_login", LOGIN_ASSIST_MESSAGE) from exc
                     raise BrowserAiStepError("fill_prompt", "input selector not found or not fillable") from exc
                 previous_answer = ""
                 response_box = page.locator(request.response_selector).first
@@ -661,6 +682,8 @@ class PlaywrightBrowserAiDriver:
                 try:
                     await _wait_for_stable_answer(page, request, previous_answer, response_timeout_ms)
                 except Exception as exc:
+                    if await _login_hint_visible(page, request):
+                        raise BrowserAiStepError("detect_login", LOGIN_ASSIST_MESSAGE) from exc
                     raise BrowserAiStepError(
                         "wait_response",
                         "timeout waiting for stable response; page may still be generating, login may be required, or selector may be wrong",
@@ -680,6 +703,22 @@ class PlaywrightBrowserAiDriver:
                     await context.close()
                 if browser is not None:
                     await browser.close()
+
+
+async def _login_hint_visible(page, request: BrowserAiRequest) -> bool:
+    selectors = [
+        (request.login_hint_selector or "").strip(),
+        GENERIC_LOGIN_HINT_SELECTOR,
+    ]
+    for selector in selectors:
+        if not selector:
+            continue
+        try:
+            if await page.locator(selector).first.count() > 0:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 async def _read_answer_text(page, request: BrowserAiRequest, timeout_ms: int) -> str:

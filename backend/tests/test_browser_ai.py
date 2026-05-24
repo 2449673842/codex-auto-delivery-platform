@@ -242,6 +242,8 @@ async def test_provider_profiles_api_returns_non_sensitive_profiles(client):
     assert chatgpt["target_url_hint"] == "https://chatgpt.com/"
     assert chatgpt["selectors_configured"] is True
     assert chatgpt["login_required_hint"] is True
+    assert chatgpt["login_hint_selector"]
+    assert chatgpt["login_hint_text"] == "Manual login may be required"
     body = json.dumps(profiles).lower()
     for forbidden in ["cookie", "session", "password", "api_key", "secret_ref", ".env"]:
         assert forbidden not in body
@@ -351,6 +353,7 @@ async def test_known_provider_profile_auto_fills_selectors_and_executes(client, 
     assert request.target_url == "https://chatgpt.com/"
     assert "prompt-textarea" in request.input_selector
     assert "send-button" in request.send_selector
+    assert request.login_hint_selector
 
 
 @pytest.mark.asyncio
@@ -439,6 +442,7 @@ async def test_fake_browser_driver_success_creates_agent_run_and_artifact(client
         "create_agent_run",
         "open_browser",
         "navigate",
+        "detect_login",
         "fill_prompt",
         "click_send",
         "wait_response",
@@ -501,6 +505,56 @@ async def test_step_driver_wait_response_timeout_marks_failed_step(client, valid
     _assert_step(data, "wait_response", "failed")
     _assert_step(data, "capture_answer", "skipped")
     assert "login may be required" in _step(data, "wait_response")["message"]
+
+
+@pytest.mark.asyncio
+async def test_login_required_failure_marks_detect_login_and_does_not_create_artifact(client, valid_body, monkeypatch):
+    from app.services import browser_ai_service
+    message = "Manual login may be required. Please complete login in the opened browser, then retry Execute."
+    browser_ai_service.set_driver_override(StepFailingDriver("detect_login", message))
+    _install_settings(monkeypatch, browser_ai_enabled=True, _browser_ai_provider_allowlist_raw="custom")
+    before = await _counts()
+
+    resp = await client.post(f"{BASE}/execute", json=valid_body)
+
+    data = resp.json()["data"]
+    assert data["status"] == "failed"
+    assert data["browser_opened"] is True
+    assert data["persisted"] is False
+    assert data["artifact_id"] is None
+    assert message in data["error_message"]
+    _assert_step(data, "detect_login", "failed")
+    _assert_step(data, "fill_prompt", "skipped")
+    runs, artifacts, events = await _counts()
+    assert runs == before[0] + 1
+    assert artifacts == before[1]
+    assert events >= before[2] + 2
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        run = (await session.execute(select(AgentRun))).scalars().one()
+    assert run.status == "failed"
+    assert message in run.error_message
+
+
+@pytest.mark.asyncio
+async def test_login_required_failure_does_not_save_auth_secrets(client, valid_body, monkeypatch):
+    from app.services import browser_ai_service
+    raw_message = (
+        "Manual login may be required. Please complete login in the opened browser, then retry Execute. "
+        "password=private-password cookie=private-cookie session=private-session api_key=private-key"
+    )
+    browser_ai_service.set_driver_override(StepFailingDriver("detect_login", raw_message))
+    _install_settings(monkeypatch, browser_ai_enabled=True, _browser_ai_provider_allowlist_raw="custom")
+
+    resp = await client.post(f"{BASE}/execute", json=valid_body)
+
+    assert resp.json()["data"]["status"] == "failed"
+    stored = await _stored_browser_ai_payload()
+    _assert_absent_from_response_and_storage(
+        resp,
+        stored,
+        ["private-password", "private-cookie", "private-session", "private-key"],
+    )
 
 
 @pytest.mark.asyncio
