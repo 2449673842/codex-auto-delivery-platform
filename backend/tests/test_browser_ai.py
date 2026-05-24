@@ -224,6 +224,30 @@ def _assert_step(data: dict, name: str, status: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_provider_profiles_api_returns_non_sensitive_profiles(client):
+    resp = await client.get(f"{BASE}/provider-profiles")
+
+    assert resp.status_code == 200
+    profiles = resp.json()["data"]
+    providers = {profile["provider"] for profile in profiles}
+    assert {
+        "custom",
+        "chatgpt_web",
+        "claude_web",
+        "gemini_web",
+        "deepseek_web",
+        "kimi_web",
+    }.issubset(providers)
+    chatgpt = next(profile for profile in profiles if profile["provider"] == "chatgpt_web")
+    assert chatgpt["target_url_hint"] == "https://chatgpt.com/"
+    assert chatgpt["selectors_configured"] is True
+    assert chatgpt["login_required_hint"] is True
+    body = json.dumps(profiles).lower()
+    for forbidden in ["cookie", "session", "password", "api_key", "secret_ref", ".env"]:
+        assert forbidden not in body
+
+
+@pytest.mark.asyncio
 async def test_dry_run_default_disabled_does_not_open_browser_or_write(client, valid_body):
     before = await _counts()
     resp = await client.post(f"{BASE}/dry-run", json=valid_body)
@@ -280,6 +304,82 @@ async def test_provider_not_allowlisted_blocked(client, valid_body, monkeypatch)
     assert data["status"] == "blocked"
     assert "not in BROWSER_AI_PROVIDER_ALLOWLIST" in data["error_message"]
     _assert_step(data, "validate_request", "failed")
+
+
+@pytest.mark.asyncio
+async def test_unknown_provider_blocked(client, valid_body, monkeypatch):
+    _install_settings(monkeypatch, browser_ai_enabled=True, _browser_ai_provider_allowlist_raw="custom,chatgpt_web")
+    valid_body["provider"] = "unknown_web"
+    before = await _counts()
+
+    resp = await client.post(f"{BASE}/execute", json=valid_body)
+
+    data = resp.json()["data"]
+    assert data["status"] == "blocked"
+    assert data["safety_gate"]["provider_valid"] is False
+    assert "Unsupported browser AI provider" in data["error_message"]
+    assert await _counts() == before
+
+
+@pytest.mark.asyncio
+async def test_known_provider_profile_auto_fills_selectors_and_executes(client, valid_body, monkeypatch):
+    from app.services import browser_ai_service
+    driver = FakeDriver("ChatGPT profile answer")
+    browser_ai_service.set_driver_override(driver)
+    _install_settings(
+        monkeypatch,
+        browser_ai_enabled=True,
+        _browser_ai_provider_allowlist_raw="custom,chatgpt_web",
+    )
+    valid_body.update({
+        "provider": "chatgpt_web",
+        "target_url": "",
+        "input_selector": "",
+        "send_selector": "",
+        "response_selector": "",
+    })
+
+    resp = await client.post(f"{BASE}/execute", json=valid_body)
+
+    data = resp.json()["data"]
+    assert data["status"] == "succeeded"
+    assert data["provider"] == "chatgpt_web"
+    assert data["safety_gate"]["provider_valid"] is True
+    assert data["safety_gate"]["provider_allowed"] is True
+    assert data["safety_gate"]["selectors_present"] is True
+    request, _prompt, _timeout = driver.calls[0]
+    assert request.target_url == "https://chatgpt.com/"
+    assert "prompt-textarea" in request.input_selector
+    assert "send-button" in request.send_selector
+
+
+@pytest.mark.asyncio
+async def test_known_provider_user_selectors_override_profile_defaults(client, valid_body, monkeypatch):
+    from app.services import browser_ai_service
+    driver = FakeDriver("Claude profile answer")
+    browser_ai_service.set_driver_override(driver)
+    _install_settings(
+        monkeypatch,
+        browser_ai_enabled=True,
+        _browser_ai_provider_allowlist_raw="claude_web",
+    )
+    valid_body.update({
+        "provider": "claude_web",
+        "target_url": "http://127.0.0.1:9999/custom-claude",
+        "input_selector": "textarea[name='override']",
+        "send_selector": "button[data-override-send]",
+        "response_selector": "[data-override-answer]",
+    })
+
+    resp = await client.post(f"{BASE}/execute", json=valid_body)
+
+    data = resp.json()["data"]
+    assert data["status"] == "succeeded"
+    request, _prompt, _timeout = driver.calls[0]
+    assert request.target_url == "http://127.0.0.1:9999/custom-claude"
+    assert request.input_selector == "textarea[name='override']"
+    assert request.send_selector == "button[data-override-send]"
+    assert request.response_selector == "[data-override-answer]"
 
 
 @pytest.mark.asyncio

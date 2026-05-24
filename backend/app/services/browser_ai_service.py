@@ -13,12 +13,88 @@ from app.models.agent_profile import AgentProfile
 from app.models.agent_run import AgentRun
 from app.models.task import Task
 from app.models.task_artifact import TaskArtifact
-from app.schemas.browser_ai import BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, BrowserAiStep
+from app.schemas.browser_ai import (
+    BrowserAiProviderProfile,
+    BrowserAiRequest,
+    BrowserAiResponse,
+    BrowserAiSafetyGate,
+    BrowserAiStep,
+)
 from app.services.ai_output_governance_service import redact_secrets
 from app.services.event_service import create_event
 
 
-SUPPORTED_PROVIDERS = {"custom"}
+BEST_EFFORT_SELECTOR_NOTE = "Built-in selectors are best-effort and may break when the website changes. Switch to custom if needed."
+COPY_BUTTON_SELECTOR = "button[aria-label*='Copy']"
+PROFILE_DEFINITIONS: dict[str, dict[str, object]] = {
+    "custom": {
+        "display_name": "Custom",
+        "target_url": "",
+        "input_selector": "",
+        "send_selector": "",
+        "response_selector": "",
+        "scroll_container_selector": "",
+        "copy_button_selector": "",
+        "login_required_hint": False,
+        "editable": True,
+    },
+    "chatgpt_web": {
+        "display_name": "ChatGPT Web",
+        "target_url": "https://chatgpt.com/",
+        "input_selector": "textarea[data-testid='prompt-textarea'], div[contenteditable='true']",
+        "send_selector": "button[data-testid='send-button']",
+        "response_selector": "[data-message-author-role='assistant']",
+        "scroll_container_selector": "main",
+        "copy_button_selector": COPY_BUTTON_SELECTOR,
+        "login_required_hint": True,
+        "editable": True,
+    },
+    "claude_web": {
+        "display_name": "Claude Web",
+        "target_url": "https://claude.ai/new",
+        "input_selector": "div[contenteditable='true'], textarea",
+        "send_selector": "button[aria-label*='Send']",
+        "response_selector": "[data-testid='message-content'], .font-claude-message",
+        "scroll_container_selector": "main",
+        "copy_button_selector": COPY_BUTTON_SELECTOR,
+        "login_required_hint": True,
+        "editable": True,
+    },
+    "gemini_web": {
+        "display_name": "Gemini Web",
+        "target_url": "https://gemini.google.com/app",
+        "input_selector": "rich-textarea div[contenteditable='true'], textarea",
+        "send_selector": "button[aria-label*='Send']",
+        "response_selector": "message-content, .model-response-text",
+        "scroll_container_selector": "main",
+        "copy_button_selector": COPY_BUTTON_SELECTOR,
+        "login_required_hint": True,
+        "editable": True,
+    },
+    "deepseek_web": {
+        "display_name": "DeepSeek Web",
+        "target_url": "https://chat.deepseek.com/",
+        "input_selector": "textarea, div[contenteditable='true']",
+        "send_selector": "button[aria-label*='Send'], button[type='submit']",
+        "response_selector": ".ds-markdown, [class*='markdown']",
+        "scroll_container_selector": "main",
+        "copy_button_selector": COPY_BUTTON_SELECTOR,
+        "login_required_hint": True,
+        "editable": True,
+    },
+    "kimi_web": {
+        "display_name": "Kimi Web",
+        "target_url": "https://www.kimi.com/chat/",
+        "input_selector": "textarea, div[contenteditable='true']",
+        "send_selector": "button[aria-label*='Send'], button[type='submit']",
+        "response_selector": ".markdown, [class*='markdown']",
+        "scroll_container_selector": "main",
+        "copy_button_selector": COPY_BUTTON_SELECTOR,
+        "login_required_hint": True,
+        "editable": True,
+    },
+}
+SUPPORTED_PROVIDERS = set(PROFILE_DEFINITIONS)
 PROMPT_SOURCES = {"task_goal", "handoff_packet", "answer_synthesis", "custom_prompt"}
 MAX_TIMEOUT_SECONDS = 600
 ANSWER_PREVIEW_CHARS = 1200
@@ -142,6 +218,58 @@ def _target_url_hint(url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def list_provider_profiles() -> list[BrowserAiProviderProfile]:
+    return [_profile_response(provider, data) for provider, data in PROFILE_DEFINITIONS.items()]
+
+
+def _profile_response(provider: str, data: dict[str, object]) -> BrowserAiProviderProfile:
+    target_url = str(data.get("target_url") or "")
+    selectors_configured = all([
+        bool(str(data.get("input_selector") or "")),
+        bool(str(data.get("send_selector") or "")),
+        bool(str(data.get("response_selector") or "")),
+    ])
+    return BrowserAiProviderProfile(
+        provider=provider,
+        display_name=str(data.get("display_name") or provider),
+        target_url=target_url,
+        target_url_hint=target_url,
+        input_selector=str(data.get("input_selector") or ""),
+        send_selector=str(data.get("send_selector") or ""),
+        response_selector=str(data.get("response_selector") or ""),
+        scroll_container_selector=str(data.get("scroll_container_selector") or ""),
+        copy_button_selector=str(data.get("copy_button_selector") or ""),
+        selectors_configured=selectors_configured,
+        login_required_hint=bool(data.get("login_required_hint")),
+        editable=bool(data.get("editable", True)),
+        best_effort_note="" if provider == "custom" else BEST_EFFORT_SELECTOR_NOTE,
+    )
+
+
+def _profile_defaults(provider: str) -> dict[str, str]:
+    raw = PROFILE_DEFINITIONS.get(provider) or {}
+    return {
+        "target_url": str(raw.get("target_url") or ""),
+        "input_selector": str(raw.get("input_selector") or ""),
+        "send_selector": str(raw.get("send_selector") or ""),
+        "response_selector": str(raw.get("response_selector") or ""),
+        "scroll_container_selector": str(raw.get("scroll_container_selector") or ""),
+        "copy_button_selector": str(raw.get("copy_button_selector") or ""),
+    }
+
+
+def _with_profile_defaults(request: BrowserAiRequest) -> BrowserAiRequest:
+    provider = (request.provider or "").strip()
+    defaults = _profile_defaults(provider)
+    if not defaults:
+        return request
+    updates = {
+        field: (getattr(request, field) or defaults[field])
+        for field in defaults
+    }
+    return request.model_copy(update=updates)
+
+
 def _timeout_seconds(request: BrowserAiRequest) -> int:
     raw = request.timeout_seconds or settings.browser_ai_default_timeout_seconds
     return max(1, min(raw, MAX_TIMEOUT_SECONDS))
@@ -161,6 +289,7 @@ def _stable_interval_ms() -> int:
 
 
 def _safety_gate(request: BrowserAiRequest, *, for_execute: bool) -> BrowserAiSafetyGate:
+    request = _with_profile_defaults(request)
     provider = (request.provider or "").strip()
     prompt_source = (request.prompt_source or "").strip()
     provider_allowlist = settings.browser_ai_provider_allowlist
@@ -229,6 +358,7 @@ def _task_prompt(task: Task | None, instruction: str) -> str:
 
 
 async def dry_run(db: AsyncSession, request: BrowserAiRequest) -> BrowserAiResponse:
+    request = _with_profile_defaults(request)
     steps = _new_steps(DRY_RUN_STEPS)
     prompt = await _build_prompt(db, request)
     _mark_step(steps, "build_prompt", "passed", "Prompt built")
@@ -250,6 +380,7 @@ async def dry_run(db: AsyncSession, request: BrowserAiRequest) -> BrowserAiRespo
 
 
 async def execute(db: AsyncSession, request: BrowserAiRequest) -> BrowserAiResponse:
+    request = _with_profile_defaults(request)
     steps = _new_steps(STEP_ORDER)
     prompt = await _build_prompt(db, request)
     _mark_step(steps, "build_prompt", "passed", "Prompt built")

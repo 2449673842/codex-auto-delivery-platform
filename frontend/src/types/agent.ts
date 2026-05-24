@@ -439,11 +439,12 @@ export interface AiDispatchExecuteResponse {
 
 // ── Browser AI / Local Web AI Provider ──
 export type BrowserAiPromptSource = 'task_goal' | 'handoff_packet' | 'answer_synthesis' | 'custom_prompt'
+export type BrowserAiProvider = 'custom' | 'chatgpt_web' | 'claude_web' | 'gemini_web' | 'deepseek_web' | 'kimi_web'
 
 export interface BrowserAiRequest {
   project_id: number
   task_id: number
-  provider: 'custom'
+  provider: BrowserAiProvider
   target_url: string
   prompt_source: BrowserAiPromptSource
   custom_prompt?: string
@@ -453,6 +454,22 @@ export interface BrowserAiRequest {
   scroll_container_selector?: string
   copy_button_selector?: string
   timeout_seconds: number
+}
+
+export interface BrowserAiProviderProfile {
+  provider: BrowserAiProvider
+  display_name: string
+  target_url: string
+  target_url_hint: string
+  input_selector: string
+  send_selector: string
+  response_selector: string
+  scroll_container_selector: string
+  copy_button_selector: string
+  selectors_configured: boolean
+  login_required_hint: boolean
+  editable: boolean
+  best_effort_note: string
 }
 
 export interface BrowserAiSafetyGate {

@@ -171,12 +171,21 @@
         <p class="browser-ai-help">
           If the input box or send button is not found, check selectors. If stable response capture times out, the page may still be generating or manual login may be required.
         </p>
+        <p class="browser-ai-help">
+          Built-in selectors are best-effort and may break when the website changes. Switch to custom if needed.
+        </p>
         <div class="browser-ai-form">
           <label>
             provider
-            <select v-model="browserAiForm.provider">
-              <option value="custom">custom</option>
+            <select v-model="browserAiForm.provider" @change="applyBrowserAiProfile">
+              <option v-for="profile in browserAiProfiles" :key="profile.provider" :value="profile.provider">
+                {{ profile.display_name }}
+              </option>
             </select>
+          </label>
+          <label>
+            profile_status
+            <input :value="selectedBrowserAiProfileStatus" readonly />
           </label>
           <label>
             prompt_source
@@ -871,11 +880,11 @@ import {
   fetchApprovalDecisions,
   fetchDispatchBatches, previewAnswerSynthesis, previewAiHandoff,
   dryRunAiDispatch, executeAiDispatch,
-  dryRunBrowserAi, executeBrowserAi,
+  dryRunBrowserAi, executeBrowserAi, fetchBrowserAiProviderProfiles,
   fetchCodeContext,
   applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate, evaluateSandboxGate,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -931,6 +940,31 @@ const browserAiExecuteResult = ref<BrowserAiResponse | null>(null)
 const browserAiRefreshMessages = ref<string[]>([])
 const browserAiFailedStep = computed(() => browserAiExecuteResult.value?.steps.find(step => step.status === 'failed') || null)
 const artifactRefreshKey = ref(0)
+const browserAiProfiles = ref<BrowserAiProviderProfile[]>([
+  {
+    provider: 'custom',
+    display_name: 'Custom',
+    target_url: '',
+    target_url_hint: '',
+    input_selector: '',
+    send_selector: '',
+    response_selector: '',
+    scroll_container_selector: '',
+    copy_button_selector: '',
+    selectors_configured: false,
+    login_required_hint: false,
+    editable: true,
+    best_effort_note: '',
+  },
+])
+const selectedBrowserAiProfile = computed(() => browserAiProfiles.value.find(profile => profile.provider === browserAiForm.value.provider) || null)
+const selectedBrowserAiProfileStatus = computed(() => {
+  const profile = selectedBrowserAiProfile.value
+  if (!profile) return 'unknown profile'
+  const configured = profile.selectors_configured ? 'selectors configured' : 'custom selectors required'
+  const login = profile.login_required_hint ? 'login may be required' : 'login not required'
+  return `${configured}; ${login}`
+})
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -1110,9 +1144,30 @@ function buildBrowserAiRequest(): BrowserAiRequest | null {
 }
 
 onMounted(async () => {
+  await loadBrowserAiProfiles()
   agents.value = await fetchAgents()
   await refresh()
 })
+
+async function loadBrowserAiProfiles() {
+  try {
+    const profiles = await fetchBrowserAiProviderProfiles()
+    if (profiles.length > 0) browserAiProfiles.value = profiles
+  } catch (err) {
+    console.warn('Failed to load Browser AI provider profiles; using local fallback profiles.', err)
+  }
+}
+
+function applyBrowserAiProfile() {
+  const profile = selectedBrowserAiProfile.value
+  if (!profile || profile.provider === 'custom') return
+  browserAiForm.value.target_url = profile.target_url || browserAiForm.value.target_url
+  browserAiForm.value.input_selector = profile.input_selector || browserAiForm.value.input_selector
+  browserAiForm.value.send_selector = profile.send_selector || browserAiForm.value.send_selector
+  browserAiForm.value.response_selector = profile.response_selector || browserAiForm.value.response_selector
+  browserAiForm.value.scroll_container_selector = profile.scroll_container_selector || ''
+  browserAiForm.value.copy_button_selector = profile.copy_button_selector || ''
+}
 
 async function refresh() {
   const id = Number(route.params.id)
