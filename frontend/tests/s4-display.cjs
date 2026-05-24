@@ -143,8 +143,8 @@ async function checkBodyIncludes(page, text, label) {
 
 async function checkBodyExcludes(page, text, label) {
   const body = await page.locator('body').innerText()
-  if (!body.includes(text)) pass(`${label}: "${text}" absent`)
-  else fail(`${label}: "${text}" should be absent`, '')
+  if (body.includes(text)) fail(`${label}: "${text}" should be absent`, '')
+  else pass(`${label}: "${text}" absent`)
 }
 
 async function testDashboardFirstUsableWorkflow(page) {
