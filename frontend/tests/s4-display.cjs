@@ -686,6 +686,35 @@ async function testBrowserAiFailures(page, taskId) {
   await checkBodyExcludes(page, 'Browser AI answer saved', 'BA2-10 failed execute does not show success refresh message')
 }
 
+async function testMcpBridgePanel(page, taskId) {
+  log('\n========== MCP. MCP Bridge Read-only Dry-run ==========')
+  const mcpCounter = { count: 0 }
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
+  await setMcpRoutes(page, taskId, mcpCounter)
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await checkT(page, 'MCP Bridge / 外部 AI 工具桥', 'MCP1 section shown')
+  await checkT(page, 'MCP Bridge S18 is read-only + dry-run only', 'MCP2 read-only dry-run label shown')
+  await checkBodyIncludes(page, 'get_task_brief', 'MCP3 task brief tool shown')
+  await checkBodyIncludes(page, 'get_handoff_packet', 'MCP4 handoff tool shown')
+  await checkBodyIncludes(page, 'ai_dispatch_dry_run', 'MCP5 ai dispatch dry-run tool shown')
+  await checkBodyIncludes(page, 'browser_ai_dry_run', 'MCP6 browser ai dry-run tool shown')
+  await checkT(page, 'No MCP execute', 'MCP7 no execute label shown')
+  await page.locator('.mcp-bridge-panel').getByRole('button', { name: 'Preview MCP Handoff' }).click()
+  await page.waitForTimeout(300)
+  if (mcpCounter.count === 1) pass('MCP8 mcp call endpoint called')
+  else fail('MCP8 mcp call endpoint call count', mcpCounter.count)
+  await checkT(page, 'tool: get_handoff_packet', 'MCP9 tool result shown')
+  await checkT(page, 'persisted=false', 'MCP10 persisted false shown')
+  await checkBodyIncludes(page, 'MCP handoff summary for S4 display test', 'MCP11 handoff summary shown')
+  await checkT(page, 'No OpenAI execute is allowed.', 'MCP12 safety note shown')
+  await checkBodyExcludes(page, 'Run MCP Execute', 'MCP13 no MCP execute entry')
+  await checkBodyExcludes(page, 'Create PR', 'MCP14 no create PR entry')
+  await checkBodyExcludes(page, 'Deploy', 'MCP15 no deploy entry')
+  await checkBodyExcludes(page, 'Merge PR', 'MCP16 no merge entry')
+}
+
 async function testNoCodeContext(page, taskId) {
   log('\n========== I. No Code Context — 404 Recovery ==========')
   await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
@@ -738,6 +767,13 @@ async function setAnswerSynthesisRoute(page, payload, status = 200, counter = nu
 async function setAiHandoffRoute(page, payload, status = 200, counter = null) {
   await page.unroute('**/api/ai-handoff/preview').catch(() => {})
   await page.route('**/api/ai-handoff/preview', route => fulfillJson(route, payload, status, counter))
+}
+
+async function setMcpRoutes(page, taskId, counter = null) {
+  await page.unroute('**/api/mcp/tools**').catch(() => {})
+  await page.unroute('**/api/mcp/call**').catch(() => {})
+  await page.route('**/api/mcp/tools**', route => fulfillJson(route, mcpToolsPayload(), 200))
+  await page.route('**/api/mcp/call**', route => fulfillJson(route, mcpCallPayload(taskId), 200, counter))
 }
 
 async function setAiDispatchRoute(page, action, payload, status = 200, counter = null) {
@@ -801,6 +837,48 @@ function synthesisPayload(taskId, batchId, overrides = {}) {
     source_artifact_ids: [401],
     safety_notes: ['Deterministic rule-based preview; no AI provider called.', 'Stateless preview; no database write.'],
     ...overrides,
+  }, message: 'ok' }
+}
+
+function mcpToolsPayload() {
+  const toolRows = [
+    ['get_workspace_status', 'Read project/task/run/artifact counts.', false],
+    ['get_task_brief', 'Read a task brief.', false],
+    ['get_handoff_packet', 'Preview handoff packet.', false],
+    ['get_answer_synthesis', 'Preview synthesis.', false],
+    ['ai_dispatch_dry_run', 'Dry-run AI dispatch.', true],
+    ['browser_ai_dry_run', 'Dry-run Browser AI.', true],
+  ]
+  return { success: true, data: toolRows.map(([name, description, dryRunOnly]) => mcpTool(name, description, dryRunOnly)), message: 'ok' }
+}
+
+function mcpTool(name, description, dryRunOnly = false) {
+  return {
+    name,
+    description,
+    read_only: true,
+    dry_run_only: dryRunOnly,
+    safety_notes: ['MCP Bridge S18 is read-only + dry-run only.'],
+  }
+}
+
+function mcpCallPayload(taskId) {
+  return { success: true, data: {
+    tool: 'get_handoff_packet',
+    status: 'succeeded',
+    data: {
+      current_task_summary: { task_id: taskId, title: 'S4 display test', status: 'in_progress' },
+      next_ai_prompt: 'MCP handoff summary for S4 display test',
+      is_truncated: false,
+    },
+    error_message: '',
+    read_only: true,
+    persisted: false,
+    safety_notes: [
+      'MCP Bridge S18 is read-only + dry-run only.',
+      'No OpenAI execute is allowed.',
+      'No Browser AI execute or browser launch is allowed.',
+    ],
   }, message: 'ok' }
 }
 
@@ -1179,6 +1257,7 @@ async function main() {
   await testRealAiRunPipelineFailures(page, task.id)
   await testBrowserAiRun(page, task.id)
   await testBrowserAiFailures(page, task.id)
+  await testMcpBridgePanel(page, task.id)
   await testApprovals(page)
   await testHumanRequired(page)
   await testSandboxApply(page)

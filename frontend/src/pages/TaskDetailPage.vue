@@ -556,6 +556,50 @@
         <div v-else class="empty-state"><p>暂无可综合的多 AI 结果</p></div>
       </section>
 
+      <!-- MCP Bridge -->
+      <section class="card mcp-bridge-panel">
+        <div class="section-header">
+          <h2>MCP Bridge / 外部 AI 工具桥</h2>
+          <button class="btn btn-sm" @click="previewMcpHandoff" :disabled="mcpLoading || !task">
+            Preview MCP Handoff
+          </button>
+        </div>
+        <div class="workspace-safety">
+          <span class="label-badge label-provider">MCP Bridge S18 is read-only + dry-run only</span>
+          <span class="label-badge label-applied">read-only</span>
+          <span class="label-badge label-ai">dry-run</span>
+          <span class="label-badge label-exec">No MCP execute</span>
+          <span class="label-badge label-redacted">No secrets returned</span>
+          <span class="label-badge label-merged">No auto merge</span>
+        </div>
+        <p class="section-note">External AI can preview task context and dry-run plans, but cannot execute providers, open browsers, write repository files, create PRs, deploy, or merge.</p>
+        <p v-if="mcpError" class="run-error">{{ mcpError }}</p>
+        <div class="mcp-tools-list">
+          <strong>tools</strong>
+          <span v-for="tool in mcpTools" :key="tool.name" class="label-badge" :class="tool.dry_run_only ? 'label-ai' : 'label-provider'">
+            {{ tool.name }} · {{ tool.dry_run_only ? 'dry-run' : 'read-only' }}
+          </span>
+        </div>
+        <div v-if="mcpResult" class="mcp-result">
+          <div class="dispatch-job-meta">
+            <span>tool: {{ mcpResult.tool }}</span>
+            <span>status: {{ mcpResult.status }}</span>
+            <span>read_only={{ mcpResult.read_only }}</span>
+            <span>persisted={{ mcpResult.persisted }}</span>
+          </div>
+          <div class="synthesis-list">
+            <strong>task brief / handoff summary</strong>
+            <pre>{{ formatMcpPreview(mcpResult.data) }}</pre>
+          </div>
+          <div class="synthesis-list">
+            <strong>safety notes</strong>
+            <ul>
+              <li v-for="note in mcpResult.safety_notes" :key="note">{{ note }}</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
       <!-- AI Handoff Packet -->
       <section class="card ai-handoff-workspace">
         <div class="section-header">
@@ -894,8 +938,9 @@ import {
   dryRunBrowserAi, executeBrowserAi, fetchBrowserAiProviderProfiles,
   fetchCodeContext,
   applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate, evaluateSandboxGate,
+  fetchMcpTools, callMcpTool,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -924,6 +969,10 @@ const aiHandoff = ref<AiHandoffPreviewResponse | null>(null)
 const aiHandoffError = ref('')
 const aiHandoffLoading = ref(false)
 const aiHandoffCopyMessage = ref('')
+const mcpTools = ref<McpToolDescriptor[]>([])
+const mcpResult = ref<McpCallResponse | null>(null)
+const mcpLoading = ref(false)
+const mcpError = ref('')
 const realAiMode = ref<AiDispatchMode>('review')
 const realAiTaskGoal = ref('')
 const realAiLoading = ref(false)
@@ -1046,6 +1095,11 @@ function formatSummary(summary: Record<string, unknown> | null | undefined) {
   return JSON.stringify(summary)
 }
 
+function formatMcpPreview(data: Record<string, unknown> | null | undefined) {
+  if (!data || Object.keys(data).length === 0) return '-'
+  return JSON.stringify(data, null, 2).slice(0, 4000)
+}
+
 function formatConfidence(value: number | null | undefined) {
   if (typeof value !== 'number') return '-'
   return `${Math.round(value * 100)}%`
@@ -1166,9 +1220,19 @@ function buildBrowserAiRequest(): BrowserAiRequest | null {
 
 onMounted(async () => {
   await loadBrowserAiProfiles()
+  await loadMcpTools()
   agents.value = await fetchAgents()
   await refresh()
 })
+
+async function loadMcpTools() {
+  try {
+    mcpTools.value = await fetchMcpTools()
+  } catch (err: any) {
+    mcpTools.value = []
+    mcpError.value = err?.message || 'MCP tools unavailable'
+  }
+}
 
 async function loadBrowserAiProfiles() {
   try {
@@ -1206,6 +1270,29 @@ async function refresh() {
   sandboxResults.value = await fetchSandboxResults(id)
   applyResult.value = null
   await loadSandboxGate()
+}
+
+async function previewMcpHandoff() {
+  if (!task.value) return
+  mcpLoading.value = true
+  mcpError.value = ''
+  try {
+    if (mcpTools.value.length === 0) {
+      await loadMcpTools()
+    }
+    mcpResult.value = await callMcpTool({
+      tool: 'get_handoff_packet',
+      arguments: {
+        task_id: task.value.id,
+        budget: 4000,
+      },
+    })
+  } catch (err: any) {
+    mcpResult.value = null
+    mcpError.value = err?.message || 'MCP handoff preview failed'
+  } finally {
+    mcpLoading.value = false
+  }
 }
 
 async function runAiDryRun() {

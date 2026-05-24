@@ -437,6 +437,30 @@ export interface AiDispatchExecuteResponse {
   steps: AiExecuteStep[]
 }
 
+// ── MCP Bridge / Read-only dry-run tool preview ──
+export interface McpToolDescriptor {
+  name: string
+  description: string
+  read_only: boolean
+  dry_run_only: boolean
+  safety_notes: string[]
+}
+
+export interface McpCallRequest {
+  tool: string
+  arguments: Record<string, any>
+}
+
+export interface McpCallResponse {
+  tool: string
+  status: string
+  data: Record<string, any>
+  error_message: string
+  read_only: boolean
+  persisted: boolean
+  safety_notes: string[]
+}
+
 // ── Browser AI / Local Web AI Provider ──
 export type BrowserAiPromptSource = 'task_goal' | 'handoff_packet' | 'answer_synthesis' | 'custom_prompt'
 export type BrowserAiProvider = 'custom' | 'chatgpt_web' | 'claude_web' | 'gemini_web' | 'deepseek_web' | 'kimi_web'
