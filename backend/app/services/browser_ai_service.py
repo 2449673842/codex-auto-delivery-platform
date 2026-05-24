@@ -13,7 +13,7 @@ from app.models.agent_profile import AgentProfile
 from app.models.agent_run import AgentRun
 from app.models.task import Task
 from app.models.task_artifact import TaskArtifact
-from app.schemas.browser_ai import BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate
+from app.schemas.browser_ai import BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, BrowserAiStep
 from app.services.ai_output_governance_service import redact_secrets
 from app.services.event_service import create_event
 
@@ -25,6 +25,27 @@ ANSWER_PREVIEW_CHARS = 1200
 STABLE_TEXT_POLLS = 3
 STABLE_TEXT_INTERVAL_MS = 500
 SENSITIVE_ASSIGNMENT_KEYS = {"cookie", "session", "password", "token", "api_key"}
+TASK_NOT_FOUND_FOR_PROJECT = "Task not found for project"
+STEP_ORDER = [
+    "validate_request",
+    "build_prompt",
+    "create_agent_run",
+    "open_browser",
+    "navigate",
+    "fill_prompt",
+    "click_send",
+    "wait_response",
+    "capture_answer",
+    "persist_artifact",
+    "finish_run",
+]
+DRY_RUN_STEPS = ["validate_request", "build_prompt"]
+
+
+class BrowserAiStepError(RuntimeError):
+    def __init__(self, step: str, message: str):
+        super().__init__(message)
+        self.step = step
 
 
 class BrowserAiDriver(Protocol):
@@ -59,6 +80,56 @@ def _redact_sensitive_assignments(text: str) -> str:
         else:
             parts.append(part)
     return " ".join(parts)
+
+
+def _safe_step_message(message: str | None, fallback: str) -> str:
+    redacted = _redact(message)
+    return redacted[:240] if redacted else fallback
+
+
+def _new_steps(names: list[str]) -> list[BrowserAiStep]:
+    return [BrowserAiStep(name=name, status="pending") for name in names]
+
+
+def _mark_step(steps: list[BrowserAiStep], name: str, status: str, message: str) -> None:
+    for step in steps:
+        if step.name == name:
+            step.status = status
+            step.message = _safe_step_message(message, status)
+            step.sensitive = False
+            break
+
+
+def _skip_after_failed(steps: list[BrowserAiStep], failed_name: str) -> None:
+    found_failed = False
+    for step in steps:
+        if found_failed and step.status == "pending":
+            step.status = "skipped"
+            step.message = "Skipped after previous failure"
+        if step.name == failed_name:
+            found_failed = True
+
+
+def _pass_before_failed(steps: list[BrowserAiStep], failed_name: str) -> None:
+    for step in steps:
+        if step.name == failed_name:
+            break
+        if step.status in {"pending", "running"}:
+            step.status = "passed"
+            step.message = f"{step.name} completed"
+
+
+def _finish_pending_steps(steps: list[BrowserAiStep], status: str = "skipped") -> None:
+    for step in steps:
+        if step.status == "pending":
+            step.status = status
+            step.message = status.capitalize()
+
+
+def _step_error_step(exc: Exception) -> str:
+    if isinstance(exc, BrowserAiStepError) and exc.step in STEP_ORDER:
+        return exc.step
+    return "capture_answer"
 
 
 def _is_safe_target_url(url: str) -> bool:
@@ -112,9 +183,6 @@ def _safety_gate(request: BrowserAiRequest, *, for_execute: bool) -> BrowserAiSa
     if not gate.timeout_ok:
         gate.blocked_reasons.append(f"timeout_seconds must be between 1 and {MAX_TIMEOUT_SECONDS}")
     gate.gate_passed = len(gate.blocked_reasons) == 0
-    if not for_execute and "BROWSER_AI_ENABLED is not true" in gate.blocked_reasons:
-        gate.blocked_reasons.remove("BROWSER_AI_ENABLED is not true")
-        gate.gate_passed = len(gate.blocked_reasons) == 0
     return gate
 
 
@@ -150,8 +218,14 @@ def _task_prompt(task: Task | None, instruction: str) -> str:
 
 
 async def dry_run(db: AsyncSession, request: BrowserAiRequest) -> BrowserAiResponse:
+    steps = _new_steps(DRY_RUN_STEPS)
     prompt = await _build_prompt(db, request)
+    _mark_step(steps, "build_prompt", "passed", "Prompt built")
     gate = _safety_gate(request, for_execute=False)
+    if gate.gate_passed:
+        _mark_step(steps, "validate_request", "passed", "Request validated")
+    else:
+        _mark_step(steps, "validate_request", "failed", "; ".join(gate.blocked_reasons))
     return BrowserAiResponse(
         status="ready" if gate.gate_passed else "blocked",
         provider=request.provider,
@@ -160,14 +234,19 @@ async def dry_run(db: AsyncSession, request: BrowserAiRequest) -> BrowserAiRespo
         browser_opened=False,
         persisted=False,
         error_message="; ".join(gate.blocked_reasons) if gate.blocked_reasons else None,
+        steps=steps,
     )
 
 
 async def execute(db: AsyncSession, request: BrowserAiRequest) -> BrowserAiResponse:
+    steps = _new_steps(STEP_ORDER)
     prompt = await _build_prompt(db, request)
+    _mark_step(steps, "build_prompt", "passed", "Prompt built")
     prompt_hash = _hash_text(prompt)
     gate = _safety_gate(request, for_execute=True)
     if not gate.gate_passed:
+        _mark_step(steps, "validate_request", "failed", "; ".join(gate.blocked_reasons))
+        _finish_pending_steps(steps)
         return BrowserAiResponse(
             status="blocked",
             provider=request.provider,
@@ -176,29 +255,51 @@ async def execute(db: AsyncSession, request: BrowserAiRequest) -> BrowserAiRespo
             browser_opened=False,
             persisted=False,
             error_message="; ".join(gate.blocked_reasons),
+            steps=steps,
         )
+    _mark_step(steps, "validate_request", "passed", "Request validated")
 
     task = await _get_task(db, request.task_id, request.project_id)
     if task is None:
-        gate.blocked_reasons.append("Task not found for project")
+        gate.blocked_reasons.append(TASK_NOT_FOUND_FOR_PROJECT)
         gate.gate_passed = False
+        _mark_step(steps, "build_prompt", "failed", TASK_NOT_FOUND_FOR_PROJECT)
+        _finish_pending_steps(steps)
         return BrowserAiResponse(
             status="blocked",
             provider=request.provider,
             prompt_hash=prompt_hash,
             safety_gate=gate,
-            error_message="Task not found for project",
+            error_message=TASK_NOT_FOUND_FOR_PROJECT,
+            steps=steps,
         )
 
     agent = await _find_or_create_browser_agent(db, request.provider)
     run = await _create_run(db, task, agent, prompt, request, prompt_hash)
+    _mark_step(steps, "create_agent_run", "passed", f"AgentRun #{run.id} created")
     try:
+        _mark_step(steps, "open_browser", "running", "Opening local browser")
         answer = await _get_driver().run(request, prompt, _timeout_seconds(request))
+        for name in [
+            "open_browser",
+            "navigate",
+            "fill_prompt",
+            "click_send",
+            "wait_response",
+            "capture_answer",
+        ]:
+            if next(step for step in steps if step.name == name).status in {"pending", "running"}:
+                _mark_step(steps, name, "passed", f"{name} completed")
         answer = _redact(answer).strip()
         if not answer:
-            raise RuntimeError("empty response from browser AI")
+            raise BrowserAiStepError("capture_answer", "empty response from browser AI")
     except Exception as exc:
         message = _redact(str(exc)) or "browser AI execution failed"
+        failed_step = _step_error_step(exc)
+        _pass_before_failed(steps, failed_step)
+        _mark_step(steps, failed_step, "failed", message)
+        _skip_after_failed(steps, failed_step)
+        _finish_pending_steps(steps)
         run.status = AgentRunStatus.FAILED.value
         run.error_message = message
         run.finished_at = datetime.now(timezone.utc)
@@ -221,24 +322,48 @@ async def execute(db: AsyncSession, request: BrowserAiRequest) -> BrowserAiRespo
             safety_gate=gate,
             browser_opened=True,
             persisted=False,
+            steps=steps,
         )
 
     artifact = _answer_artifact(task.id, run.id, answer, request.provider)
-    db.add(artifact)
-    run.status = AgentRunStatus.SUCCEEDED.value
-    run.output_summary = answer[:ANSWER_PREVIEW_CHARS]
-    run.output_log = "Browser AI visible response captured from response_selector."
-    run.raw_result_json = _redact(json.dumps({
-        "provider": request.provider,
-        "target_url_hint": _target_url_hint(request.target_url),
-        "prompt_source": request.prompt_source,
-        "prompt_hash": prompt_hash,
-        "artifact_type": "browser_ai_answer",
-        "safety": "local_browser_only_no_auth_persistence",
-    }, ensure_ascii=False))
-    run.finished_at = datetime.now(timezone.utc)
-    await db.flush()
-    await db.refresh(artifact)
+    try:
+        db.add(artifact)
+        run.status = AgentRunStatus.SUCCEEDED.value
+        run.output_summary = answer[:ANSWER_PREVIEW_CHARS]
+        run.output_log = "Browser AI visible response captured from response_selector."
+        run.raw_result_json = _redact(json.dumps({
+            "provider": request.provider,
+            "target_url_hint": _target_url_hint(request.target_url),
+            "prompt_source": request.prompt_source,
+            "prompt_hash": prompt_hash,
+            "artifact_type": "browser_ai_answer",
+            "safety": "local_browser_only_no_auth_persistence",
+        }, ensure_ascii=False))
+        run.finished_at = datetime.now(timezone.utc)
+        await db.flush()
+        await db.refresh(artifact)
+    except Exception as exc:
+        message = _safe_step_message(str(exc), "artifact persistence failed")
+        run.status = AgentRunStatus.FAILED.value
+        run.error_message = message
+        run.finished_at = datetime.now(timezone.utc)
+        _mark_step(steps, "persist_artifact", "failed", message)
+        _skip_after_failed(steps, "persist_artifact")
+        _finish_pending_steps(steps)
+        return BrowserAiResponse(
+            status="failed",
+            provider=request.provider,
+            prompt_hash=prompt_hash,
+            answer_preview="",
+            agent_run_id=run.id,
+            artifact_id=None,
+            error_message=message,
+            safety_gate=gate,
+            browser_opened=True,
+            persisted=False,
+            steps=steps,
+        )
+    _mark_step(steps, "persist_artifact", "passed", f"Artifact #{artifact.id} persisted")
     await create_event(
         db,
         task_id=task.id,
@@ -253,6 +378,7 @@ async def execute(db: AsyncSession, request: BrowserAiRequest) -> BrowserAiRespo
         actor=f"browser_ai:{request.provider}",
         message=f"Browser AI AgentRun #{run.id} succeeded",
     )
+    _mark_step(steps, "finish_run", "passed", "Browser AI run finished")
     return BrowserAiResponse(
         status="succeeded",
         provider=request.provider,
@@ -263,6 +389,7 @@ async def execute(db: AsyncSession, request: BrowserAiRequest) -> BrowserAiRespo
         safety_gate=gate,
         browser_opened=True,
         persisted=True,
+        steps=steps,
     )
 
 
@@ -351,7 +478,7 @@ class PlaywrightBrowserAiDriver:
         try:
             from playwright.async_api import async_playwright
         except ImportError as exc:
-            raise RuntimeError("Python playwright package is not installed") from exc
+            raise BrowserAiStepError("open_browser", "Python playwright package is not installed") from exc
 
         timeout_ms = timeout_seconds * 1000
         async with async_playwright() as p:
@@ -359,38 +486,59 @@ class PlaywrightBrowserAiDriver:
             browser = None
             context = None
             try:
-                if settings.browser_ai_user_data_dir:
-                    context = await p.chromium.launch_persistent_context(
-                        settings.browser_ai_user_data_dir,
-                        **launch_kwargs,
-                    )
-                else:
-                    browser = await p.chromium.launch(**launch_kwargs)
-                    context = await browser.new_context()
+                try:
+                    if settings.browser_ai_user_data_dir:
+                        context = await p.chromium.launch_persistent_context(
+                            settings.browser_ai_user_data_dir,
+                            **launch_kwargs,
+                        )
+                    else:
+                        browser = await p.chromium.launch(**launch_kwargs)
+                        context = await browser.new_context()
+                except Exception as exc:
+                    raise BrowserAiStepError("open_browser", "browser launch failed") from exc
                 page = await context.new_page()
-                await page.goto(request.target_url, wait_until="domcontentloaded", timeout=timeout_ms)
-                input_box = page.locator(request.input_selector).first
-                await input_box.fill(prompt, timeout=timeout_ms)
+                try:
+                    await page.goto(request.target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                except Exception as exc:
+                    raise BrowserAiStepError("navigate", "navigation timeout or target page failed to load") from exc
+                try:
+                    input_box = page.locator(request.input_selector).first
+                    await input_box.fill(prompt, timeout=timeout_ms)
+                except Exception as exc:
+                    raise BrowserAiStepError("fill_prompt", "input selector not found or not fillable") from exc
                 previous_answer = ""
                 response_box = page.locator(request.response_selector).first
                 if await response_box.count() > 0:
                     previous_answer = (await response_box.inner_text(timeout=1000)).strip()
-                await page.locator(request.send_selector).first.click(timeout=timeout_ms)
-                await page.wait_for_selector(request.response_selector, timeout=timeout_ms)
-                await page.wait_for_function(
-                    """([selector, previous]) => {
-                        const node = document.querySelector(selector);
-                        return node && node.innerText.trim() && node.innerText.trim() !== previous;
-                    }""",
-                    arg=[request.response_selector, previous_answer],
-                    timeout=timeout_ms,
-                )
+                try:
+                    await page.locator(request.send_selector).first.click(timeout=timeout_ms)
+                except Exception as exc:
+                    raise BrowserAiStepError("click_send", "send selector not found or not clickable") from exc
+                try:
+                    await page.wait_for_selector(request.response_selector, timeout=timeout_ms)
+                    await page.wait_for_function(
+                        """([selector, previous]) => {
+                            const node = document.querySelector(selector);
+                            return node && node.innerText.trim() && node.innerText.trim() !== previous;
+                        }""",
+                        arg=[request.response_selector, previous_answer],
+                        timeout=timeout_ms,
+                    )
+                except Exception as exc:
+                    raise BrowserAiStepError(
+                        "wait_response",
+                        "timeout waiting for response; login may be required or selector may be wrong",
+                    ) from exc
                 if request.scroll_container_selector:
                     await page.locator(request.scroll_container_selector).first.evaluate(
                         "node => { node.scrollTop = node.scrollHeight; }",
                         timeout=timeout_ms,
                     )
-                answer = await _read_answer_text(page, request, timeout_ms)
+                try:
+                    answer = await _read_answer_text(page, request, timeout_ms)
+                except Exception as exc:
+                    raise BrowserAiStepError("capture_answer", "failed to capture visible response") from exc
                 return answer.strip()
             finally:
                 if context is not None:

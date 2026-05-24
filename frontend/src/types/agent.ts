@@ -467,6 +467,13 @@ export interface BrowserAiSafetyGate {
   blocked_reasons: string[]
 }
 
+export interface BrowserAiStep {
+  name: string
+  status: string
+  message: string
+  sensitive: boolean
+}
+
 export interface BrowserAiResponse {
   status: string
   provider: string
@@ -478,4 +485,5 @@ export interface BrowserAiResponse {
   safety_gate: BrowserAiSafetyGate
   browser_opened: boolean
   persisted: boolean
+  steps: BrowserAiStep[]
 }

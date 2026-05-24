@@ -13,6 +13,13 @@ class BrowserAiSafetyGate(BaseModel):
     blocked_reasons: list[str] = Field(default_factory=list)
 
 
+class BrowserAiStep(BaseModel):
+    name: str
+    status: str
+    message: str = ""
+    sensitive: bool = False
+
+
 class BrowserAiRequest(BaseModel):
     project_id: int
     task_id: int
@@ -39,3 +46,4 @@ class BrowserAiResponse(BaseModel):
     safety_gate: BrowserAiSafetyGate
     browser_opened: bool = False
     persisted: bool = False
+    steps: list[BrowserAiStep] = Field(default_factory=list)

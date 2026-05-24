@@ -168,6 +168,9 @@
           <span class="label-badge label-provider">No hidden API</span>
           <span class="label-badge label-merged">No auto merge</span>
         </div>
+        <p class="browser-ai-help">
+          If the input box or send button is not found, check selectors. If waiting for an answer times out, manual login may be required.
+        </p>
         <div class="browser-ai-form">
           <label>
             provider
@@ -234,6 +237,18 @@
           </div>
           <pre>{{ formatBrowserAiSafetyGate(browserAiDryRunResult.safety_gate) }}</pre>
           <p v-if="browserAiDryRunResult.error_message" class="run-error">{{ browserAiDryRunResult.error_message }}</p>
+          <div class="browser-ai-steps">
+            <strong>run steps</strong>
+            <ul>
+              <li v-for="step in browserAiDryRunResult.steps" :key="`dry-${step.name}`" :class="['browser-ai-step', step.status]">
+                <span class="step-name">{{ step.name }}</span>
+                <span class="step-status">{{ step.status }}</span>
+                <span class="step-message">
+                  <template v-if="step.status === 'failed'">Failed at {{ step.name }}: </template>{{ step.message || stepHint(step.name, step.status) }}
+                </span>
+              </li>
+            </ul>
+          </div>
         </div>
         <div v-if="browserAiExecuteResult" class="real-ai-result">
           <strong>browser execute result</strong>
@@ -246,6 +261,21 @@
           </div>
           <p v-if="browserAiExecuteResult.answer_preview" class="run-output">{{ browserAiExecuteResult.answer_preview }}</p>
           <p v-if="browserAiExecuteResult.error_message" class="run-error">{{ browserAiExecuteResult.error_message }}</p>
+          <div class="browser-ai-steps">
+            <strong>run steps</strong>
+            <ul>
+              <li v-for="step in browserAiExecuteResult.steps" :key="`exec-${step.name}`" :class="['browser-ai-step', step.status]">
+                <span class="step-name">{{ step.name }}</span>
+                <span class="step-status">{{ step.status }}</span>
+                <span class="step-message">
+                  <template v-if="step.status === 'failed'">Failed at {{ step.name }}: </template>{{ step.message || stepHint(step.name, step.status) }}
+                </span>
+              </li>
+            </ul>
+            <p v-if="browserAiFailedStep" class="run-error">
+              Failed at {{ browserAiFailedStep.name }}: {{ browserAiFailedStep.message || stepHint(browserAiFailedStep.name, browserAiFailedStep.status) }}
+            </p>
+          </div>
         </div>
       </section>
 
@@ -895,6 +925,7 @@ const browserAiLoading = ref(false)
 const browserAiError = ref('')
 const browserAiDryRunResult = ref<BrowserAiResponse | null>(null)
 const browserAiExecuteResult = ref<BrowserAiResponse | null>(null)
+const browserAiFailedStep = computed(() => browserAiExecuteResult.value?.steps.find(step => step.status === 'failed') || null)
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -1042,6 +1073,26 @@ function formatSafetyGate(gate: AiDispatchSafetyGate) {
 
 function formatBrowserAiSafetyGate(gate: BrowserAiSafetyGate) {
   return JSON.stringify(gate, null, 2)
+}
+
+function stepHint(name: string, status: string) {
+  if (status === 'failed') {
+    const hints: Record<string, string> = {
+      validate_request: 'Request blocked by safety gate or missing selector.',
+      build_prompt: 'Task context could not be loaded.',
+      open_browser: 'Browser launch failed.',
+      navigate: 'Target page could not be loaded.',
+      fill_prompt: 'Input box was not found or could not be filled.',
+      click_send: 'Send button was not found or could not be clicked.',
+      wait_response: 'Timed out waiting for an answer; manual login may be required or selector may be wrong.',
+      capture_answer: 'Visible answer could not be captured from response_selector.',
+      persist_artifact: 'Answer could not be saved.',
+    }
+    return hints[name] || 'Browser AI step failed.'
+  }
+  if (status === 'skipped') return 'Skipped after previous step.'
+  if (status === 'running') return 'Running...'
+  return status
 }
 
 function buildBrowserAiRequest(): BrowserAiRequest | null {
@@ -1411,10 +1462,21 @@ async function handleCreateAgentReview() {
 .real-ai-sandbox { padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; display: flex; flex-direction: column; gap: 6px; }
 .real-ai-sandbox strong { font-size: 13px; }
 .browser-ai-run { border-left: 3px solid #00897b; }
+.browser-ai-help { margin: 8px 0 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
 .browser-ai-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
 .browser-ai-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
 .browser-ai-form .wide { grid-column: 1 / -1; }
 .browser-ai-form textarea { min-height: 90px; resize: vertical; }
+.browser-ai-steps { display: flex; flex-direction: column; gap: 8px; }
+.browser-ai-steps ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.browser-ai-step { display: grid; grid-template-columns: minmax(120px, 1fr) 76px minmax(0, 2fr); gap: 8px; align-items: center; padding: 7px 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; font-size: 12px; }
+.browser-ai-step.failed { border-color: #f5b5b5; background: #fff5f5; color: #b71c1c; }
+.browser-ai-step.passed { border-color: #b7dfc3; background: #f5fbf7; }
+.browser-ai-step.running { border-color: #bbd4f6; background: #f5f9ff; }
+.browser-ai-step.skipped { color: var(--color-text-secondary); background: #f5f5f5; }
+.browser-ai-step .step-name { font-weight: 600; word-break: break-word; }
+.browser-ai-step .step-status { font-family: monospace; }
+.browser-ai-step .step-message { word-break: break-word; }
 .roles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; font-size: 14px; }
 .loading { text-align: center; padding: 60px; color: var(--color-text-secondary); }
 .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--color-border); }
