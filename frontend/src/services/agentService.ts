@@ -9,6 +9,7 @@ import type {
   AiHandoffPreviewRequest, AiHandoffPreviewResponse,
   AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse,
   BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse,
+  McpToolDescriptor, McpCallRequest, McpCallResponse,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -175,5 +176,16 @@ export async function dryRunBrowserAi(body: BrowserAiRequest): Promise<BrowserAi
 
 export async function executeBrowserAi(body: BrowserAiRequest): Promise<BrowserAiResponse> {
   const { data } = await client.post('/browser-ai/execute', body)
+  return data.data
+}
+
+// ── MCP Bridge / read-only + dry-run tool semantics ──
+export async function fetchMcpTools(): Promise<McpToolDescriptor[]> {
+  const { data } = await client.get('/mcp/tools')
+  return data.data || []
+}
+
+export async function callMcpTool(body: McpCallRequest): Promise<McpCallResponse> {
+  const { data } = await client.post('/mcp/call', body)
   return data.data
 }
