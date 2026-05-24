@@ -1,3 +1,4 @@
+import asyncio
 import dataclasses
 import json
 
@@ -47,6 +48,7 @@ class ClipboardDriver:
 
     async def run(self, request, prompt: str, timeout_seconds: int) -> str:
         from app.services.browser_ai_service import _prefer_related_clipboard_answer
+        await asyncio.sleep(0)
         return _prefer_related_clipboard_answer(self.answer, self.copied)
 
 
@@ -332,13 +334,14 @@ async def test_step_driver_wait_response_timeout_marks_failed_step(client, valid
 @pytest.mark.asyncio
 async def test_step_messages_are_redacted(client, valid_body, monkeypatch):
     from app.services import browser_ai_service
-    forbidden = [
+    forbidden = ["step-secret", "step-cookie", "step-session", "sk-123456789012345678901234567890"]
+    raw_message = " ".join([
         "password=step-secret",
         "cookie=step-cookie",
         "session=step-session",
         "sk-123456789012345678901234567890",
-    ]
-    browser_ai_service.set_driver_override(StepFailingDriver("wait_response", " ".join(forbidden)))
+    ])
+    browser_ai_service.set_driver_override(StepFailingDriver("wait_response", raw_message))
     _install_settings(monkeypatch, browser_ai_enabled=True, _browser_ai_provider_allowlist_raw="custom")
 
     resp = await client.post(f"{BASE}/execute", json=valid_body)

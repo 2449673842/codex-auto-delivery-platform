@@ -25,6 +25,7 @@ ANSWER_PREVIEW_CHARS = 1200
 STABLE_TEXT_POLLS = 3
 STABLE_TEXT_INTERVAL_MS = 500
 SENSITIVE_ASSIGNMENT_KEYS = {"cookie", "session", "password", "token", "api_key"}
+TASK_NOT_FOUND_FOR_PROJECT = "Task not found for project"
 STEP_ORDER = [
     "validate_request",
     "build_prompt",
@@ -260,16 +261,16 @@ async def execute(db: AsyncSession, request: BrowserAiRequest) -> BrowserAiRespo
 
     task = await _get_task(db, request.task_id, request.project_id)
     if task is None:
-        gate.blocked_reasons.append("Task not found for project")
+        gate.blocked_reasons.append(TASK_NOT_FOUND_FOR_PROJECT)
         gate.gate_passed = False
-        _mark_step(steps, "build_prompt", "failed", "Task not found for project")
+        _mark_step(steps, "build_prompt", "failed", TASK_NOT_FOUND_FOR_PROJECT)
         _finish_pending_steps(steps)
         return BrowserAiResponse(
             status="blocked",
             provider=request.provider,
             prompt_hash=prompt_hash,
             safety_gate=gate,
-            error_message="Task not found for project",
+            error_message=TASK_NOT_FOUND_FOR_PROJECT,
             steps=steps,
         )
 

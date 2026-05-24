@@ -469,7 +469,7 @@ export interface BrowserAiSafetyGate {
 
 export interface BrowserAiStep {
   name: string
-  status: 'pending' | 'running' | 'passed' | 'failed' | 'skipped' | string
+  status: string
   message: string
   sensitive: boolean
 }
