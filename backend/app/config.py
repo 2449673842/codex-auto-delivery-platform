@@ -60,6 +60,9 @@ class Settings:
     browser_ai_headless: bool = os.getenv("BROWSER_AI_HEADLESS", "").lower() in ("1", "true", "yes")  # NOSONAR
     _browser_ai_provider_allowlist_raw: str = os.getenv("BROWSER_AI_PROVIDER_ALLOWLIST", "custom")  # NOSONAR
     browser_ai_default_timeout_seconds: int = int(os.getenv("BROWSER_AI_DEFAULT_TIMEOUT_SECONDS", "180"))  # NOSONAR
+    browser_ai_response_timeout_seconds: int = int(os.getenv("BROWSER_AI_RESPONSE_TIMEOUT_SECONDS", "180"))  # NOSONAR
+    browser_ai_stable_polls: int = int(os.getenv("BROWSER_AI_STABLE_POLLS", "5"))  # NOSONAR
+    browser_ai_stable_interval_ms: int = int(os.getenv("BROWSER_AI_STABLE_INTERVAL_MS", "800"))  # NOSONAR
     browser_ai_user_data_dir: str = os.getenv("BROWSER_AI_USER_DATA_DIR", "")  # NOSONAR
 
     @property

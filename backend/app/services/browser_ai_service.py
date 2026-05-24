@@ -22,8 +22,6 @@ SUPPORTED_PROVIDERS = {"custom"}
 PROMPT_SOURCES = {"task_goal", "handoff_packet", "answer_synthesis", "custom_prompt"}
 MAX_TIMEOUT_SECONDS = 600
 ANSWER_PREVIEW_CHARS = 1200
-STABLE_TEXT_POLLS = 3
-STABLE_TEXT_INTERVAL_MS = 500
 SENSITIVE_ASSIGNMENT_KEYS = {"cookie", "session", "password", "token", "api_key"}
 TASK_NOT_FOUND_FOR_PROJECT = "Task not found for project"
 STEP_ORDER = [
@@ -147,6 +145,19 @@ def _target_url_hint(url: str) -> str:
 def _timeout_seconds(request: BrowserAiRequest) -> int:
     raw = request.timeout_seconds or settings.browser_ai_default_timeout_seconds
     return max(1, min(raw, MAX_TIMEOUT_SECONDS))
+
+
+def _response_timeout_seconds(request: BrowserAiRequest) -> int:
+    raw = request.timeout_seconds or settings.browser_ai_response_timeout_seconds
+    return max(1, min(raw, MAX_TIMEOUT_SECONDS))
+
+
+def _stable_poll_count() -> int:
+    return max(1, min(settings.browser_ai_stable_polls, 50))
+
+
+def _stable_interval_ms() -> int:
+    return max(100, min(settings.browser_ai_stable_interval_ms, 10_000))
 
 
 def _safety_gate(request: BrowserAiRequest, *, for_execute: bool) -> BrowserAiSafetyGate:
@@ -481,6 +492,7 @@ class PlaywrightBrowserAiDriver:
             raise BrowserAiStepError("open_browser", "Python playwright package is not installed") from exc
 
         timeout_ms = timeout_seconds * 1000
+        response_timeout_ms = _response_timeout_seconds(request) * 1000
         async with async_playwright() as p:
             launch_kwargs = {"headless": settings.browser_ai_headless}
             browser = None
@@ -516,19 +528,11 @@ class PlaywrightBrowserAiDriver:
                 except Exception as exc:
                     raise BrowserAiStepError("click_send", "send selector not found or not clickable") from exc
                 try:
-                    await page.wait_for_selector(request.response_selector, timeout=timeout_ms)
-                    await page.wait_for_function(
-                        """([selector, previous]) => {
-                            const node = document.querySelector(selector);
-                            return node && node.innerText.trim() && node.innerText.trim() !== previous;
-                        }""",
-                        arg=[request.response_selector, previous_answer],
-                        timeout=timeout_ms,
-                    )
+                    await _wait_for_stable_answer(page, request, previous_answer, response_timeout_ms)
                 except Exception as exc:
                     raise BrowserAiStepError(
                         "wait_response",
-                        "timeout waiting for response; login may be required or selector may be wrong",
+                        "timeout waiting for stable response; page may still be generating, login may be required, or selector may be wrong",
                     ) from exc
                 if request.scroll_container_selector:
                     await page.locator(request.scroll_container_selector).first.evaluate(
@@ -550,12 +554,6 @@ class PlaywrightBrowserAiDriver:
 async def _read_answer_text(page, request: BrowserAiRequest, timeout_ms: int) -> str:
     response_box = page.locator(request.response_selector).first
     answer = (await response_box.inner_text(timeout=timeout_ms)).strip()
-    for _ in range(STABLE_TEXT_POLLS):
-        await page.wait_for_timeout(STABLE_TEXT_INTERVAL_MS)
-        latest = (await response_box.inner_text(timeout=timeout_ms)).strip()
-        if latest == answer:
-            break
-        answer = latest
     if not request.copy_button_selector:
         return answer
     try:
@@ -570,3 +568,49 @@ def _prefer_related_clipboard_answer(answer: str, copied: str) -> str:
     if copied and answer and (answer in copied or copied in answer):
         return copied
     return answer
+
+
+async def _wait_for_stable_answer(page, request: BrowserAiRequest, previous_answer: str, timeout_ms: int) -> str:
+    await page.wait_for_selector(request.response_selector, timeout=timeout_ms)
+    response_box = page.locator(request.response_selector).first
+    await _wait_for_answer_change(response_box, page, previous_answer, timeout_ms)
+    return await _wait_until_answer_stable(response_box, page, timeout_ms)
+
+
+async def _wait_for_answer_change(response_box, page, previous_answer: str, timeout_ms: int) -> str:
+    deadline = await _deadline_ms(page, timeout_ms)
+    while True:
+        current = (await response_box.inner_text(timeout=timeout_ms)).strip()
+        if current and current != previous_answer:
+            return current
+        if await _timed_out(page, deadline):
+            raise TimeoutError("timeout waiting for answer text to start changing")
+        await page.wait_for_timeout(_stable_interval_ms())
+
+
+async def _wait_until_answer_stable(response_box, page, timeout_ms: int) -> str:
+    deadline = await _deadline_ms(page, timeout_ms)
+    last_text = (await response_box.inner_text(timeout=timeout_ms)).strip()
+    stable_count = 0
+    while True:
+        await page.wait_for_timeout(_stable_interval_ms())
+        current = (await response_box.inner_text(timeout=timeout_ms)).strip()
+        if current and current == last_text:
+            stable_count += 1
+            if stable_count >= _stable_poll_count():
+                return current
+        else:
+            stable_count = 0
+            last_text = current
+        if await _timed_out(page, deadline):
+            raise TimeoutError("timeout waiting for stable response")
+
+
+async def _deadline_ms(page, timeout_ms: int) -> float:
+    now = await page.evaluate("Date.now()")
+    return float(now) + timeout_ms
+
+
+async def _timed_out(page, deadline_ms: float) -> bool:
+    now = await page.evaluate("Date.now()")
+    return float(now) >= deadline_ms
