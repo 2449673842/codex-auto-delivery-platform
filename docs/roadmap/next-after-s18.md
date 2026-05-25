@@ -88,6 +88,19 @@ S20 先做设计，不直接实现自动修复。
 - 平台不自动创建 PR
 - 平台不自动 merge / deploy / approve
 
+细化路线：
+
+- S20：Controlled Repair Loop with Codex 设计
+- S20.1：Failure Evidence Packet preview
+- S20.2：Repair Packet generation using Multi-AI Evidence Run
+- S20.3：Codex / OMX handoff for repair
+- S20.4：Repair Attempt Timeline
+
+设计文档：
+
+- `docs/design/controlled-repair-loop-with-codex.md`
+- `docs/roadmap/repair-loop-roadmap.md`
+
 ### S21 — PR / CI / Sonar Reader skill 真实试跑
 
 目标：验证 PR / CI / Sonar Reader 是否适合继续留在 Codex skill，而不是平台化。
