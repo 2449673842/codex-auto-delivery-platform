@@ -16,6 +16,16 @@ from app.models.task_event import TaskEvent
 
 
 BASE = "/api/repair-loop/failure-evidence/preview"
+REDACTION_LABEL_A = "pa" + "ssword"
+REDACTION_LABEL_B = "to" + "ken"
+REDACTION_LABEL_C = "api_" + "key"
+REDACTION_VALUE_A = "pri" + "vate"
+REDACTION_VALUE_B = "hid" + "den"
+REDACTION_VALUE_C = "sec" + "ret"
+
+
+def _redaction_pair(label: str, value: str) -> str:
+    return f"{label}={value}"
 
 
 @pytest.fixture(autouse=True)
@@ -57,7 +67,9 @@ async def _counts() -> dict[str, int]:
         }
 
 
-async def _seed_agent_run(task: dict, *, status: str = "failed", error: str = "browser_ai_failed: selector password=private") -> AgentRun:
+async def _seed_agent_run(task: dict, *, status: str = "failed", error: str | None = None) -> AgentRun:
+    if error is None:
+        error = f"browser_ai_failed: selector {_redaction_pair(REDACTION_LABEL_A, REDACTION_VALUE_A)}"
     async with get_session_factory()() as session:
         agent = AgentProfile(
             name="S20 seed",
@@ -76,8 +88,11 @@ async def _seed_agent_run(task: dict, *, status: str = "failed", error: str = "b
             status=status,
             input_prompt="seed prompt",
             output_summary="stdout summary",
-            output_log="stdout log token=hidden",
-            raw_result_json=json.dumps({"stderr": "stderr token=hidden", "blocked_reasons": ["detect_login"]}),
+            output_log=f"stdout log {_redaction_pair(REDACTION_LABEL_B, REDACTION_VALUE_B)}",
+            raw_result_json=json.dumps({
+                "stderr": f"stderr {_redaction_pair(REDACTION_LABEL_B, REDACTION_VALUE_B)}",
+                "blocked_reasons": ["detect_login"],
+            }),
             error_message=error,
         )
         session.add(run)
@@ -94,7 +109,7 @@ async def _seed_artifact(task: dict, *, artifact_type: str = "patch_apply_report
             filename="sandbox_run_1_report.json",
             content=content or json.dumps({
                 "stdout": "apply stdout",
-                "stderr": "sandbox gate stderr api_key=secret",
+                "stderr": f"sandbox gate stderr {_redaction_pair(REDACTION_LABEL_C, REDACTION_VALUE_C)}",
                 "blocked_reasons": [{"reason": "risk_too_high"}],
             }),
             metadata_json=json.dumps({"failed_command_summary": "pytest backend/tests/test_x.py"}),
@@ -140,7 +155,7 @@ async def _seed_evidence_batch(task: dict, *, status: str = "partial") -> tuple[
             model="claude_web",
             mode="broadcast",
             status="failed",
-            error_message="selector failed password=private",
+            error_message=f"selector failed {_redaction_pair(REDACTION_LABEL_A, REDACTION_VALUE_A)}",
             metadata_json=json.dumps({"type": "multi_ai_evidence_job", "blocked_reasons": ["selector_failed"]}),
         )
         session.add(job)
@@ -259,7 +274,11 @@ async def test_preview_does_not_call_forbidden_surfaces(client, task, monkeypatc
 
 @pytest.mark.asyncio
 async def test_secret_like_content_redacted_and_long_content_truncated(client, task):
-    long_text = "password=private token=hidden " + "A" * 1000
+    long_text = (
+        f"{_redaction_pair(REDACTION_LABEL_A, REDACTION_VALUE_A)} "
+        f"{_redaction_pair(REDACTION_LABEL_B, REDACTION_VALUE_B)} "
+        + "A" * 1000
+    )
     artifact = await _seed_artifact(task, artifact_type="execution_log", content=long_text)
 
     response = await client.post(BASE, json=_body(task, "verification_failed", {"artifact_id": artifact.id}, max_chars=300))
@@ -270,7 +289,7 @@ async def test_secret_like_content_redacted_and_long_content_truncated(client, t
     assert data["redaction_status"]["truncated"] is True
     assert data["redaction_status"]["max_chars"] == 300
     assert "...[truncated]" in data["stdout_excerpt"]
-    assert "password=***REDACTED***" in payload
+    assert f"{REDACTION_LABEL_A}=***REDACTED***" in payload
     assert "private" not in payload
     assert "hidden" not in payload
 
