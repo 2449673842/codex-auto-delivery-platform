@@ -608,3 +608,54 @@ export interface MultiAiEvidenceRunResponse {
   source_artifact_ids: number[]
   error_message: string
 }
+
+// ── Repair Loop / Failure Evidence preview only ──
+export type RepairFailureType =
+  | 'sandbox_failed'
+  | 'sandbox_gate_blocked'
+  | 'verification_failed'
+  | 'ci_failed'
+  | 'sonar_failed'
+  | 'review_blocked'
+  | 'browser_ai_failed'
+  | 'multi_ai_evidence_partial'
+
+export interface FailureEvidenceSource {
+  agent_run_id?: number | null
+  artifact_id?: number | null
+  dispatch_batch_id?: number | null
+  dispatch_job_id?: number | null
+}
+
+export interface FailureEvidencePreviewRequest {
+  task_id: number
+  failure_type: RepairFailureType
+  source: FailureEvidenceSource
+  max_excerpt_chars: number
+}
+
+export interface FailureEvidenceRedactionStatus {
+  redaction_applied: boolean
+  truncated: boolean
+  max_chars: number
+}
+
+export interface FailureEvidencePacketResponse {
+  task_id: number
+  project_id: number
+  failure_type: RepairFailureType
+  failed_step: string
+  failed_command_summary: string
+  stdout_excerpt: string
+  stderr_excerpt: string
+  blocked_reasons: string[]
+  related_agent_run_ids: number[]
+  related_artifact_ids: number[]
+  related_dispatch_batch_id: number | null
+  related_dispatch_job_ids: number[]
+  source_commit_hint: string
+  safety_notes: string[]
+  redaction_status: FailureEvidenceRedactionStatus
+  read_only: boolean
+  persisted: boolean
+}
