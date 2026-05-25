@@ -12,6 +12,7 @@ import type {
   McpToolDescriptor, McpCallRequest, McpCallResponse,
   MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse,
   FailureEvidencePreviewRequest, FailureEvidencePacketResponse,
+  RepairPacketGenerateRequest, RepairPacketResponse,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -200,6 +201,11 @@ export async function fetchMultiAiEvidenceRuns(taskId: number): Promise<MultiAiE
 // ── Repair Loop / Failure Evidence preview only ──
 export async function previewFailureEvidencePacket(body: FailureEvidencePreviewRequest): Promise<FailureEvidencePacketResponse> {
   const { data } = await client.post('/repair-loop/failure-evidence/preview', body)
+  return data.data
+}
+
+export async function generateRepairPacket(body: RepairPacketGenerateRequest): Promise<RepairPacketResponse> {
+  const { data } = await client.post('/repair-loop/repair-packet/generate', body)
   return data.data
 }
 

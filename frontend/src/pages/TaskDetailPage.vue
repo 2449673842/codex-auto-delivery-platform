@@ -533,6 +533,100 @@
         </div>
       </section>
 
+      <!-- Repair Packet Generation -->
+      <section class="card repair-packet-generation">
+        <div class="section-header">
+          <h2>Repair Packet Generation / 修复交接包生成</h2>
+          <span class="workspace-readonly">Evidence-to-handoff only</span>
+        </div>
+        <div class="workspace-safety">
+          <span class="label-badge label-ai">Repair Packet does not modify code</span>
+          <span class="label-badge label-provider">Codex / OMX or user must execute repair</span>
+          <span class="label-badge label-applied">No repository writes</span>
+          <span class="label-badge label-exec">No auto PR / merge / deploy</span>
+          <span class="label-badge label-redacted">max_attempts defaults to 1</span>
+        </div>
+        <p class="section-note">Uses the current Failure Evidence Packet. Generate one before creating a repair packet.</p>
+        <div class="repair-packet-form">
+          <label>
+            analysis_mode
+            <select v-model="repairPacketForm.analysis_mode">
+              <option value="broadcast">broadcast</option>
+              <option value="routed">routed</option>
+            </select>
+          </label>
+          <label v-if="repairPacketForm.analysis_mode === 'broadcast'">
+            providers
+            <select v-model="repairPacketForm.providers" multiple>
+              <option v-for="profile in evidenceProviderOptions" :key="`repair-${profile.provider}`" :value="profile.provider">
+                {{ profile.display_name }}
+              </option>
+            </select>
+          </label>
+          <label>
+            max_attempts
+            <input v-model.number="repairPacketForm.max_attempts" type="number" min="1" max="1" />
+          </label>
+          <div v-if="repairPacketForm.analysis_mode === 'routed'" class="routed-role-list">
+            <strong>routed roles</strong>
+            <div v-for="(role, index) in repairPacketForm.roles" :key="`repair-role-${index}`" class="routed-role-row">
+              <input v-model="role.role" placeholder="role" />
+              <select v-model="role.provider">
+                <option v-for="profile in evidenceProviderOptions" :key="`repair-role-provider-${index}-${profile.provider}`" :value="profile.provider">
+                  {{ profile.display_name }}
+                </option>
+              </select>
+              <input v-model="role.prompt" placeholder="role prompt" />
+              <button class="btn btn-sm" @click="removeRepairRole(index)" :disabled="repairPacketForm.roles.length <= 1">Remove</button>
+            </div>
+            <button class="btn btn-sm" @click="addRepairRole">+ Add role</button>
+          </div>
+          <div class="form-actions wide">
+            <button class="btn btn-primary btn-sm" @click="generateRepairPacketFromEvidence" :disabled="repairPacketLoading || !failureEvidencePacket">
+              Generate Repair Packet
+            </button>
+          </div>
+        </div>
+        <p v-if="repairPacketError" class="run-error">{{ repairPacketError }}</p>
+        <div v-if="repairPacketResult" class="real-ai-result repair-packet-result">
+          <strong>repair packet</strong>
+          <div class="dispatch-job-meta">
+            <span>repair_packet_artifact_id: {{ repairPacketResult.repair_packet_artifact_id || '-' }}</span>
+            <span>human_decision_required={{ repairPacketResult.human_decision_required }}</span>
+            <span>persisted={{ repairPacketResult.persisted }}</span>
+            <span>analysis_status: {{ repairPacketResult.analysis_status }}</span>
+            <span>max_attempts={{ repairPacketResult.max_attempts }}</span>
+          </div>
+          <p class="run-output">{{ repairPacketResult.failure_summary }}</p>
+          <div v-if="repairPacketResult.suspected_root_causes.length" class="repair-list">
+            <strong>suspected_root_causes</strong>
+            <span v-for="item in repairPacketResult.suspected_root_causes" :key="item">{{ item }}</span>
+          </div>
+          <p v-if="repairPacketResult.recommended_fix_strategy" class="run-output">{{ repairPacketResult.recommended_fix_strategy }}</p>
+          <div v-if="repairPacketResult.files_likely_involved.length" class="repair-list">
+            <strong>files_likely_involved</strong>
+            <span v-for="item in repairPacketResult.files_likely_involved" :key="item">{{ item }}</span>
+          </div>
+          <div v-if="repairPacketResult.commands_to_verify.length" class="repair-list">
+            <strong>commands_to_verify</strong>
+            <span v-for="item in repairPacketResult.commands_to_verify" :key="item">{{ item }}</span>
+          </div>
+          <div v-if="repairPacketResult.risks.length" class="run-error">
+            <span>risks:</span>
+            <span v-for="risk in repairPacketResult.risks" :key="risk">{{ risk }}</span>
+          </div>
+          <div v-if="repairPacketResult.do_not_do.length" class="repair-list">
+            <strong>do_not_do</strong>
+            <span v-for="item in repairPacketResult.do_not_do" :key="item">{{ item }}</span>
+          </div>
+          <div class="safety-notes">
+            <span v-for="note in repairPacketResult.safety_notes" :key="note" class="label-badge label-ai">{{ note }}</span>
+          </div>
+          <strong>codex_handoff_prompt preview</strong>
+          <pre>{{ repairPacketResult.codex_handoff_prompt }}</pre>
+        </div>
+      </section>
+
       <!-- Agent Runs -->
       <section class="card">
         <div class="section-header">
@@ -1167,12 +1261,12 @@ import {
   fetchDispatchBatches, previewAnswerSynthesis, previewAiHandoff,
   dryRunAiDispatch, executeAiDispatch,
   dryRunBrowserAi, executeBrowserAi, fetchBrowserAiProviderProfiles,
-  previewMultiAiEvidenceRun, executeMultiAiEvidenceRun, previewFailureEvidencePacket,
+  previewMultiAiEvidenceRun, executeMultiAiEvidenceRun, previewFailureEvidencePacket, generateRepairPacket,
   fetchCodeContext,
   applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate, evaluateSandboxGate,
   fetchMcpTools, callMcpTool,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse, RepairPacketGenerateRequest, RepairPacketResponse } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -1307,6 +1401,18 @@ const failureEvidenceForm = ref<FailureEvidencePreviewRequest>({
 const failureEvidencePacket = ref<FailureEvidencePacketResponse | null>(null)
 const failureEvidenceLoading = ref(false)
 const failureEvidenceError = ref('')
+const repairPacketForm = ref<Omit<RepairPacketGenerateRequest, 'task_id' | 'failure_evidence'>>({
+  analysis_mode: 'broadcast',
+  providers: ['chatgpt_web', 'claude_web'],
+  roles: [
+    { role: 'logs', provider: 'chatgpt_web', prompt: 'Analyze failure logs and likely root cause.' },
+    { role: 'risk', provider: 'claude_web', prompt: 'Analyze repair risks and verification commands.' },
+  ],
+  max_attempts: 1,
+})
+const repairPacketResult = ref<RepairPacketResponse | null>(null)
+const repairPacketLoading = ref(false)
+const repairPacketError = ref('')
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -1524,6 +1630,18 @@ function buildFailureEvidenceRequest(): FailureEvidencePreviewRequest | null {
   }
 }
 
+function buildRepairPacketRequest(): RepairPacketGenerateRequest | null {
+  if (!task.value || !failureEvidencePacket.value) return null
+  return {
+    task_id: task.value.id,
+    failure_evidence: failureEvidencePacket.value,
+    analysis_mode: repairPacketForm.value.analysis_mode,
+    providers: repairPacketForm.value.analysis_mode === 'broadcast' ? repairPacketForm.value.providers : [],
+    roles: repairPacketForm.value.analysis_mode === 'routed' ? repairPacketForm.value.roles : [],
+    max_attempts: 1,
+  }
+}
+
 function addEvidenceRole() {
   multiAiForm.value.roles.push({ role: 'risk', provider: 'gemini_web', prompt: 'Check risks and missing evidence.' })
 }
@@ -1531,6 +1649,15 @@ function addEvidenceRole() {
 function removeEvidenceRole(index: number) {
   if (multiAiForm.value.roles.length <= 1) return
   multiAiForm.value.roles.splice(index, 1)
+}
+
+function addRepairRole() {
+  repairPacketForm.value.roles.push({ role: 'test', provider: 'gemini_web', prompt: 'Suggest verification commands and residual risks.' })
+}
+
+function removeRepairRole(index: number) {
+  if (repairPacketForm.value.roles.length <= 1) return
+  repairPacketForm.value.roles.splice(index, 1)
 }
 
 onMounted(async () => {
@@ -1718,11 +1845,29 @@ async function previewFailureEvidence() {
   failureEvidenceError.value = ''
   try {
     failureEvidencePacket.value = await previewFailureEvidencePacket(body)
+    repairPacketResult.value = null
   } catch (e: any) {
     failureEvidencePacket.value = null
     failureEvidenceError.value = e.message || 'Failure Evidence Packet preview failed'
   } finally {
     failureEvidenceLoading.value = false
+  }
+}
+
+async function generateRepairPacketFromEvidence() {
+  const body = buildRepairPacketRequest()
+  if (!body) return
+  repairPacketLoading.value = true
+  repairPacketError.value = ''
+  try {
+    repairPacketResult.value = await generateRepairPacket(body)
+    artifactRefreshKey.value += 1
+    await loadAiHandoff()
+  } catch (e: any) {
+    repairPacketResult.value = null
+    repairPacketError.value = e.message || 'Repair Packet generation failed'
+  } finally {
+    repairPacketLoading.value = false
   }
 }
 
@@ -2040,6 +2185,7 @@ async function handleCreateAgentReview() {
 .browser-ai-run { border-left: 3px solid #00897b; }
 .multi-ai-evidence-run { border-left: 3px solid #6a1b9a; }
 .failure-evidence-preview { border-left: 3px solid #ad5700; }
+.repair-packet-generation { border-left: 3px solid #2e7d32; }
 .browser-ai-help { margin: 8px 0 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
 .browser-ai-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
 .browser-ai-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
@@ -2053,6 +2199,11 @@ async function handleCreateAgentReview() {
 .failure-evidence-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
 .failure-evidence-form .wide { grid-column: 1 / -1; }
 .failure-evidence-result pre { max-height: 420px; overflow: auto; }
+.repair-packet-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
+.repair-packet-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
+.repair-packet-form .wide { grid-column: 1 / -1; }
+.repair-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.repair-list span { padding: 3px 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; font-size: 12px; color: var(--color-text-secondary); }
 .provider-picker { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
 .checkbox-row { display: inline-flex !important; flex-direction: row !important; align-items: center; gap: 6px !important; }
 .routed-roles { display: flex; flex-direction: column; gap: 8px; }

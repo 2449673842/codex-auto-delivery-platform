@@ -1,3 +1,4 @@
+import hashlib
 import json
 from typing import Any
 
@@ -12,12 +13,18 @@ from app.models.dispatch_job import DispatchJob
 from app.models.task import Task
 from app.models.task_artifact import TaskArtifact
 from app.models.task_event import TaskEvent
+from app.schemas.answer_synthesis import AnswerSynthesisPreviewRequest
+from app.schemas.multi_ai_evidence_run import MultiAiEvidenceRunRequest
 from app.schemas.repair_loop import (
     REPAIR_FAILURE_TYPES,
     FailureEvidencePacketResponse,
     FailureEvidencePreviewRequest,
     FailureEvidenceRedactionStatus,
+    RepairEvidenceBySource,
+    RepairPacketGenerateRequest,
+    RepairPacketResponse,
 )
+from app.services import answer_synthesis_service, multi_ai_evidence_run_service
 from app.services.ai_output_governance_service import redact_secrets
 
 
@@ -39,6 +46,25 @@ SAFETY_NOTES = [
     "No repository writes, PR, CI, Sonar, Deploy, approve, or merge are performed.",
     "Secrets are redacted and excerpts are bounded before returning the packet.",
     "Project.root_path is not scanned or modified.",
+]
+
+REPAIR_PACKET_SAFETY_NOTES = [
+    "Repair Packet Generation uses evidence collection only; it does not modify code.",
+    "Codex / OMX or the user must execute the repair outside the platform.",
+    "No repository writes, PR, CI, Sonar, Deploy, approve, or merge are performed.",
+    "max_attempts defaults to 1 and no automatic next attempt is started.",
+]
+
+DO_NOT_DO = [
+    "Do not read `.env`.",
+    "Do not read `secret_ref`.",
+    "Do not expose API keys, cookies, sessions, or passwords.",
+    "Do not write unrelated files.",
+    "Do not auto merge.",
+    "Do not auto deploy.",
+    "Do not bypass tests.",
+    "Do not bypass Browser AI login or captcha.",
+    "Verify current master before acting.",
 ]
 
 
@@ -143,6 +169,75 @@ async def preview(db: AsyncSession, body: FailureEvidencePreviewRequest) -> Fail
     if not collector.blocked_reasons:
         collector.add_reason(body.failure_type)
     return collector.response(task, body.failure_type)
+
+
+async def generate_repair_packet(db: AsyncSession, body: RepairPacketGenerateRequest) -> RepairPacketResponse:
+    if body.failure_evidence.failure_type not in REPAIR_FAILURE_TYPES:
+        raise HTTPException(status_code=400, detail="unknown_failure_type")
+    if body.analysis_mode not in {"broadcast", "routed"}:
+        raise HTTPException(status_code=400, detail="invalid_analysis_mode")
+    if body.max_attempts != 1:
+        raise HTTPException(status_code=400, detail="max_attempts_must_be_1_for_s20_2")
+    if body.failure_evidence.task_id != body.task_id:
+        raise HTTPException(status_code=400, detail="failure_evidence_task_mismatch")
+
+    task = await db.get(Task, body.task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    if task.project_id != body.failure_evidence.project_id:
+        raise HTTPException(status_code=400, detail="failure_evidence_project_mismatch")
+
+    evidence_prompt = _repair_analysis_prompt(task, body.failure_evidence)
+    evidence_request = MultiAiEvidenceRunRequest(
+        task_id=task.id,
+        mode=body.analysis_mode,
+        providers=body.providers if body.analysis_mode == "broadcast" else [],
+        roles=body.roles if body.analysis_mode == "routed" else [],
+        prompt_source="custom_prompt",
+        custom_prompt=evidence_prompt,
+        concurrency_limit=2,
+    )
+    analysis = await multi_ai_evidence_run_service.execute(db, evidence_request)
+    if analysis.overall_status == "blocked":
+        raise HTTPException(status_code=400, detail=analysis.error_message or "repair_analysis_blocked")
+
+    try:
+        synthesis = await answer_synthesis_service.preview(
+            db,
+            AnswerSynthesisPreviewRequest(
+                task_id=task.id,
+                dispatch_batch_id=analysis.dispatch_batch_id,
+                include_artifacts=True,
+                max_artifact_chars=1600,
+            ),
+        )
+    except Exception:
+        synthesis = None
+
+    packet = _build_repair_packet(task, body, analysis, synthesis)
+    artifact = _repair_packet_artifact(task.id, packet)
+    db.add(artifact)
+    await db.flush()
+    await db.refresh(artifact)
+    packet.repair_packet_artifact_id = artifact.id
+    artifact.content = _safe_json(packet.model_dump())
+    data = artifact.content.encode("utf-8")
+    artifact.size_bytes = len(data)
+    artifact.sha256 = hashlib.sha256(data).hexdigest()
+    artifact.metadata_json = _safe_json({
+        "type": "repair_packet",
+        "source_failure_type": packet.source_failure_type,
+        "source_artifact_ids": packet.source_artifact_ids,
+        "source_agent_run_ids": packet.source_agent_run_ids,
+        "source_dispatch_batch_id": packet.source_dispatch_batch_id,
+        "analysis_dispatch_batch_id": packet.analysis_dispatch_batch_id,
+        "human_decision_required": True,
+        "max_attempts": packet.max_attempts,
+        "does_not_modify_code": True,
+    })
+    await db.commit()
+    await db.refresh(artifact)
+    return packet
 
 
 async def _collect_requested_sources(
@@ -333,6 +428,251 @@ def _collect_job(job: DispatchJob, collector: _EvidenceCollector) -> None:
         collector._append_unique(collector.agent_run_ids, job.agent_run_id)
 
 
+def _repair_analysis_prompt(task: Task, evidence: FailureEvidencePacketResponse) -> str:
+    payload = {
+        "task": {
+            "task_id": task.id,
+            "project_id": task.project_id,
+            "title": task.title,
+            "description": task.description,
+            "status": task.status,
+        },
+        "failure_evidence": evidence.model_dump(),
+        "expected_output": {
+            "failure_summary": "Concise description of what failed.",
+            "suspected_root_causes": ["likely cause"],
+            "recommended_fix_strategy": "Smallest safe repair strategy.",
+            "files_likely_involved": ["path hints only if evidence supports them"],
+            "commands_to_verify": ["verification command suggestions"],
+            "risks": ["remaining risk"],
+        },
+        "safety_boundaries": DO_NOT_DO,
+    }
+    return (
+        "Analyze this failure evidence for a controlled repair packet. "
+        "Do not propose automatic repository writes, PR creation, merge, deploy, or approve actions. "
+        "Return repair guidance for Codex / OMX or the user to execute manually.\n\n"
+        f"{_redact(json.dumps(payload, ensure_ascii=False, default=str))}"
+    )
+
+
+def _build_repair_packet(
+    task: Task,
+    body: RepairPacketGenerateRequest,
+    analysis,
+    synthesis,
+) -> RepairPacketResponse:
+    evidence = body.failure_evidence
+    job_findings = _analysis_job_findings(analysis)
+    failed_jobs = _analysis_failed_jobs(analysis)
+    common_findings = _synthesis_list(synthesis, "common_findings")
+    disagreements = _synthesis_list(synthesis, "disagreements")
+    recommended_actions = _synthesis_list(synthesis, "recommended_actions")
+    next_questions = _synthesis_list(synthesis, "next_questions")
+    artifact_summaries = _synthesis_list(synthesis, "artifact_summaries")
+
+    packet = RepairPacketResponse(
+        task_id=task.id,
+        project_id=task.project_id,
+        failure_summary=_failure_summary(evidence),
+        suspected_root_causes=_suspected_root_causes(evidence, common_findings, job_findings),
+        evidence_by_source=_evidence_by_source(evidence, analysis, artifact_summaries),
+        multi_ai_findings=_unique([*common_findings, *job_findings])[:12],
+        disagreements=_unique([*disagreements, *next_questions])[:8],
+        recommended_fix_strategy=_recommended_fix_strategy(recommended_actions),
+        files_likely_involved=_files_likely_involved(evidence, job_findings, common_findings),
+        commands_to_verify=_commands_to_verify(evidence),
+        risks=_repair_risks(evidence, analysis, synthesis, failed_jobs, job_findings, common_findings),
+        human_decision_required=True,
+        codex_handoff_prompt="",
+        max_attempts=body.max_attempts,
+        do_not_do=DO_NOT_DO.copy(),
+        source_failure_type=evidence.failure_type,
+        source_artifact_ids=evidence.related_artifact_ids,
+        source_agent_run_ids=evidence.related_agent_run_ids,
+        source_dispatch_batch_id=evidence.related_dispatch_batch_id,
+        source_dispatch_job_ids=evidence.related_dispatch_job_ids,
+        analysis_dispatch_batch_id=analysis.dispatch_batch_id,
+        analysis_status=analysis.overall_status,
+        read_only=False,
+        persisted=True,
+        safety_notes=[
+            *REPAIR_PACKET_SAFETY_NOTES,
+            *analysis.safety_gate.safety_notes,
+        ],
+    )
+    packet.codex_handoff_prompt = _codex_handoff_prompt(task, packet)
+    return _redact_packet(packet)
+
+
+def _analysis_job_findings(analysis) -> list[str]:
+    return [
+        f"{job.provider}/{job.role}: {job.answer_preview}"
+        for job in analysis.jobs
+        if job.status == "succeeded" and job.answer_preview
+    ]
+
+
+def _analysis_failed_jobs(analysis) -> list[str]:
+    return [
+        f"{job.provider}/{job.role}: {job.error_message}"
+        for job in analysis.jobs
+        if job.status in {"failed", "blocked"} and job.error_message
+    ]
+
+
+def _synthesis_list(synthesis, field: str) -> list[Any]:
+    return list(getattr(synthesis, field, []) or []) if synthesis else []
+
+
+def _repair_risks(
+    evidence: FailureEvidencePacketResponse,
+    analysis,
+    synthesis,
+    failed_jobs: list[str],
+    job_findings: list[str],
+    common_findings: list[Any],
+) -> list[str]:
+    risks = _unique([
+        *_synthesis_list(synthesis, "risks"),
+        *failed_jobs,
+        *evidence.blocked_reasons,
+        "Human decision is required before any repair execution.",
+    ])
+    if analysis.overall_status == "partial":
+        risks.append("Multi-AI repair analysis was partial; at least one source failed or was blocked.")
+    if not job_findings and not common_findings:
+        risks.append("No successful Multi-AI repair finding was available; rely on failure evidence and human review.")
+    return _unique(risks)[:12]
+
+
+def _files_likely_involved(
+    evidence: FailureEvidencePacketResponse,
+    job_findings: list[str],
+    common_findings: list[Any],
+) -> list[str]:
+    return _extract_file_hints(" ".join([
+        evidence.failed_command_summary,
+        evidence.stdout_excerpt,
+        evidence.stderr_excerpt,
+        " ".join(job_findings),
+        " ".join(str(item) for item in common_findings),
+    ]))
+
+
+def _recommended_fix_strategy(recommended_actions: list[Any]) -> str:
+    strategy = (
+        str(recommended_actions[0])
+        if recommended_actions
+        else "Make the smallest targeted repair based on the failure evidence, then rerun the listed verification commands."
+    )
+    return _redact(strategy)[:1200]
+
+
+def _failure_summary(evidence: FailureEvidencePacketResponse) -> str:
+    source = evidence.failed_command_summary or "; ".join(evidence.blocked_reasons) or "failure evidence collected"
+    return _redact(f"{evidence.failure_type} at {evidence.failed_step}: {source}")[:600]
+
+
+def _suspected_root_causes(
+    evidence: FailureEvidencePacketResponse,
+    common_findings: list[Any],
+    job_findings: list[str],
+) -> list[str]:
+    causes = _unique([*evidence.blocked_reasons[:4], *common_findings[:4], *job_findings[:4]])[:8]
+    return causes or [f"Failure type {evidence.failure_type} requires manual diagnosis from the collected evidence."]
+
+
+def _evidence_by_source(evidence: FailureEvidencePacketResponse, analysis, artifact_summaries: list[Any]) -> list[RepairEvidenceBySource]:
+    sources = [
+        RepairEvidenceBySource(
+            source=evidence.failed_step,
+            summary=evidence.failed_command_summary or "; ".join(evidence.blocked_reasons) or evidence.failure_type,
+            artifact_ids=evidence.related_artifact_ids,
+            agent_run_ids=evidence.related_agent_run_ids,
+            dispatch_batch_id=evidence.related_dispatch_batch_id,
+            dispatch_job_ids=evidence.related_dispatch_job_ids,
+        ),
+        RepairEvidenceBySource(
+            source="multi_ai_evidence_run",
+            summary=f"analysis_status={analysis.overall_status}",
+            artifact_ids=analysis.source_artifact_ids,
+            dispatch_batch_id=analysis.dispatch_batch_id,
+            dispatch_job_ids=[job.dispatch_job_id for job in analysis.jobs if job.dispatch_job_id],
+            agent_run_ids=[job.agent_run_id for job in analysis.jobs if job.agent_run_id],
+        ),
+    ]
+    for item in artifact_summaries[:6]:
+        data = item.model_dump() if hasattr(item, "model_dump") else dict(item)
+        artifact_id = data.get("artifact_id")
+        sources.append(RepairEvidenceBySource(
+            source="answer_synthesis_artifact",
+            summary=str(data.get("summary") or data.get("filename") or "artifact summary")[:500],
+            artifact_ids=[artifact_id] if isinstance(artifact_id, int) else [],
+        ))
+    return sources
+
+
+def _commands_to_verify(evidence: FailureEvidencePacketResponse) -> list[str]:
+    commands: list[str] = []
+    summary = evidence.failed_command_summary.strip()
+    if summary and not summary.startswith("artifact:") and not summary.startswith("agent_run:"):
+        commands.append(summary[:240])
+    if evidence.failure_type in {"sandbox_failed", "sandbox_gate_blocked", "verification_failed"}:
+        commands.append("Run the targeted failing pytest/build command from the failure evidence.")
+    if evidence.failure_type == "sonar_failed":
+        commands.append("Re-run the SonarCloud check or inspect the latest SonarCloud issue list after the fix.")
+    if evidence.failure_type == "browser_ai_failed":
+        commands.append("Re-run the Browser AI mock smoke or the relevant frontend display smoke.")
+    commands.append("Run the smallest relevant regression test before requesting review.")
+    return _unique(commands)[:6]
+
+
+def _extract_file_hints(text: str) -> list[str]:
+    hints: list[str] = []
+    for token in text.replace("\\", "/").replace('"', " ").replace("'", " ").split():
+        clean = token.strip(" ,;:()[]{}")
+        if "/" not in clean:
+            continue
+        if clean.endswith((".py", ".ts", ".vue", ".js", ".json", ".md", ".css")):
+            hints.append(clean)
+    return _unique(hints)[:10]
+
+
+def _codex_handoff_prompt(task: Task, packet: RepairPacketResponse) -> str:
+    return "\n".join([
+        "Read AGENTS.md before acting.",
+        "Verify current master before making any repair; do not trust stale commit hints.",
+        f"Task #{task.id}: {task.title}",
+        f"Failure summary: {packet.failure_summary}",
+        "Use this repair packet to make one narrow fix only.",
+        f"Recommended fix strategy: {packet.recommended_fix_strategy}",
+        f"Commands to verify: {', '.join(packet.commands_to_verify) or 'choose the smallest relevant verification command'}",
+        f"Max attempts: {packet.max_attempts}",
+        "Do not do:",
+        *[f"- {item}" for item in packet.do_not_do],
+        "After repair, report modified files, verification results, remaining risks, and wait for mastermind review before merge.",
+    ])
+
+
+def _redact_packet(packet: RepairPacketResponse) -> RepairPacketResponse:
+    return RepairPacketResponse(**_redact_obj(packet.model_dump()))
+
+
+def _repair_packet_artifact(task_id: int, packet: RepairPacketResponse) -> TaskArtifact:
+    content = _safe_json(packet.model_dump())
+    data = content.encode("utf-8")
+    return TaskArtifact(
+        task_id=task_id,
+        artifact_type="repair_packet",
+        filename=f"repair_packet_task_{task_id}.json",
+        content=content,
+        metadata_json=_safe_json({"type": "repair_packet", "pending_artifact_id": True}),
+        size_bytes=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+
+
 def _ensure_task_source(source: Any, task_id: int, detail: str) -> None:
     if source is None or getattr(source, "task_id", None) != task_id:
         raise HTTPException(status_code=404, detail=detail)
@@ -381,3 +721,32 @@ def _loads_int_list(raw: str | None) -> list[int]:
     if not isinstance(data, list):
         return []
     return [item for item in data if isinstance(item, int)]
+
+
+def _safe_json(payload: dict[str, Any]) -> str:
+    return _redact(json.dumps(payload, ensure_ascii=False, default=str)) or "{}"
+
+
+def _redact(value: str | None) -> str:
+    return redact_secrets(value or "")
+
+
+def _unique(items: list[Any]) -> list[str]:
+    values: list[str] = []
+    for item in items:
+        if item in (None, ""):
+            continue
+        text = _redact(str(item)).strip()
+        if text and text not in values:
+            values.append(text)
+    return values
+
+
+def _redact_obj(value: Any) -> Any:
+    if isinstance(value, str):
+        return _redact(value)
+    if isinstance(value, list):
+        return [_redact_obj(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_obj(item) for key, item in value.items()}
+    return value
