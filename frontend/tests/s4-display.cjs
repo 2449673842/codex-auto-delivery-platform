@@ -153,6 +153,18 @@ async function checkInputValue(page, selector, expected, label) {
   else fail(`${label}: "${expected}" not found`, values.join(' | '))
 }
 
+async function checkInputValuesExclude(page, selector, forbidden, label) {
+  const values = await page.locator(selector).evaluateAll(nodes => nodes.map(node => node.value || ''))
+  if (values.includes(forbidden)) fail(`${label}: "${forbidden}" should be absent`, values.join(' | '))
+  else pass(`${label}: "${forbidden}" absent from input values`)
+}
+
+async function checkInputValueAt(locator, index, expected, label) {
+  const actual = await locator.nth(index).inputValue()
+  if (actual === expected) pass(label)
+  else fail(label, actual)
+}
+
 async function testDashboardFirstUsableWorkflow(page) {
   log('\n========== D0. Dashboard First Usable Workflow ==========')
   const projectCounter = { count: 0 }
@@ -686,6 +698,166 @@ async function testBrowserAiFailures(page, taskId) {
   await checkBodyExcludes(page, 'Browser AI answer saved', 'BA2-10 failed execute does not show success refresh message')
 }
 
+async function testMultiAiEvidenceRunPanel(page, taskId) {
+  log('\n========== S19. Multi-AI Evidence Run MVP ==========')
+  const previewCounter = { count: 0 }
+  const executeCounter = { count: 0 }
+  const runsCounter = { count: 0 }
+  const artifactsCounter = { count: 0 }
+  const synthesisCounter = { count: 0 }
+  await setBrowserAiProfilesRoute(page)
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
+  await setAgentRunsRoute(page, [
+    runPayload(901, taskId, 'ChatGPT evidence answer'),
+    runPayload(902, taskId, 'Claude evidence answer'),
+  ], 200, runsCounter)
+  await setArtifactsRoute(page, [
+    artifactPayload(1001, taskId, 'browser_ai_answer', 'browser_ai_run_901_answer.md', 'ChatGPT evidence answer'),
+    artifactPayload(1002, taskId, 'browser_ai_answer', 'browser_ai_run_902_answer.md', 'Claude evidence answer'),
+  ], 200, artifactsCounter)
+  await setEvidenceRunRoute(page, 'preview', evidenceRunPayload(taskId, {
+    read_only: true,
+    persisted: false,
+    overall_status: 'ready',
+    evidence_run_id: null,
+    dispatch_batch_id: null,
+    synthesis_refreshed: false,
+  }), 200, previewCounter)
+  await setEvidenceRunRoute(page, 'execute', evidenceRunPayload(taskId), 200, executeCounter)
+  await setAnswerSynthesisRoute(page, synthesisPayload(taskId, 601, {
+    job_count: 2,
+    succeeded_jobs: 2,
+    failed_jobs: 0,
+    blocked_jobs: 0,
+    common_findings: ['job_701: ChatGPT evidence answer', 'job_702: Claude evidence answer'],
+    risks: [],
+    disagreements: [],
+    recommended_actions: ['Proceed to human review or local verification; no automatic approval is implied.'],
+    artifact_summaries: [
+      { artifact_id: 1001, filename: 'browser_ai_run_901_answer.md', artifact_type: 'browser_ai_answer', summary: 'ChatGPT evidence answer', is_truncated: false },
+      { artifact_id: 1002, filename: 'browser_ai_run_902_answer.md', artifact_type: 'browser_ai_answer', summary: 'Claude evidence answer', is_truncated: false },
+    ],
+    source_job_ids: [701, 702],
+    source_agent_run_ids: [901, 902],
+    source_artifact_ids: [1001, 1002],
+  }), 200, synthesisCounter)
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await checkT(page, 'Multi-AI Evidence Run / 多 AI 证据运行', 'S19-1 panel shown')
+  await checkT(page, 'Multi-AI Evidence Run is evidence collection, not code execution', 'S19-2 evidence-only label')
+  await checkT(page, 'No repository writes', 'S19-3 no repo writes label')
+  await checkT(page, 'No PR / CI / Sonar / Deploy', 'S19-4 no external delivery label')
+  await checkT(page, 'No auto approve / merge', 'S19-5 no approve merge label')
+  await checkBodyIncludes(page, 'bounded concurrency is planned; current MVP executes jobs sequentially', 'S19-6 concurrency note')
+  await checkInputValuesExclude(page, '.multi-ai-evidence-run input', 'http://127.0.0.1:9999/mock-browser-ai', 'S19-6a no mock Browser AI URL in initial Multi-AI UI')
+  await checkInputValuesExclude(page, '.multi-ai-evidence-run input', "textarea[name='prompt']", 'S19-6b no mock Browser AI selector in initial Multi-AI UI')
+  const providerChecks = await page.locator('.multi-ai-evidence-run input[type="checkbox"]:checked').count()
+  if (providerChecks >= 2) pass('S19-7 broadcast mode can select multiple providers')
+  else fail('S19-7 provider multiselect missing', providerChecks)
+  await page.locator('.multi-ai-evidence-run summary').click()
+  const selectorInputs = page.locator('.multi-ai-evidence-run .selector-grid input')
+  await checkInputValueAt(selectorInputs, 0, '', 'S19-7a advanced target_url starts empty')
+  await page.locator('.multi-ai-evidence-run input[type="checkbox"]').first().setChecked(true)
+  await checkInputValueAt(selectorInputs, 0, '', 'S19-7b provider selection does not inject mock target_url')
+  await selectorInputs.nth(1).fill('textarea[name="manual-evidence"]')
+  await checkInputValue(page, '.multi-ai-evidence-run input', 'textarea[name="manual-evidence"]', 'S19-7c advanced selector fallback remains editable')
+  await page.locator('.multi-ai-evidence-run').getByRole('button', { name: 'Preview' }).click()
+  await page.waitForTimeout(300)
+  if (previewCounter.count === 1) pass('S19-8 preview endpoint called')
+  else fail('S19-8 preview endpoint call count', previewCounter.count)
+  await checkT(page, 'preview result', 'S19-9 preview result shown')
+  await checkT(page, 'overall_status: ready', 'S19-10 preview status ready')
+  await checkT(page, 'estimated_job_count: 2', 'S19-11 preview job count')
+  await checkT(page, 'persisted=false', 'S19-12 preview persisted false')
+  await checkT(page, 'read_only=true', 'S19-13 preview read only true')
+  await checkT(page, 'provider: chatgpt_web', 'S19-14 preview job provider shown')
+  await checkT(page, 'provider: claude_web', 'S19-15 preview second provider shown')
+  await page.locator('.multi-ai-evidence-run').getByRole('button', { name: 'Execute' }).click()
+  await page.waitForTimeout(500)
+  if (executeCounter.count === 1) pass('S19-16 execute endpoint called')
+  else fail('S19-16 execute endpoint call count', executeCounter.count)
+  await checkT(page, 'execute result', 'S19-17 execute result shown')
+  await checkT(page, 'overall_status: succeeded', 'S19-18 succeeded overall status')
+  await checkT(page, 'agent_run_id: 901', 'S19-19 first agent run id')
+  await checkT(page, 'artifact_id: 1001', 'S19-20 first artifact id')
+  await checkT(page, 'ChatGPT evidence answer', 'S19-21 first answer preview')
+  await checkT(page, 'Claude evidence answer', 'S19-22 second answer preview')
+  await checkT(page, 'Multi-AI Evidence Run saved', 'S19-23 saved refresh message')
+  await checkT(page, 'AgentRuns refreshed', 'S19-24 agent runs refreshed')
+  await checkT(page, 'Artifacts refreshed', 'S19-25 artifacts refreshed')
+  await checkT(page, 'DispatchBatches refreshed', 'S19-26 dispatch batches refreshed')
+  await checkT(page, 'Answer Synthesis refreshed', 'S19-27 synthesis refreshed')
+  await checkT(page, 'source_artifact_ids: 1001, 1002', 'S19-28 synthesis source artifacts')
+  if (runsCounter.count > 0) pass('S19-29 agent runs refresh endpoint called')
+  else fail('S19-29 agent runs refresh endpoint not called', '')
+  if (artifactsCounter.count > 0) pass('S19-30 artifacts refresh endpoint called')
+  else fail('S19-30 artifacts refresh endpoint not called', '')
+  if (synthesisCounter.count > 0) pass('S19-31 synthesis endpoint called')
+  else fail('S19-31 synthesis endpoint not called', '')
+  await clearEvidenceRunRoutes(page)
+}
+
+async function testMultiAiEvidenceRunRoutedPartial(page, taskId) {
+  log('\n========== S19B. Multi-AI Evidence Run Routed Partial ==========')
+  await setBrowserAiProfilesRoute(page)
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
+  await setAgentRunsRoute(page, [runPayload(903, taskId, 'Backend routed answer')])
+  await setArtifactsRoute(page, [artifactPayload(1003, taskId, 'browser_ai_answer', 'browser_ai_run_903_answer.md', 'Backend routed answer')])
+  await setEvidenceRunRoute(page, 'preview', evidenceRunPayload(taskId, {
+    mode: 'routed',
+    read_only: true,
+    persisted: false,
+    overall_status: 'ready',
+    jobs: [
+      evidenceJob(1, 'chatgpt_web', 'backend', 'preview'),
+      evidenceJob(2, 'claude_web', 'frontend', 'preview'),
+    ],
+  }))
+  await setEvidenceRunRoute(page, 'execute', evidenceRunPayload(taskId, {
+    mode: 'routed',
+    overall_status: 'partial',
+    jobs: [
+      evidenceJob(1, 'chatgpt_web', 'backend', 'succeeded', { agent_run_id: 903, artifact_id: 1003 }, 'Backend routed answer'),
+      evidenceJob(2, 'claude_web', 'frontend', 'failed', { agent_run_id: 904 }, '', 'selector failed'),
+    ],
+    source_artifact_ids: [1003],
+  }))
+  await setAnswerSynthesisRoute(page, synthesisPayload(taskId, 601, {
+    job_count: 2,
+    succeeded_jobs: 1,
+    failed_jobs: 1,
+    blocked_jobs: 0,
+    common_findings: ['job_701: Backend routed answer'],
+    risks: ['job_702_failed: selector failed'],
+    disagreements: ['not_all_jobs_succeeded'],
+    artifact_summaries: [{ artifact_id: 1003, filename: 'browser_ai_run_903_answer.md', artifact_type: 'browser_ai_answer', summary: 'Backend routed answer', is_truncated: false }],
+    source_job_ids: [701, 702],
+    source_agent_run_ids: [903, 904],
+    source_artifact_ids: [1003],
+  }))
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await page.locator('.multi-ai-evidence-run select').first().selectOption('routed')
+  await checkBodyIncludes(page, 'routed roles', 'S19B-1 routed role config visible')
+  await checkInputValue(page, '.multi-ai-evidence-run input', 'backend', 'S19B-2 backend role visible')
+  await checkInputValue(page, '.multi-ai-evidence-run input', 'frontend', 'S19B-3 frontend role visible')
+  await page.locator('.multi-ai-evidence-run').getByRole('button', { name: 'Preview' }).click()
+  await page.waitForTimeout(300)
+  await checkBodyIncludes(page, '#1 backend', 'S19B-4 preview backend role')
+  await checkBodyIncludes(page, '#2 frontend', 'S19B-5 preview frontend role')
+  await page.locator('.multi-ai-evidence-run').getByRole('button', { name: 'Execute' }).click()
+  await page.waitForTimeout(500)
+  await checkT(page, 'overall_status: partial', 'S19B-6 partial status visible')
+  await checkT(page, 'artifact_id: 1003', 'S19B-7 success artifact visible')
+  await checkT(page, 'Backend routed answer', 'S19B-8 successful job answer visible')
+  await checkT(page, 'selector failed', 'S19B-9 failed job error visible')
+  await checkT(page, 'job_702_failed: selector failed', 'S19B-10 synthesis failed source risk visible')
+  await checkT(page, 'Answer Synthesis refreshed', 'S19B-11 synthesis refreshed after partial')
+  await clearEvidenceRunRoutes(page)
+}
+
 async function testMcpBridgePanel(page, taskId) {
   log('\n========== MCP. MCP Bridge Read-only Dry-run ==========')
   const mcpCounter = { count: 0 }
@@ -711,7 +883,9 @@ async function testMcpBridgePanel(page, taskId) {
   await checkT(page, 'No OpenAI execute is allowed.', 'MCP12 safety note shown')
   await checkBodyExcludes(page, 'Run MCP Execute', 'MCP13 no MCP execute entry')
   await checkBodyExcludes(page, 'Create PR', 'MCP14 no create PR entry')
-  await checkBodyExcludes(page, 'Deploy', 'MCP15 no deploy entry')
+  const deployEntries = await page.locator('button:has-text("Deploy"), a:has-text("Deploy")').count()
+  if (deployEntries === 0) pass('MCP15 no deploy entry')
+  else fail('MCP15 no deploy entry', deployEntries)
   await checkBodyExcludes(page, 'Merge PR', 'MCP16 no merge entry')
 }
 
@@ -786,6 +960,11 @@ async function setBrowserAiRoute(page, action, payload, status = 200, counter = 
   await page.route(`**/api/browser-ai/${action}`, route => fulfillJson(route, payload, status, counter))
 }
 
+async function setEvidenceRunRoute(page, action, payload, status = 200, counter = null) {
+  await page.unroute(`**/api/multi-ai-evidence-runs/${action}`).catch(() => {})
+  await page.route(`**/api/multi-ai-evidence-runs/${action}`, route => fulfillJson(route, payload, status, counter))
+}
+
 async function setBrowserAiProfilesRoute(page) {
   await page.unroute('**/api/browser-ai/provider-profiles').catch(() => {})
   await page.route('**/api/browser-ai/provider-profiles', route => fulfillJson(route, {
@@ -806,6 +985,14 @@ async function setArtifactsRoute(page, artifacts, status = 200, counter = null) 
 }
 
 async function clearBrowserAiRefreshRoutes(page) {
+  await page.unroute('**/api/tasks/*/agent-runs').catch(() => {})
+  await page.unroute('**/api/tasks/*/artifacts').catch(() => {})
+  await page.unroute('**/api/answer-synthesis/preview').catch(() => {})
+}
+
+async function clearEvidenceRunRoutes(page) {
+  await page.unroute('**/api/multi-ai-evidence-runs/preview').catch(() => {})
+  await page.unroute('**/api/multi-ai-evidence-runs/execute').catch(() => {})
   await page.unroute('**/api/tasks/*/agent-runs').catch(() => {})
   await page.unroute('**/api/tasks/*/artifacts').catch(() => {})
   await page.unroute('**/api/answer-synthesis/preview').catch(() => {})
@@ -838,6 +1025,65 @@ function synthesisPayload(taskId, batchId, overrides = {}) {
     safety_notes: ['Deterministic rule-based preview; no AI provider called.', 'Stateless preview; no database write.'],
     ...overrides,
   }, message: 'ok' }
+}
+
+function evidenceRunPayload(taskId, overrides = {}) {
+  const jobs = overrides.jobs || [
+    evidenceJob(1, 'chatgpt_web', 'general', 'succeeded', { agent_run_id: 901, artifact_id: 1001 }, 'ChatGPT evidence answer'),
+    evidenceJob(2, 'claude_web', 'general', 'succeeded', { agent_run_id: 902, artifact_id: 1002 }, 'Claude evidence answer'),
+  ]
+  const status = overrides.overall_status || (jobs.every(job => job.status === 'succeeded') ? 'succeeded' : 'partial')
+  return { success: true, data: {
+    evidence_run_id: overrides.evidence_run_id ?? 601,
+    dispatch_batch_id: overrides.dispatch_batch_id ?? 601,
+    task_id: taskId,
+    mode: overrides.mode || 'broadcast',
+    prompt_source: overrides.prompt_source || 'task_goal',
+    providers: jobs.map(job => job.provider),
+    jobs,
+    estimated_job_count: jobs.length,
+    concurrency_limit: 2,
+    concurrency_note: 'bounded concurrency is planned; current MVP executes jobs sequentially',
+    overall_status: status,
+    safety_gate: {
+      mode_valid: true,
+      prompt_source_valid: true,
+      providers_known: true,
+      providers_allowed: true,
+      job_count_ok: true,
+      browser_ai_enabled: true,
+      gate_passed: true,
+      blocked_reasons: [],
+      safety_notes: [
+        'Multi-AI Evidence Run collects AI answers as evidence; it does not execute code.',
+        'S19 MVP does not write repository files, create PRs, call CI/Sonar/Deploy, approve, or merge.',
+      ],
+    },
+    read_only: overrides.read_only ?? false,
+    persisted: overrides.persisted ?? true,
+    synthesis_refreshed: overrides.synthesis_refreshed ?? true,
+    synthesis_status: overrides.synthesis_status || 'ready',
+    source_artifact_ids: jobs.filter(job => job.artifact_id).map(job => job.artifact_id),
+    error_message: overrides.error_message || '',
+  }, message: 'ok' }
+}
+
+function evidenceJob(sequenceNo, provider, role, status, runArtifact = {}, answerPreview = '', errorMessage = null) {
+  return {
+    dispatch_job_id: 700 + sequenceNo,
+    sequence_no: sequenceNo,
+    provider,
+    role,
+    status,
+    prompt_source: 'task_goal',
+    prompt_hash: `evidence_hash_${sequenceNo}`,
+    question: `Evidence question ${sequenceNo}`,
+    error_message: errorMessage,
+    agent_run_id: runArtifact.agent_run_id ?? null,
+    artifact_id: runArtifact.artifact_id ?? null,
+    artifact_ids: runArtifact.artifact_id ? [runArtifact.artifact_id] : [],
+    answer_preview: answerPreview,
+  }
 }
 
 function mcpToolsPayload() {
@@ -1021,6 +1267,48 @@ function browserAiPayload(overrides = {}) {
   return { success: true, data, message: 'ok' }
 }
 
+function runPayload(id, taskId, summary) {
+  return {
+    id,
+    task_id: taskId,
+    project_id: 1,
+    agent_id: 77,
+    run_type: 'review',
+    status: 'succeeded',
+    input_prompt: `Browser AI prompt redacted; prompt_hash=evidence_hash_${id}; prompt_source=custom_prompt`,
+    output_summary: summary,
+    output_diff: null,
+    output_log: 'Browser AI visible response captured from response_selector.',
+    raw_result_json: '{}',
+    branch: null,
+    commit_sha: null,
+    pr_url: null,
+    risk_level: 'low',
+    attempt_no: 1,
+    duration_ms: null,
+    error_message: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }
+}
+
+function artifactPayload(id, taskId, type, filename, content) {
+  return {
+    id,
+    task_id: taskId,
+    artifact_type: type,
+    storage_type: 'sqlite',
+    content,
+    file_path: null,
+    filename,
+    size_bytes: content.length,
+    sha256: '1'.repeat(64),
+    is_truncated: false,
+    metadata_json: '{}',
+    created_at: new Date().toISOString(),
+  }
+}
+
 function browserAiSteps(statusOverrides = {}, messageOverrides = {}) {
   return [
     'validate_request',
@@ -1199,7 +1487,7 @@ async function testNoUnsafeWorkspaceActions(page) {
   log('\n========== M. No unsafe workspace actions ==========')
   const unsafeButtons = await page.locator('button:has-text("创建 PR"), button:has-text("Create PR"), button:has-text("PR Adapter not implemented"), button:has-text("merge"), button:has-text("Merge"), button:has-text("deploy"), button:has-text("Deploy"), button:has-text("部署")').count()
   const unsafeLinks = await page.locator('a:has-text("创建 PR"), a:has-text("Create PR"), a:has-text("PR Adapter not implemented"), a:has-text("merge"), a:has-text("Merge"), a:has-text("deploy"), a:has-text("Deploy"), a:has-text("部署")').count()
-  const unsafeText = await page.locator('text=/PR Adapter not implemented|Future step only|No real PR created|Create PR|Deploy|Merge/').count()
+  const unsafeText = await page.locator('text=/PR Adapter not implemented|Future step only|No real PR created|Create PR|Run Deploy|Merge PR/').count()
   if (unsafeButtons === 0 && unsafeLinks === 0 && unsafeText === 0) pass('M1 No create PR / merge / deploy entry or stub')
   else fail('M1 Unsafe entry found', `buttons=${unsafeButtons}, links=${unsafeLinks}, text=${unsafeText}`)
 }
@@ -1257,6 +1545,8 @@ async function main() {
   await testRealAiRunPipelineFailures(page, task.id)
   await testBrowserAiRun(page, task.id)
   await testBrowserAiFailures(page, task.id)
+  await testMultiAiEvidenceRunPanel(page, task.id)
+  await testMultiAiEvidenceRunRoutedPartial(page, task.id)
   await testMcpBridgePanel(page, task.id)
   await testApprovals(page)
   await testHumanRequired(page)

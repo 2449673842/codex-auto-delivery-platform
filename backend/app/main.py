@@ -45,6 +45,7 @@ from app.routers import answer_synthesis as answer_synthesis_router
 from app.routers import ai_handoff as ai_handoff_router
 from app.routers import browser_ai as browser_ai_router
 from app.routers import mcp_bridge as mcp_bridge_router
+from app.routers import multi_ai_evidence_runs as multi_ai_evidence_runs_router
 
 app.include_router(health.router)
 app.include_router(projects.router)
@@ -72,3 +73,4 @@ app.include_router(answer_synthesis_router.router)
 app.include_router(ai_handoff_router.router)
 app.include_router(browser_ai_router.router)
 app.include_router(mcp_bridge_router.router)
+app.include_router(multi_ai_evidence_runs_router.router)

@@ -302,6 +302,156 @@
         </div>
       </section>
 
+      <!-- Multi-AI Evidence Run -->
+      <section class="card multi-ai-evidence-run">
+        <div class="section-header">
+          <h2>Multi-AI Evidence Run / 多 AI 证据运行</h2>
+          <span class="workspace-readonly">Evidence collection only</span>
+        </div>
+        <div class="workspace-safety">
+          <span class="label-badge label-ai">Multi-AI Evidence Run is evidence collection, not code execution</span>
+          <span class="label-badge label-applied">No repository writes</span>
+          <span class="label-badge label-exec">No PR / CI / Sonar / Deploy</span>
+          <span class="label-badge label-merged">No auto approve / merge</span>
+        </div>
+        <p class="section-note">{{ multiAiForm.concurrency_limit }} job concurrency requested. {{ multiAiConcurrencyNote }}</p>
+        <div class="multi-ai-form">
+          <label>
+            mode
+            <select v-model="multiAiForm.mode">
+              <option value="broadcast">broadcast</option>
+              <option value="routed">routed</option>
+            </select>
+          </label>
+          <label>
+            prompt_source
+            <select v-model="multiAiForm.prompt_source">
+              <option value="task_goal">task_goal</option>
+              <option value="handoff_packet">handoff_packet</option>
+              <option value="answer_synthesis">answer_synthesis</option>
+              <option value="custom_prompt">custom_prompt</option>
+            </select>
+          </label>
+          <label>
+            concurrency_limit
+            <input v-model.number="multiAiForm.concurrency_limit" type="number" min="1" max="8" />
+          </label>
+          <label class="wide" v-if="multiAiForm.prompt_source === 'custom_prompt'">
+            custom_prompt
+            <textarea v-model="multiAiForm.custom_prompt" rows="4" placeholder="Prompt sent to all evidence jobs"></textarea>
+          </label>
+
+          <div v-if="multiAiForm.mode === 'broadcast'" class="wide provider-picker">
+            <strong>providers</strong>
+            <label v-for="provider in evidenceProviderOptions" :key="provider.provider" class="checkbox-row">
+              <input type="checkbox" :value="provider.provider" v-model="multiAiForm.providers" />
+              <span>{{ provider.display_name }}</span>
+            </label>
+          </div>
+
+          <div v-else class="wide routed-roles">
+            <div class="section-header compact">
+              <strong>routed roles</strong>
+              <button class="btn btn-sm" @click="addEvidenceRole" type="button">Add role</button>
+            </div>
+            <div v-for="(role, index) in multiAiForm.roles" :key="`evidence-role-${index}`" class="routed-role-row">
+              <label>
+                role
+                <input v-model="role.role" placeholder="backend" />
+              </label>
+              <label>
+                provider
+                <select v-model="role.provider">
+                  <option v-for="provider in evidenceProviderOptions" :key="provider.provider" :value="provider.provider">
+                    {{ provider.display_name }}
+                  </option>
+                </select>
+              </label>
+              <label class="role-prompt">
+                prompt
+                <input v-model="role.prompt" placeholder="Check this area only" />
+              </label>
+              <button class="btn btn-sm" @click="removeEvidenceRole(index)" type="button" :disabled="multiAiForm.roles.length <= 1">Remove</button>
+            </div>
+          </div>
+
+          <details class="wide">
+            <summary>advanced custom selector fallback</summary>
+            <div class="selector-grid">
+              <label>target_url<input v-model="multiAiForm.target_url" /></label>
+              <label>input_selector<input v-model="multiAiForm.input_selector" /></label>
+              <label>send_selector<input v-model="multiAiForm.send_selector" /></label>
+              <label>response_selector<input v-model="multiAiForm.response_selector" /></label>
+              <label>scroll_container_selector<input v-model="multiAiForm.scroll_container_selector" /></label>
+              <label>copy_button_selector<input v-model="multiAiForm.copy_button_selector" /></label>
+              <label>login_hint_selector<input v-model="multiAiForm.login_hint_selector" /></label>
+              <label>timeout_seconds<input v-model.number="multiAiForm.timeout_seconds" type="number" min="1" max="600" /></label>
+            </div>
+          </details>
+
+          <div class="form-actions wide">
+            <button class="btn btn-sm" @click="previewEvidenceRun" :disabled="multiAiLoading || !task">Preview</button>
+            <button class="btn btn-primary btn-sm" @click="executeEvidenceRun" :disabled="multiAiLoading || !task">Execute</button>
+          </div>
+        </div>
+        <p v-if="multiAiError" class="run-error">{{ multiAiError }}</p>
+        <div v-if="multiAiPreviewResult" class="real-ai-result evidence-result">
+          <strong>preview result</strong>
+          <div class="dispatch-job-meta">
+            <span>mode: {{ multiAiPreviewResult.mode }}</span>
+            <span>overall_status: {{ multiAiPreviewResult.overall_status }}</span>
+            <span>estimated_job_count: {{ multiAiPreviewResult.estimated_job_count }}</span>
+            <span>persisted={{ multiAiPreviewResult.persisted }}</span>
+            <span>read_only={{ multiAiPreviewResult.read_only }}</span>
+          </div>
+          <p v-if="multiAiPreviewResult.error_message" class="run-error">{{ multiAiPreviewResult.error_message }}</p>
+          <pre>{{ formatEvidenceSafetyGate(multiAiPreviewResult.safety_gate) }}</pre>
+          <div class="dispatch-job-grid">
+            <div v-for="job in multiAiPreviewResult.jobs" :key="`preview-${job.sequence_no}-${job.provider}-${job.role}`" class="dispatch-job-card">
+              <div class="dispatch-job-header">
+                <strong>#{{ job.sequence_no }} {{ job.role }}</strong>
+                <span class="run-status-badge" :class="job.status">{{ job.status }}</span>
+              </div>
+              <div class="dispatch-job-meta">
+                <span>provider: {{ job.provider }}</span>
+                <span>prompt_source: {{ job.prompt_source }}</span>
+                <span>prompt_hash: {{ job.prompt_hash || '-' }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-if="multiAiExecuteResult" class="real-ai-result evidence-result">
+          <strong>execute result</strong>
+          <div class="dispatch-job-meta">
+            <span>evidence_run_id: {{ multiAiExecuteResult.evidence_run_id || '-' }}</span>
+            <span>dispatch_batch_id: {{ multiAiExecuteResult.dispatch_batch_id || '-' }}</span>
+            <span>overall_status: {{ multiAiExecuteResult.overall_status }}</span>
+            <span>persisted={{ multiAiExecuteResult.persisted }}</span>
+            <span>synthesis_refreshed={{ multiAiExecuteResult.synthesis_refreshed }}</span>
+            <span>synthesis_status: {{ multiAiExecuteResult.synthesis_status || '-' }}</span>
+          </div>
+          <div v-if="multiAiRefreshMessages.length" class="browser-ai-refresh-status">
+            <span v-for="message in multiAiRefreshMessages" :key="message" class="label-badge label-ai">{{ message }}</span>
+          </div>
+          <div class="dispatch-job-grid">
+            <div v-for="job in multiAiExecuteResult.jobs" :key="`exec-${job.sequence_no}-${job.provider}-${job.role}`" class="dispatch-job-card">
+              <div class="dispatch-job-header">
+                <strong>#{{ job.sequence_no }} {{ job.role }}</strong>
+                <span class="run-status-badge" :class="job.status">{{ job.status }}</span>
+              </div>
+              <div class="dispatch-job-meta">
+                <span>provider: {{ job.provider }}</span>
+                <span>status: {{ job.status }}</span>
+                <span>agent_run_id: {{ job.agent_run_id || '-' }}</span>
+                <span>artifact_id: {{ job.artifact_id || '-' }}</span>
+              </div>
+              <p v-if="job.answer_preview" class="run-output">{{ job.answer_preview }}</p>
+              <p v-if="job.error_message" class="run-error">{{ job.error_message }}</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Agent Runs -->
       <section class="card">
         <div class="section-header">
@@ -936,11 +1086,12 @@ import {
   fetchDispatchBatches, previewAnswerSynthesis, previewAiHandoff,
   dryRunAiDispatch, executeAiDispatch,
   dryRunBrowserAi, executeBrowserAi, fetchBrowserAiProviderProfiles,
+  previewMultiAiEvidenceRun, executeMultiAiEvidenceRun,
   fetchCodeContext,
   applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate, evaluateSandboxGate,
   fetchMcpTools, callMcpTool,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -1034,6 +1185,33 @@ const selectedBrowserAiProfileStatus = computed(() => {
   const login = profile.login_required_hint ? (profile.login_hint_text || 'login may be required') : 'login not required'
   return `${configured}; ${login}`
 })
+const multiAiForm = ref<MultiAiEvidenceRunRequest>({
+  task_id: 0,
+  mode: 'broadcast',
+  providers: ['chatgpt_web', 'claude_web'],
+  roles: [
+    { role: 'backend', provider: 'chatgpt_web', prompt: 'Check backend risks.' },
+    { role: 'frontend', provider: 'claude_web', prompt: 'Check frontend risks.' },
+  ],
+  prompt_source: 'task_goal',
+  custom_prompt: '',
+  concurrency_limit: 2,
+  timeout_seconds: 180,
+  target_url: '',
+  input_selector: '',
+  send_selector: '',
+  response_selector: '',
+  scroll_container_selector: '',
+  copy_button_selector: '',
+  login_hint_selector: '',
+})
+const multiAiLoading = ref(false)
+const multiAiError = ref('')
+const multiAiPreviewResult = ref<MultiAiEvidenceRunResponse | null>(null)
+const multiAiExecuteResult = ref<MultiAiEvidenceRunResponse | null>(null)
+const multiAiRefreshMessages = ref<string[]>([])
+const multiAiConcurrencyNote = 'bounded concurrency is planned; current MVP executes jobs sequentially'
+const evidenceProviderOptions = computed(() => browserAiProfiles.value.filter(profile => profile.provider !== 'custom' || profile.selectors_configured || profile.provider === 'custom'))
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -1188,6 +1366,10 @@ function formatBrowserAiSafetyGate(gate: BrowserAiSafetyGate) {
   return JSON.stringify(gate, null, 2)
 }
 
+function formatEvidenceSafetyGate(gate: MultiAiEvidenceSafetyGate) {
+  return JSON.stringify(gate, null, 2)
+}
+
 function stepHint(name: string, status: string) {
   if (status === 'failed') {
     const hints: Record<string, string> = {
@@ -1216,6 +1398,25 @@ function buildBrowserAiRequest(): BrowserAiRequest | null {
     project_id: task.value.project_id,
     task_id: task.value.id,
   }
+}
+
+function buildEvidenceRunRequest(): MultiAiEvidenceRunRequest | null {
+  if (!task.value) return null
+  return {
+    ...multiAiForm.value,
+    task_id: task.value.id,
+    providers: multiAiForm.value.mode === 'broadcast' ? multiAiForm.value.providers : [],
+    roles: multiAiForm.value.mode === 'routed' ? multiAiForm.value.roles : [],
+  }
+}
+
+function addEvidenceRole() {
+  multiAiForm.value.roles.push({ role: 'risk', provider: 'gemini_web', prompt: 'Check risks and missing evidence.' })
+}
+
+function removeEvidenceRole(index: number) {
+  if (multiAiForm.value.roles.length <= 1) return
+  multiAiForm.value.roles.splice(index, 1)
 }
 
 onMounted(async () => {
@@ -1261,6 +1462,7 @@ async function refresh() {
   realAiTaskGoal.value = defaultRealAiTaskGoal()
   browserAiForm.value.project_id = task.value.project_id
   browserAiForm.value.task_id = task.value.id
+  multiAiForm.value.task_id = task.value.id
   agentRuns.value = await fetchAgentRuns(id)
   agentReviews.value = await fetchAgentReviews(id)
   approvalDecisions.value = await fetchApprovalDecisions(id)
@@ -1360,6 +1562,40 @@ async function executeBrowserAiRun() {
   }
 }
 
+async function previewEvidenceRun() {
+  const body = buildEvidenceRunRequest()
+  if (!body) return
+  multiAiLoading.value = true
+  multiAiError.value = ''
+  try {
+    multiAiPreviewResult.value = await previewMultiAiEvidenceRun(body)
+  } catch (e: any) {
+    multiAiPreviewResult.value = null
+    multiAiError.value = e.message || 'Multi-AI Evidence Run preview failed'
+  } finally {
+    multiAiLoading.value = false
+  }
+}
+
+async function executeEvidenceRun() {
+  const body = buildEvidenceRunRequest()
+  if (!body) return
+  multiAiLoading.value = true
+  multiAiError.value = ''
+  multiAiRefreshMessages.value = []
+  try {
+    multiAiExecuteResult.value = await executeMultiAiEvidenceRun(body)
+    if (['succeeded', 'partial'].includes(multiAiExecuteResult.value.overall_status)) {
+      await refreshAfterEvidenceRun()
+    }
+  } catch (e: any) {
+    multiAiExecuteResult.value = null
+    multiAiError.value = e.message || 'Multi-AI Evidence Run execute failed'
+  } finally {
+    multiAiLoading.value = false
+  }
+}
+
 async function refreshAfterRealAiRun() {
   if (!task.value) return
   const id = task.value.id
@@ -1391,6 +1627,30 @@ async function refreshAfterBrowserAiRun() {
   sandboxResults.value = await fetchSandboxResults(id)
   await loadSandboxGate()
   browserAiRefreshMessages.value = messages
+}
+
+async function refreshAfterEvidenceRun() {
+  if (!task.value) return
+  const id = task.value.id
+  const messages = ['Multi-AI Evidence Run saved']
+  agentRuns.value = await fetchAgentRuns(id)
+  messages.push('AgentRuns refreshed')
+  artifactRefreshKey.value += 1
+  messages.push('Artifacts refreshed')
+  await loadDispatchBatches(id)
+  messages.push('DispatchBatches refreshed')
+  if (multiAiExecuteResult.value?.dispatch_batch_id) {
+    await loadAnswerSynthesis(id, multiAiExecuteResult.value.dispatch_batch_id)
+  } else {
+    await loadAnswerSynthesis(id, latestDispatchBatchId())
+  }
+  if (answerSynthesis.value || multiAiExecuteResult.value?.synthesis_refreshed) {
+    messages.push('Answer Synthesis refreshed')
+  } else {
+    messages.push(answerSynthesisError.value || 'Answer Synthesis not refreshed: no successful evidence artifact available')
+  }
+  await loadAiHandoff()
+  multiAiRefreshMessages.value = messages
 }
 
 async function loadDispatchBatches(id: number) {
@@ -1648,11 +1908,24 @@ async function handleCreateAgentReview() {
 .real-ai-sandbox { padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; display: flex; flex-direction: column; gap: 6px; }
 .real-ai-sandbox strong { font-size: 13px; }
 .browser-ai-run { border-left: 3px solid #00897b; }
+.multi-ai-evidence-run { border-left: 3px solid #6a1b9a; }
 .browser-ai-help { margin: 8px 0 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
 .browser-ai-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
 .browser-ai-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
 .browser-ai-form .wide { grid-column: 1 / -1; }
 .browser-ai-form textarea { min-height: 90px; resize: vertical; }
+.multi-ai-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
+.multi-ai-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
+.multi-ai-form .wide { grid-column: 1 / -1; }
+.multi-ai-form textarea { min-height: 90px; resize: vertical; }
+.provider-picker { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
+.checkbox-row { display: inline-flex !important; flex-direction: row !important; align-items: center; gap: 6px !important; }
+.routed-roles { display: flex; flex-direction: column; gap: 8px; }
+.section-header.compact { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+.routed-role-row { display: grid; grid-template-columns: 140px 180px minmax(0, 1fr) auto; gap: 8px; align-items: end; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
+.role-prompt { min-width: 0; }
+.selector-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 10px 0; }
+.evidence-result { border-color: #d8c5e8; }
 .browser-ai-steps { display: flex; flex-direction: column; gap: 8px; }
 .browser-ai-steps ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
 .browser-ai-step { display: grid; grid-template-columns: minmax(120px, 1fr) 76px minmax(0, 2fr); gap: 8px; align-items: center; padding: 7px 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; font-size: 12px; }
