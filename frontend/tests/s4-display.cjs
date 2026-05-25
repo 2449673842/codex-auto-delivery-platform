@@ -897,6 +897,50 @@ async function testFailureEvidencePreviewPanel(page, taskId) {
   await clearFailureEvidenceRoutes(page)
 }
 
+async function testRepairPacketGenerationPanel(page, taskId) {
+  log('\n========== S20.2 Repair Packet Generation ==========')
+  const failureCounter = { count: 0 }
+  const repairCounter = { count: 0 }
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
+  await setFailureEvidenceRoute(page, failureEvidencePayload(taskId), 200, failureCounter)
+  await setRepairPacketRoute(page, repairPacketPayload(taskId), 200, repairCounter)
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await checkT(page, 'Repair Packet Generation / 修复交接包生成', 'S20.2-1 panel shown')
+  await checkT(page, 'Repair Packet does not modify code', 'S20.2-2 no code modification label')
+  await checkT(page, 'Codex / OMX or user must execute repair', 'S20.2-3 external executor label')
+  await checkT(page, 'No repository writes', 'S20.2-4 no repository writes label')
+  await checkT(page, 'No auto PR / merge / deploy', 'S20.2-5 no auto delivery label')
+  await checkT(page, 'max_attempts defaults to 1', 'S20.2-6 max attempts label')
+  await page.locator('.failure-evidence-preview').getByRole('button', { name: 'Preview' }).click()
+  await page.waitForTimeout(300)
+  if (failureCounter.count === 1) pass('S20.2-7 failure evidence preview called')
+  else fail('S20.2-7 failure evidence preview call count', failureCounter.count)
+  await page.locator('.repair-packet-generation').getByRole('button', { name: 'Generate Repair Packet' }).click()
+  await page.waitForTimeout(400)
+  if (repairCounter.count === 1) pass('S20.2-8 repair packet endpoint called')
+  else fail('S20.2-8 repair packet endpoint call count', repairCounter.count)
+  await checkT(page, 'repair packet', 'S20.2-9 repair packet result shown')
+  await checkT(page, 'repair_packet_artifact_id: 802', 'S20.2-10 artifact id shown')
+  await checkT(page, 'human_decision_required=true', 'S20.2-11 human decision shown')
+  await checkT(page, 'Failure summary for browser_ai_failed', 'S20.2-12 repair summary shown')
+  await checkT(page, 'Selector failure caused missing Browser AI evidence.', 'S20.2-13 root cause shown')
+  await checkT(page, 'Make a narrow selector/profile fix and rerun smoke.', 'S20.2-14 fix strategy shown')
+  await checkT(page, 'codex_handoff_prompt preview', 'S20.2-15 handoff preview label shown')
+  await checkT(page, 'AGENTS.md', 'S20.2-16 handoff prompt includes AGENTS')
+  await checkBodyIncludes(page, 'Verify current master', 'S20.2-16b handoff prompt requires master verification')
+  await checkT(page, 'Do not read `.env`.', 'S20.2-17 do_not_do shown')
+  await checkT(page, 'Do not auto merge.', 'S20.2-18 no auto merge rule shown')
+  await checkBodyExcludes(page, 'Auto fix repository', 'S20.2-19 no auto fix entry')
+  await checkBodyExcludes(page, 'Auto merge', 'S20.2-20 no auto merge entry')
+  const deployEntries = await page.locator('button:has-text("Deploy"), a:has-text("Deploy")').count()
+  if (deployEntries === 0) pass('S20.2-21 no deploy entry')
+  else fail('S20.2-21 no deploy entry', deployEntries)
+  await clearRepairPacketRoutes(page)
+  await clearFailureEvidenceRoutes(page)
+}
+
 async function testMcpBridgePanel(page, taskId) {
   log('\n========== MCP. MCP Bridge Read-only Dry-run ==========')
   const mcpCounter = { count: 0 }
@@ -1009,6 +1053,11 @@ async function setFailureEvidenceRoute(page, payload, status = 200, counter = nu
   await page.route('**/api/repair-loop/failure-evidence/preview', route => fulfillJson(route, payload, status, counter))
 }
 
+async function setRepairPacketRoute(page, payload, status = 200, counter = null) {
+  await page.unroute('**/api/repair-loop/repair-packet/generate').catch(() => {})
+  await page.route('**/api/repair-loop/repair-packet/generate', route => fulfillJson(route, payload, status, counter))
+}
+
 async function setBrowserAiProfilesRoute(page) {
   await page.unroute('**/api/browser-ai/provider-profiles').catch(() => {})
   await page.route('**/api/browser-ai/provider-profiles', route => fulfillJson(route, {
@@ -1044,6 +1093,10 @@ async function clearEvidenceRunRoutes(page) {
 
 async function clearFailureEvidenceRoutes(page) {
   await page.unroute('**/api/repair-loop/failure-evidence/preview').catch(() => {})
+}
+
+async function clearRepairPacketRoutes(page) {
+  await page.unroute('**/api/repair-loop/repair-packet/generate').catch(() => {})
 }
 
 async function fulfillJson(route, payload, status, counter) {
@@ -1162,6 +1215,51 @@ function failureEvidencePayload(taskId, overrides = {}) {
     },
     read_only: true,
     persisted: false,
+    ...overrides,
+  }, message: 'ok' }
+}
+
+function repairPacketPayload(taskId, overrides = {}) {
+  return { success: true, data: {
+    task_id: taskId,
+    project_id: 1,
+    failure_summary: 'Failure summary for browser_ai_failed',
+    suspected_root_causes: ['Selector failure caused missing Browser AI evidence.'],
+    evidence_by_source: [
+      { source: 'browser_ai', summary: 'selector_failed', artifact_ids: [], agent_run_ids: [901], dispatch_batch_id: null, dispatch_job_ids: [] },
+      { source: 'multi_ai_evidence_run', summary: 'analysis_status=succeeded', artifact_ids: [1001, 1002], agent_run_ids: [901, 902], dispatch_batch_id: 601, dispatch_job_ids: [701, 702] },
+    ],
+    multi_ai_findings: ['Both providers recommend a narrow selector/profile fix.'],
+    disagreements: [],
+    recommended_fix_strategy: 'Make a narrow selector/profile fix and rerun smoke.',
+    files_likely_involved: ['frontend/src/pages/TaskDetailPage.vue'],
+    commands_to_verify: ['node frontend/tests/s4-display.cjs'],
+    risks: ['Human decision is required before any repair execution.'],
+    human_decision_required: true,
+    codex_handoff_prompt: 'Read AGENTS.md before acting.\nVerify current master before making any repair.\nDo not read `.env`.\nDo not auto merge.',
+    max_attempts: 1,
+    do_not_do: [
+      'Do not read `.env`.',
+      'Do not read `secret_ref`.',
+      'Do not expose API keys, cookies, sessions, or passwords.',
+      'Do not auto merge.',
+      'Do not auto deploy.',
+      'Verify current master before acting.',
+    ],
+    repair_packet_artifact_id: 802,
+    source_failure_type: 'browser_ai_failed',
+    source_artifact_ids: [],
+    source_agent_run_ids: [901],
+    source_dispatch_batch_id: null,
+    source_dispatch_job_ids: [],
+    analysis_dispatch_batch_id: 601,
+    analysis_status: 'succeeded',
+    read_only: false,
+    persisted: true,
+    safety_notes: [
+      'Repair Packet Generation uses evidence collection only; it does not modify code.',
+      'No repository writes, PR, CI, Sonar, Deploy, approve, or merge are performed.',
+    ],
     ...overrides,
   }, message: 'ok' }
 }
@@ -1628,6 +1726,7 @@ async function main() {
   await testMultiAiEvidenceRunPanel(page, task.id)
   await testMultiAiEvidenceRunRoutedPartial(page, task.id)
   await testFailureEvidencePreviewPanel(page, task.id)
+  await testRepairPacketGenerationPanel(page, task.id)
   await testMcpBridgePanel(page, task.id)
   await testApprovals(page)
   await testHumanRequired(page)

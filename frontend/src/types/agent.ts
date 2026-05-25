@@ -659,3 +659,50 @@ export interface FailureEvidencePacketResponse {
   read_only: boolean
   persisted: boolean
 }
+
+export interface RepairPacketGenerateRequest {
+  task_id: number
+  failure_evidence: FailureEvidencePacketResponse
+  analysis_mode: 'broadcast' | 'routed'
+  providers: string[]
+  roles: MultiAiEvidenceRoleRequest[]
+  max_attempts: number
+}
+
+export interface RepairEvidenceBySource {
+  source: string
+  summary: string
+  artifact_ids: number[]
+  agent_run_ids: number[]
+  dispatch_batch_id: number | null
+  dispatch_job_ids: number[]
+}
+
+export interface RepairPacketResponse {
+  task_id: number
+  project_id: number
+  failure_summary: string
+  suspected_root_causes: string[]
+  evidence_by_source: RepairEvidenceBySource[]
+  multi_ai_findings: string[]
+  disagreements: string[]
+  recommended_fix_strategy: string
+  files_likely_involved: string[]
+  commands_to_verify: string[]
+  risks: string[]
+  human_decision_required: boolean
+  codex_handoff_prompt: string
+  max_attempts: number
+  do_not_do: string[]
+  repair_packet_artifact_id: number | null
+  source_failure_type: RepairFailureType
+  source_artifact_ids: number[]
+  source_agent_run_ids: number[]
+  source_dispatch_batch_id: number | null
+  source_dispatch_job_ids: number[]
+  analysis_dispatch_batch_id: number | null
+  analysis_status: string
+  read_only: boolean
+  persisted: boolean
+  safety_notes: string[]
+}
