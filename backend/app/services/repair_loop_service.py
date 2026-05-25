@@ -21,6 +21,8 @@ from app.schemas.repair_loop import (
     FailureEvidencePreviewRequest,
     FailureEvidenceRedactionStatus,
     RepairEvidenceBySource,
+    RepairHandoffPreviewRequest,
+    RepairHandoffPreviewResponse,
     RepairPacketGenerateRequest,
     RepairPacketResponse,
 )
@@ -55,17 +57,32 @@ REPAIR_PACKET_SAFETY_NOTES = [
     "max_attempts defaults to 1 and no automatic next attempt is started.",
 ]
 
+DO_NOT_READ_ENV = "Do not read `.env`."
+DO_NOT_READ_SECRET_REF = "Do not read `secret_ref`."
+DO_NOT_EXPOSE_SECRETS = "Do not expose API keys, cookies, sessions, or passwords."
+DO_NOT_BYPASS_TESTS = "Do not bypass tests."
+
 DO_NOT_DO = [
-    "Do not read `.env`.",
-    "Do not read `secret_ref`.",
-    "Do not expose API keys, cookies, sessions, or passwords.",
+    DO_NOT_READ_ENV,
+    DO_NOT_READ_SECRET_REF,
+    DO_NOT_EXPOSE_SECRETS,
     "Do not write unrelated files.",
     "Do not auto merge.",
     "Do not auto deploy.",
-    "Do not bypass tests.",
+    DO_NOT_BYPASS_TESTS,
     "Do not bypass Browser AI login or captcha.",
     "Verify current master before acting.",
 ]
+
+HANDOFF_SAFETY_NOTES = [
+    "Handoff only; no repair execution is performed by the platform.",
+    "No repository writes are performed by the platform.",
+    "No AgentRun, TaskArtifact, TaskEvent, PR, CI, Sonar, Deploy, approve, or merge is created.",
+    "No provider call, Browser AI execution, shell, subprocess, `.env`, secret_ref, or Project.root_path access is performed.",
+    "Requires current master verification before any external executor acts.",
+]
+
+REPAIR_HANDOFF_TARGETS = {"codex", "omx", "generic_ai"}
 
 
 class _EvidenceCollector:
@@ -238,6 +255,35 @@ async def generate_repair_packet(db: AsyncSession, body: RepairPacketGenerateReq
     await db.commit()
     await db.refresh(artifact)
     return packet
+
+
+async def preview_repair_handoff(db: AsyncSession, body: RepairHandoffPreviewRequest) -> RepairHandoffPreviewResponse:
+    if body.target not in REPAIR_HANDOFF_TARGETS:
+        raise HTTPException(status_code=400, detail="unknown_repair_handoff_target")
+    task = await db.get(Task, body.task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    artifact = await db.get(TaskArtifact, body.repair_packet_artifact_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="repair_packet_artifact_not_found")
+    if artifact.task_id != body.task_id:
+        raise HTTPException(status_code=400, detail="repair_packet_task_mismatch")
+    if artifact.artifact_type != "repair_packet":
+        raise HTTPException(status_code=400, detail="artifact_is_not_repair_packet")
+
+    packet = _load_repair_packet(artifact)
+    prompt = _repair_handoff_prompt(task, packet, body.target)
+    return RepairHandoffPreviewResponse(
+        task_id=task.id,
+        project_id=task.project_id,
+        target=body.target,
+        handoff_prompt=_redact(prompt),
+        safety_notes=HANDOFF_SAFETY_NOTES.copy(),
+        source_repair_packet_artifact_id=artifact.id,
+        requires_master_verification=True,
+        read_only=True,
+        persisted=False,
+    )
 
 
 async def _collect_requested_sources(
@@ -653,6 +699,79 @@ def _codex_handoff_prompt(task: Task, packet: RepairPacketResponse) -> str:
         *[f"- {item}" for item in packet.do_not_do],
         "After repair, report modified files, verification results, remaining risks, and wait for mastermind review before merge.",
     ])
+
+
+def _load_repair_packet(artifact: TaskArtifact) -> RepairPacketResponse:
+    data = _loads_dict(artifact.content)
+    if not data:
+        raise HTTPException(status_code=400, detail="repair_packet_content_unreadable")
+    try:
+        return RepairPacketResponse(**data)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="repair_packet_content_invalid") from exc
+
+
+def _repair_handoff_prompt(task: Task, packet: RepairPacketResponse, target: str) -> str:
+    repair_packet_lines = _repair_packet_handoff_lines(packet)
+
+    if target == "generic_ai":
+        return "\n".join([
+            "Analyze this repair packet.",
+            "Propose a narrow fix plan.",
+            "Do not claim repository changes were made.",
+            "Return structured repair guidance only.",
+            DO_NOT_READ_ENV,
+            DO_NOT_READ_SECRET_REF,
+            DO_NOT_EXPOSE_SECRETS,
+            "Do not auto merge or deploy.",
+            DO_NOT_BYPASS_TESTS,
+            "Verify current master before acting if you are later asked to execute.",
+            f"Task #{task.id}: {task.title}",
+            *repair_packet_lines,
+        ])
+
+    lines = _codex_handoff_prompt(task, packet).splitlines()
+    lines.extend([
+        "Verify current master before making changes.",
+        "Use the repair packet.",
+        "Make one narrow fix only.",
+        "Do not auto merge.",
+        "Do not auto deploy.",
+        DO_NOT_BYPASS_TESTS,
+        "Run verification commands.",
+        "Report modified files, verification results, and remaining risks.",
+        "Create PR and wait for mastermind review.",
+    ])
+    if target == "omx":
+        lines.extend([
+            "Use controlled OMX flow.",
+            "Prefer ralplan / ralph / team as appropriate.",
+            "Do not use dangerous bypass mode.",
+            "Each worker must stay within the repair packet scope.",
+            "Stop after one attempt unless user explicitly approves another round.",
+        ])
+    lines.extend(repair_packet_lines)
+    return "\n".join(lines)
+
+
+def _repair_packet_handoff_lines(packet: RepairPacketResponse) -> list[str]:
+    field_rows = [
+        ("task_id", packet.task_id),
+        ("project_id", packet.project_id),
+        ("failure_summary", packet.failure_summary),
+        ("recommended_fix_strategy", packet.recommended_fix_strategy),
+        ("files_likely_involved", packet.files_likely_involved),
+        ("commands_to_verify", packet.commands_to_verify),
+        ("risks", packet.risks),
+        ("max_attempts", packet.max_attempts),
+    ]
+    lines = ["Repair packet:"]
+    for key, value in field_rows:
+        rendered = ", ".join(str(item) for item in value) if isinstance(value, list) and value else value or "-"
+        lines.append(f"- {key}: {rendered}")
+    lines.append("- do_not_do:")
+    lines.extend(f"  - {item}" for item in packet.do_not_do)
+    return lines
 
 
 def _redact_packet(packet: RepairPacketResponse) -> RepairPacketResponse:

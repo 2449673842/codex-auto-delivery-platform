@@ -627,6 +627,59 @@
         </div>
       </section>
 
+      <section class="card repair-handoff-preview">
+        <div class="section-header">
+          <h2>Codex / OMX Repair Handoff</h2>
+          <span class="muted">S20.3 handoff preview only</span>
+        </div>
+        <div class="workspace-safety">
+          <span class="label-badge label-ai">Handoff only</span>
+          <span class="label-badge label-provider">No repair execution</span>
+          <span class="label-badge label-applied">No repository writes by platform</span>
+          <span class="label-badge label-exec">No auto merge / deploy</span>
+          <span class="label-badge label-redacted">Requires current master verification</span>
+        </div>
+        <p class="section-note">Reads an existing repair_packet artifact and formats a safe prompt for Codex, OMX, or a generic AI.</p>
+        <div class="repair-handoff-form">
+          <label>
+            repair_packet_artifact_id
+            <input v-model.number="repairHandoffForm.repair_packet_artifact_id" type="number" min="1" placeholder="latest generated repair packet id" />
+          </label>
+          <label>
+            target
+            <select v-model="repairHandoffForm.target">
+              <option value="codex">Codex</option>
+              <option value="omx">OMX</option>
+              <option value="generic_ai">Generic AI</option>
+            </select>
+          </label>
+          <div class="form-actions">
+            <button class="btn btn-primary btn-sm" @click="previewCodexRepairHandoff" :disabled="repairHandoffLoading || !repairHandoffForm.repair_packet_artifact_id">
+              Preview Handoff
+            </button>
+            <button class="btn btn-sm" @click="copyRepairHandoffPrompt" :disabled="!repairHandoffResult?.handoff_prompt">
+              Copy Handoff
+            </button>
+          </div>
+        </div>
+        <p v-if="repairHandoffCopyMessage" class="copy-message">{{ repairHandoffCopyMessage }}</p>
+        <p v-if="repairHandoffError" class="run-error">{{ repairHandoffError }}</p>
+        <div v-if="repairHandoffResult" class="real-ai-result repair-handoff-result">
+          <strong>repair handoff prompt</strong>
+          <div class="dispatch-job-meta">
+            <span>target: {{ repairHandoffResult.target }}</span>
+            <span>source_repair_packet_artifact_id: {{ repairHandoffResult.source_repair_packet_artifact_id }}</span>
+            <span>requires_master_verification={{ repairHandoffResult.requires_master_verification }}</span>
+            <span>read_only={{ repairHandoffResult.read_only }}</span>
+            <span>persisted={{ repairHandoffResult.persisted }}</span>
+          </div>
+          <div class="safety-notes">
+            <span v-for="note in repairHandoffResult.safety_notes" :key="note" class="label-badge label-ai">{{ note }}</span>
+          </div>
+          <pre>{{ repairHandoffResult.handoff_prompt }}</pre>
+        </div>
+      </section>
+
       <!-- Agent Runs -->
       <section class="card">
         <div class="section-header">
@@ -1261,12 +1314,12 @@ import {
   fetchDispatchBatches, previewAnswerSynthesis, previewAiHandoff,
   dryRunAiDispatch, executeAiDispatch,
   dryRunBrowserAi, executeBrowserAi, fetchBrowserAiProviderProfiles,
-  previewMultiAiEvidenceRun, executeMultiAiEvidenceRun, previewFailureEvidencePacket, generateRepairPacket,
+  previewMultiAiEvidenceRun, executeMultiAiEvidenceRun, previewFailureEvidencePacket, generateRepairPacket, previewRepairHandoff,
   fetchCodeContext,
   applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate, evaluateSandboxGate,
   fetchMcpTools, callMcpTool,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse, RepairPacketGenerateRequest, RepairPacketResponse } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse, RepairPacketGenerateRequest, RepairHandoffPreviewRequest, RepairHandoffPreviewResponse, RepairPacketResponse } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -1413,6 +1466,14 @@ const repairPacketForm = ref<Omit<RepairPacketGenerateRequest, 'task_id' | 'fail
 const repairPacketResult = ref<RepairPacketResponse | null>(null)
 const repairPacketLoading = ref(false)
 const repairPacketError = ref('')
+const repairHandoffForm = ref<Omit<RepairHandoffPreviewRequest, 'task_id'>>({
+  repair_packet_artifact_id: 0,
+  target: 'codex',
+})
+const repairHandoffResult = ref<RepairHandoffPreviewResponse | null>(null)
+const repairHandoffLoading = ref(false)
+const repairHandoffError = ref('')
+const repairHandoffCopyMessage = ref('')
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -1642,6 +1703,15 @@ function buildRepairPacketRequest(): RepairPacketGenerateRequest | null {
   }
 }
 
+function buildRepairHandoffRequest(): RepairHandoffPreviewRequest | null {
+  if (!task.value || !repairHandoffForm.value.repair_packet_artifact_id) return null
+  return {
+    task_id: task.value.id,
+    repair_packet_artifact_id: repairHandoffForm.value.repair_packet_artifact_id,
+    target: repairHandoffForm.value.target,
+  }
+}
+
 function addEvidenceRole() {
   multiAiForm.value.roles.push({ role: 'risk', provider: 'gemini_web', prompt: 'Check risks and missing evidence.' })
 }
@@ -1861,6 +1931,10 @@ async function generateRepairPacketFromEvidence() {
   repairPacketError.value = ''
   try {
     repairPacketResult.value = await generateRepairPacket(body)
+    if (repairPacketResult.value.repair_packet_artifact_id) {
+      repairHandoffForm.value.repair_packet_artifact_id = repairPacketResult.value.repair_packet_artifact_id
+      repairHandoffResult.value = null
+    }
     artifactRefreshKey.value += 1
     await loadAiHandoff()
   } catch (e: any) {
@@ -1868,6 +1942,22 @@ async function generateRepairPacketFromEvidence() {
     repairPacketError.value = e.message || 'Repair Packet generation failed'
   } finally {
     repairPacketLoading.value = false
+  }
+}
+
+async function previewCodexRepairHandoff() {
+  const body = buildRepairHandoffRequest()
+  if (!body) return
+  repairHandoffLoading.value = true
+  repairHandoffError.value = ''
+  repairHandoffCopyMessage.value = ''
+  try {
+    repairHandoffResult.value = await previewRepairHandoff(body)
+  } catch (e: any) {
+    repairHandoffResult.value = null
+    repairHandoffError.value = e.message || 'Repair handoff preview failed'
+  } finally {
+    repairHandoffLoading.value = false
   }
 }
 
@@ -2005,6 +2095,16 @@ async function copyNextAiPrompt() {
     aiHandoffCopyMessage.value = 'next_ai_prompt 已复制'
   } catch {
     aiHandoffCopyMessage.value = '复制失败，请手动选择文本'
+  }
+}
+
+async function copyRepairHandoffPrompt() {
+  if (!repairHandoffResult.value?.handoff_prompt) return
+  try {
+    await navigator.clipboard.writeText(repairHandoffResult.value.handoff_prompt)
+    repairHandoffCopyMessage.value = 'repair handoff prompt 已复制'
+  } catch {
+    repairHandoffCopyMessage.value = '复制失败，请手动选择文本'
   }
 }
 
@@ -2186,6 +2286,7 @@ async function handleCreateAgentReview() {
 .multi-ai-evidence-run { border-left: 3px solid #6a1b9a; }
 .failure-evidence-preview { border-left: 3px solid #ad5700; }
 .repair-packet-generation { border-left: 3px solid #2e7d32; }
+.repair-handoff-preview { border-left: 3px solid #2563eb; }
 .browser-ai-help { margin: 8px 0 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
 .browser-ai-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
 .browser-ai-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
@@ -2199,8 +2300,10 @@ async function handleCreateAgentReview() {
 .failure-evidence-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
 .failure-evidence-form .wide { grid-column: 1 / -1; }
 .failure-evidence-result pre { max-height: 420px; overflow: auto; }
-.repair-packet-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
-.repair-packet-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
+.repair-packet-form,
+.repair-handoff-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
+.repair-packet-form label,
+.repair-handoff-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
 .repair-packet-form .wide { grid-column: 1 / -1; }
 .repair-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .repair-list span { padding: 3px 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; font-size: 12px; color: var(--color-text-secondary); }
