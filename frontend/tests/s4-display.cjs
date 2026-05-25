@@ -159,6 +159,12 @@ async function checkInputValuesExclude(page, selector, forbidden, label) {
   else pass(`${label}: "${forbidden}" absent from input values`)
 }
 
+async function checkInputValueAt(locator, index, expected, label) {
+  const actual = await locator.nth(index).inputValue()
+  if (actual === expected) pass(label)
+  else fail(label, actual)
+}
+
 async function testDashboardFirstUsableWorkflow(page) {
   log('\n========== D0. Dashboard First Usable Workflow ==========')
   const projectCounter = { count: 0 }
@@ -751,13 +757,9 @@ async function testMultiAiEvidenceRunPanel(page, taskId) {
   else fail('S19-7 provider multiselect missing', providerChecks)
   await page.locator('.multi-ai-evidence-run summary').click()
   const selectorInputs = page.locator('.multi-ai-evidence-run .selector-grid input')
-  const initialTargetUrl = await selectorInputs.first().inputValue()
-  if (initialTargetUrl === '') pass('S19-7a advanced target_url starts empty')
-  else fail('S19-7a advanced target_url starts empty', initialTargetUrl)
+  await checkInputValueAt(selectorInputs, 0, '', 'S19-7a advanced target_url starts empty')
   await page.locator('.multi-ai-evidence-run input[type="checkbox"]').first().setChecked(true)
-  const targetUrlAfterProviderSelect = await selectorInputs.first().inputValue()
-  if (targetUrlAfterProviderSelect === '') pass('S19-7b provider selection does not inject mock target_url')
-  else fail('S19-7b provider selection does not inject mock target_url', targetUrlAfterProviderSelect)
+  await checkInputValueAt(selectorInputs, 0, '', 'S19-7b provider selection does not inject mock target_url')
   await selectorInputs.nth(1).fill('textarea[name="manual-evidence"]')
   await checkInputValue(page, '.multi-ai-evidence-run input', 'textarea[name="manual-evidence"]', 'S19-7c advanced selector fallback remains editable')
   await page.locator('.multi-ai-evidence-run').getByRole('button', { name: 'Preview' }).click()
