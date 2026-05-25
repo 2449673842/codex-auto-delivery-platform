@@ -1,5 +1,6 @@
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -11,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.models.dispatch_batch import DispatchBatch
 from app.models.dispatch_job import DispatchJob
+from app.schemas.ai_handoff import AiHandoffPreviewRequest
 from app.models.task import Task
 from app.schemas.answer_synthesis import AnswerSynthesisPreviewRequest
 from app.schemas.browser_ai import BrowserAiRequest
@@ -22,7 +24,7 @@ from app.schemas.multi_ai_evidence_run import (
     MultiAiEvidenceRunResponse,
     MultiAiEvidenceSafetyGate,
 )
-from app.services import answer_synthesis_service, browser_ai_service
+from app.services import ai_handoff_service, answer_synthesis_service, browser_ai_service
 from app.services.ai_output_governance_service import redact_secrets
 
 
@@ -41,6 +43,13 @@ class _EvidenceJob:
         self.provider = provider
         self.role = role
         self.prompt = prompt
+
+
+@dataclass
+class _PromptContext:
+    prompt: str
+    available: bool
+    safety_notes: list[str]
 
 
 def _redact(value: str | None) -> str:
@@ -74,14 +83,115 @@ def _providers(body: MultiAiEvidenceRunRequest) -> list[str]:
     return [provider.strip() for provider in body.providers if provider.strip()]
 
 
-def _base_prompt(task: Task, body: MultiAiEvidenceRunRequest) -> str:
+async def _base_prompt(db: AsyncSession, task: Task, body: MultiAiEvidenceRunRequest) -> _PromptContext:
     if body.prompt_source == "custom_prompt":
-        return body.custom_prompt.strip()
+        return _PromptContext(
+            prompt=body.custom_prompt.strip(),
+            available=bool(body.custom_prompt.strip()),
+            safety_notes=["prompt_source=custom_prompt: using user-provided prompt text."],
+        )
     if body.prompt_source == "handoff_packet":
-        return f"Prepare a concise handoff-oriented review for this task.\n\n{_task_text(task)}"
+        return await _handoff_prompt(db, task)
     if body.prompt_source == "answer_synthesis":
-        return f"Review the current task using existing synthesis context if available.\n\n{_task_text(task)}"
-    return _task_text(task)
+        return await _answer_synthesis_prompt(db, task)
+    return _PromptContext(
+        prompt=_task_text(task),
+        available=True,
+        safety_notes=["prompt_source=task_goal: using task title, description, and status."],
+    )
+
+
+async def _handoff_prompt(db: AsyncSession, task: Task) -> _PromptContext:
+    try:
+        packet = await ai_handoff_service.preview(
+            db,
+            AiHandoffPreviewRequest(
+                project_id=task.project_id,
+                task_id=task.id,
+                include_recent_batches=True,
+                include_answer_synthesis=True,
+                include_safety_rules=True,
+                max_chars=8000,
+            ),
+        )
+    except Exception as exc:
+        reason = _redact(str(exc))[:160] or "handoff packet unavailable"
+        return _PromptContext(
+            prompt="Prepare a concise handoff-oriented review for this task.\n\n"
+            f"{_task_text(task)}\n\nHandoff packet unavailable: {reason}",
+            available=False,
+            safety_notes=[
+                f"prompt_source=handoff_packet unavailable; fell back to task_goal context. reason={reason}",
+            ],
+        )
+    payload = {
+        "current_task_summary": packet.current_task_summary,
+        "recent_dispatch_summary": packet.recent_dispatch_summary,
+        "answer_synthesis_summary": packet.answer_synthesis_summary,
+        "next_recommended_steps": packet.next_recommended_steps,
+        "next_ai_prompt": packet.next_ai_prompt,
+        "safety_rules": packet.safety_rules,
+        "safety_notes": packet.safety_notes,
+        "source_ids": packet.source_ids.model_dump(),
+    }
+    return _PromptContext(
+        prompt="Use this redacted AI handoff packet as the evidence context.\n\n"
+        f"{_redact(json.dumps(payload, ensure_ascii=False, default=str))}",
+        available=True,
+        safety_notes=[
+            "prompt_source=handoff_packet loaded from AI Handoff preview.",
+            "AI Handoff preview is stateless and does not call an AI provider.",
+        ],
+    )
+
+
+async def _answer_synthesis_prompt(db: AsyncSession, task: Task) -> _PromptContext:
+    try:
+        synthesis = await answer_synthesis_service.preview(
+            db,
+            AnswerSynthesisPreviewRequest(
+                task_id=task.id,
+                dispatch_batch_id=None,
+                include_artifacts=True,
+                max_artifact_chars=1200,
+            ),
+        )
+    except Exception as exc:
+        reason = _redact(str(exc))[:160] or "answer synthesis unavailable"
+        return _PromptContext(
+            prompt="Review the current task using existing synthesis context if available.\n\n"
+            f"{_task_text(task)}\n\nAnswer synthesis unavailable: {reason}",
+            available=False,
+            safety_notes=[
+                f"prompt_source=answer_synthesis unavailable; fell back to task_goal context. reason={reason}",
+            ],
+        )
+    payload = {
+        "synthesis_status": synthesis.synthesis_status,
+        "job_count": synthesis.job_count,
+        "succeeded_jobs": synthesis.succeeded_jobs,
+        "failed_jobs": synthesis.failed_jobs,
+        "blocked_jobs": synthesis.blocked_jobs,
+        "common_findings": synthesis.common_findings,
+        "disagreements": synthesis.disagreements,
+        "risks": synthesis.risks,
+        "recommended_actions": synthesis.recommended_actions,
+        "next_questions": synthesis.next_questions,
+        "artifact_summaries": [item.model_dump() for item in synthesis.artifact_summaries],
+        "source_job_ids": synthesis.source_job_ids,
+        "source_agent_run_ids": synthesis.source_agent_run_ids,
+        "source_artifact_ids": synthesis.source_artifact_ids,
+        "safety_notes": synthesis.safety_notes,
+    }
+    return _PromptContext(
+        prompt="Use this redacted Answer Synthesis preview as the evidence context.\n\n"
+        f"{_redact(json.dumps(payload, ensure_ascii=False, default=str))}",
+        available=True,
+        safety_notes=[
+            "prompt_source=answer_synthesis loaded from Answer Synthesis preview.",
+            "Answer Synthesis preview is rule-based and does not call an AI provider.",
+        ],
+    )
 
 
 def _task_text(task: Task) -> str:
@@ -92,8 +202,7 @@ def _task_text(task: Task) -> str:
     ])
 
 
-def _build_jobs(task: Task, body: MultiAiEvidenceRunRequest) -> list[_EvidenceJob]:
-    base = _base_prompt(task, body)
+def _build_jobs(base: str, body: MultiAiEvidenceRunRequest) -> list[_EvidenceJob]:
     if body.mode == "routed":
         jobs: list[_EvidenceJob] = []
         for index, role in enumerate(body.roles, start=1):
@@ -147,8 +256,10 @@ def _safety_gate(body: MultiAiEvidenceRunRequest, jobs: list[_EvidenceJob], *, f
 
 async def preview(db: AsyncSession, body: MultiAiEvidenceRunRequest) -> MultiAiEvidenceRunResponse:
     task = await _get_task(db, body.task_id)
-    jobs = _build_jobs(task, body)
+    prompt_context = await _base_prompt(db, task, body)
+    jobs = _build_jobs(prompt_context.prompt, body)
     gate = _safety_gate(body, jobs, for_execute=False)
+    gate.safety_notes.extend(prompt_context.safety_notes)
     return MultiAiEvidenceRunResponse(
         task_id=task.id,
         mode=body.mode,
@@ -178,8 +289,10 @@ async def preview(db: AsyncSession, body: MultiAiEvidenceRunRequest) -> MultiAiE
 
 async def execute(db: AsyncSession, body: MultiAiEvidenceRunRequest) -> MultiAiEvidenceRunResponse:
     task = await _get_task(db, body.task_id)
-    jobs = _build_jobs(task, body)
+    prompt_context = await _base_prompt(db, task, body)
+    jobs = _build_jobs(prompt_context.prompt, body)
     gate = _safety_gate(body, jobs, for_execute=True)
+    gate.safety_notes.extend(prompt_context.safety_notes)
     if not gate.gate_passed:
         return MultiAiEvidenceRunResponse(
             task_id=task.id,
@@ -211,15 +324,16 @@ async def execute(db: AsyncSession, body: MultiAiEvidenceRunRequest) -> MultiAiE
         task_id=task.id,
         batch_mode=body.mode,
         status="running",
-        task_goal=_redact(_base_prompt(task, body)),
+        task_goal=_redact(prompt_context.prompt),
         metadata_json=_safe_json({
             "type": "multi_ai_evidence_run",
             "prompt_source": body.prompt_source,
+            "prompt_source_available": prompt_context.available,
             "concurrency_limit": body.concurrency_limit,
             "concurrency_note": CONCURRENCY_NOTE,
             "pipeline_implemented": False,
             "repair_loop_implemented": False,
-            "safety_notes": SAFETY_NOTES,
+            "safety_notes": gate.safety_notes,
         }),
     )
     db.add(batch)

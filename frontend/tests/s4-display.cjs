@@ -153,6 +153,12 @@ async function checkInputValue(page, selector, expected, label) {
   else fail(`${label}: "${expected}" not found`, values.join(' | '))
 }
 
+async function checkInputValuesExclude(page, selector, forbidden, label) {
+  const values = await page.locator(selector).evaluateAll(nodes => nodes.map(node => node.value || ''))
+  if (values.includes(forbidden)) fail(`${label}: "${forbidden}" should be absent`, values.join(' | '))
+  else pass(`${label}: "${forbidden}" absent from input values`)
+}
+
 async function testDashboardFirstUsableWorkflow(page) {
   log('\n========== D0. Dashboard First Usable Workflow ==========')
   const projectCounter = { count: 0 }
@@ -738,9 +744,22 @@ async function testMultiAiEvidenceRunPanel(page, taskId) {
   await checkT(page, 'No PR / CI / Sonar / Deploy', 'S19-4 no external delivery label')
   await checkT(page, 'No auto approve / merge', 'S19-5 no approve merge label')
   await checkBodyIncludes(page, 'bounded concurrency is planned; current MVP executes jobs sequentially', 'S19-6 concurrency note')
+  await checkInputValuesExclude(page, '.multi-ai-evidence-run input', 'http://127.0.0.1:9999/mock-browser-ai', 'S19-6a no mock Browser AI URL in initial Multi-AI UI')
+  await checkInputValuesExclude(page, '.multi-ai-evidence-run input', "textarea[name='prompt']", 'S19-6b no mock Browser AI selector in initial Multi-AI UI')
   const providerChecks = await page.locator('.multi-ai-evidence-run input[type="checkbox"]:checked').count()
   if (providerChecks >= 2) pass('S19-7 broadcast mode can select multiple providers')
   else fail('S19-7 provider multiselect missing', providerChecks)
+  await page.locator('.multi-ai-evidence-run summary').click()
+  const selectorInputs = page.locator('.multi-ai-evidence-run .selector-grid input')
+  const initialTargetUrl = await selectorInputs.first().inputValue()
+  if (initialTargetUrl === '') pass('S19-7a advanced target_url starts empty')
+  else fail('S19-7a advanced target_url starts empty', initialTargetUrl)
+  await page.locator('.multi-ai-evidence-run input[type="checkbox"]').first().setChecked(true)
+  const targetUrlAfterProviderSelect = await selectorInputs.first().inputValue()
+  if (targetUrlAfterProviderSelect === '') pass('S19-7b provider selection does not inject mock target_url')
+  else fail('S19-7b provider selection does not inject mock target_url', targetUrlAfterProviderSelect)
+  await selectorInputs.nth(1).fill('textarea[name="manual-evidence"]')
+  await checkInputValue(page, '.multi-ai-evidence-run input', 'textarea[name="manual-evidence"]', 'S19-7c advanced selector fallback remains editable')
   await page.locator('.multi-ai-evidence-run').getByRole('button', { name: 'Preview' }).click()
   await page.waitForTimeout(300)
   if (previewCounter.count === 1) pass('S19-8 preview endpoint called')

@@ -13,6 +13,7 @@ from app.models.dispatch_batch import DispatchBatch
 from app.models.dispatch_job import DispatchJob
 from app.models.task_artifact import TaskArtifact
 from app.models.task_event import TaskEvent
+from app.models.agent_profile import AgentProfile
 
 
 BASE = "/api/multi-ai-evidence-runs"
@@ -137,6 +138,38 @@ async def _stored_payload() -> str:
         "batches": [(batch.task_goal or "") + (batch.metadata_json or "") + (batch.summary_json or "") for batch in batches],
         "jobs": [job.question + (job.error_message or "") + (job.metadata_json or "") for job in jobs],
     })
+
+
+async def _seed_browser_artifact(task: dict, content: str = "Existing browser answer for synthesis context") -> None:
+    async with get_session_factory()() as session:
+        agent = AgentProfile(
+            name="Browser AI Seed",
+            agent_type="browser_ai",
+            provider="browser_ai",
+            model_name="chatgpt_web",
+            enabled=True,
+        )
+        session.add(agent)
+        await session.flush()
+        run = AgentRun(
+            task_id=task["id"],
+            project_id=task["project_id"],
+            agent_id=agent.id,
+            run_type="review",
+            status="succeeded",
+            input_prompt="seeded synthesis source",
+            output_summary=content,
+        )
+        session.add(run)
+        await session.flush()
+        session.add(TaskArtifact(
+            task_id=task["id"],
+            artifact_type="browser_ai_answer",
+            filename=f"browser_ai_run_{run.id}_answer.md",
+            content=content,
+            metadata_json=json.dumps({"agent_run_id": run.id, "provider": "chatgpt_web"}),
+        ))
+        await session.commit()
 
 
 @pytest.mark.asyncio
@@ -327,3 +360,63 @@ async def test_preview_forbidden_surfaces_not_used(client, task, enabled_setting
     assert response.status_code == 200
     assert response.json()["data"]["persisted"] is False
     assert await _counts() == before
+
+
+@pytest.mark.asyncio
+async def test_handoff_packet_prompt_source_uses_handoff_context(client, task, enabled_settings):
+    from app.services import browser_ai_service
+    driver = ProviderAwareDriver()
+    browser_ai_service.set_driver_override(driver)
+    body = _broadcast_body(task, ["chatgpt_web"])
+    body["prompt_source"] = "handoff_packet"
+
+    response = await client.post(f"{BASE}/execute", json=body)
+
+    data = response.json()["data"]
+    assert data["overall_status"] == "succeeded"
+    assert data["safety_gate"]["prompt_source_valid"] is True
+    assert any("prompt_source=handoff_packet loaded" in note for note in data["safety_gate"]["safety_notes"])
+    assert driver.calls
+    prompt = driver.calls[0][1]
+    assert "redacted AI handoff packet" in prompt
+    assert "next_ai_prompt" in prompt
+    assert "current_task_summary" in prompt
+    assert "S19 Multi-AI Evidence" in prompt
+    assert "Prepare a concise handoff-oriented review for this task" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_answer_synthesis_prompt_source_uses_synthesis_context(client, task, enabled_settings):
+    from app.services import browser_ai_service
+    await _seed_browser_artifact(task)
+    driver = ProviderAwareDriver()
+    browser_ai_service.set_driver_override(driver)
+    body = _broadcast_body(task, ["chatgpt_web"])
+    body["prompt_source"] = "answer_synthesis"
+
+    response = await client.post(f"{BASE}/execute", json=body)
+
+    data = response.json()["data"]
+    assert data["overall_status"] == "succeeded"
+    assert any("prompt_source=answer_synthesis loaded" in note for note in data["safety_gate"]["safety_notes"])
+    assert driver.calls
+    prompt = driver.calls[0][1]
+    assert "Answer Synthesis preview" in prompt
+    assert "artifact_summaries" in prompt
+    assert "Existing browser answer for synthesis context" in prompt
+    assert "Review the current task using existing synthesis context if available" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_answer_synthesis_prompt_source_unavailable_has_explicit_fallback(client, task, enabled_settings):
+    response = await client.post(f"{BASE}/preview", json={
+        **_broadcast_body(task, ["chatgpt_web"]),
+        "prompt_source": "answer_synthesis",
+    })
+
+    data = response.json()["data"]
+    assert data["overall_status"] == "ready"
+    notes = " ".join(data["safety_gate"]["safety_notes"])
+    assert "prompt_source=answer_synthesis unavailable" in notes
+    assert "fell back to task_goal context" in notes
+    assert data["jobs"][0]["question"]
