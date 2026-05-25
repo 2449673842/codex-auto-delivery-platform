@@ -10,6 +10,7 @@ import type {
   AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse,
   BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse,
   McpToolDescriptor, McpCallRequest, McpCallResponse,
+  MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -177,6 +178,22 @@ export async function dryRunBrowserAi(body: BrowserAiRequest): Promise<BrowserAi
 export async function executeBrowserAi(body: BrowserAiRequest): Promise<BrowserAiResponse> {
   const { data } = await client.post('/browser-ai/execute', body)
   return data.data
+}
+
+// ── Multi-AI Evidence Run / Evidence collection only ──
+export async function previewMultiAiEvidenceRun(body: MultiAiEvidenceRunRequest): Promise<MultiAiEvidenceRunResponse> {
+  const { data } = await client.post('/multi-ai-evidence-runs/preview', body)
+  return data.data
+}
+
+export async function executeMultiAiEvidenceRun(body: MultiAiEvidenceRunRequest): Promise<MultiAiEvidenceRunResponse> {
+  const { data } = await client.post('/multi-ai-evidence-runs/execute', body)
+  return data.data
+}
+
+export async function fetchMultiAiEvidenceRuns(taskId: number): Promise<MultiAiEvidenceRunResponse[]> {
+  const { data } = await client.get(`/tasks/${taskId}/multi-ai-evidence-runs`)
+  return data.data || []
 }
 
 // ── MCP Bridge / read-only + dry-run tool semantics ──

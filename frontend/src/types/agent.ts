@@ -531,3 +531,80 @@ export interface BrowserAiResponse {
   persisted: boolean
   steps: BrowserAiStep[]
 }
+
+// ── Multi-AI Evidence Run / Evidence collection only ──
+export type MultiAiEvidenceRunMode = 'broadcast' | 'routed'
+export type MultiAiEvidencePromptSource = 'task_goal' | 'handoff_packet' | 'answer_synthesis' | 'custom_prompt'
+
+export interface MultiAiEvidenceRoleRequest {
+  role: string
+  provider: BrowserAiProvider
+  prompt?: string
+}
+
+export interface MultiAiEvidenceRunRequest {
+  task_id: number
+  mode: MultiAiEvidenceRunMode
+  providers: BrowserAiProvider[]
+  roles: MultiAiEvidenceRoleRequest[]
+  prompt_source: MultiAiEvidencePromptSource
+  custom_prompt?: string
+  concurrency_limit: number
+  timeout_seconds?: number | null
+  target_url?: string
+  input_selector?: string
+  send_selector?: string
+  response_selector?: string
+  scroll_container_selector?: string
+  copy_button_selector?: string
+  login_hint_selector?: string
+}
+
+export interface MultiAiEvidenceSafetyGate {
+  mode_valid: boolean
+  prompt_source_valid: boolean
+  providers_known: boolean
+  providers_allowed: boolean
+  job_count_ok: boolean
+  browser_ai_enabled: boolean
+  gate_passed: boolean
+  blocked_reasons: string[]
+  safety_notes: string[]
+}
+
+export interface MultiAiEvidenceJobResponse {
+  dispatch_job_id: number | null
+  sequence_no: number
+  provider: string
+  role: string
+  status: string
+  prompt_source: string
+  prompt_hash: string
+  question: string
+  error_message: string | null
+  agent_run_id: number | null
+  artifact_id: number | null
+  artifact_ids: number[]
+  answer_preview: string
+}
+
+export interface MultiAiEvidenceRunResponse {
+  evidence_run_id: number | null
+  dispatch_batch_id: number | null
+  task_id: number
+  mode: string
+  prompt_source: string
+  providers: string[]
+  jobs: MultiAiEvidenceJobResponse[]
+  estimated_job_count: number
+  concurrency_limit: number
+  concurrency_note: string
+  overall_status: string
+  safety_gate: MultiAiEvidenceSafetyGate
+  read_only: boolean
+  persisted: boolean
+  synthesis_refreshed: boolean
+  synthesis_status: string
+  source_artifact_ids: number[]
+  error_message: string
+}
