@@ -463,71 +463,26 @@ def _build_repair_packet(
     synthesis,
 ) -> RepairPacketResponse:
     evidence = body.failure_evidence
-    job_findings = [
-        f"{job.provider}/{job.role}: {job.answer_preview}"
-        for job in analysis.jobs
-        if job.status == "succeeded" and job.answer_preview
-    ]
-    failed_jobs = [
-        f"{job.provider}/{job.role}: {job.error_message}"
-        for job in analysis.jobs
-        if job.status in {"failed", "blocked"} and job.error_message
-    ]
-    common_findings = list(getattr(synthesis, "common_findings", []) or []) if synthesis else []
-    disagreements = list(getattr(synthesis, "disagreements", []) or []) if synthesis else []
-    synthesis_risks = list(getattr(synthesis, "risks", []) or []) if synthesis else []
-    recommended_actions = list(getattr(synthesis, "recommended_actions", []) or []) if synthesis else []
-    next_questions = list(getattr(synthesis, "next_questions", []) or []) if synthesis else []
-    artifact_summaries = list(getattr(synthesis, "artifact_summaries", []) or []) if synthesis else []
-
-    risks = _unique([
-        *synthesis_risks,
-        *failed_jobs,
-        *evidence.blocked_reasons,
-        "Human decision is required before any repair execution.",
-    ])
-    if analysis.overall_status == "partial":
-        risks.append("Multi-AI repair analysis was partial; at least one source failed or was blocked.")
-    if not job_findings and not common_findings:
-        risks.append("No successful Multi-AI repair finding was available; rely on failure evidence and human review.")
-
-    files_likely_involved = _extract_file_hints(" ".join([
-        evidence.failed_command_summary,
-        evidence.stdout_excerpt,
-        evidence.stderr_excerpt,
-        " ".join(job_findings),
-        " ".join(common_findings),
-    ]))
-    commands_to_verify = _commands_to_verify(evidence)
-    recommended_fix_strategy = (
-        recommended_actions[0]
-        if recommended_actions
-        else "Make the smallest targeted repair based on the failure evidence, then rerun the listed verification commands."
-    )
-    failure_summary = _redact(
-        f"{evidence.failure_type} at {evidence.failed_step}: "
-        f"{evidence.failed_command_summary or '; '.join(evidence.blocked_reasons) or 'failure evidence collected'}"
-    )[:600]
-    suspected_root_causes = _unique([
-        *evidence.blocked_reasons[:4],
-        *common_findings[:4],
-        *job_findings[:4],
-    ])[:8]
-    if not suspected_root_causes:
-        suspected_root_causes = [f"Failure type {evidence.failure_type} requires manual diagnosis from the collected evidence."]
+    job_findings = _analysis_job_findings(analysis)
+    failed_jobs = _analysis_failed_jobs(analysis)
+    common_findings = _synthesis_list(synthesis, "common_findings")
+    disagreements = _synthesis_list(synthesis, "disagreements")
+    recommended_actions = _synthesis_list(synthesis, "recommended_actions")
+    next_questions = _synthesis_list(synthesis, "next_questions")
+    artifact_summaries = _synthesis_list(synthesis, "artifact_summaries")
 
     packet = RepairPacketResponse(
         task_id=task.id,
         project_id=task.project_id,
-        failure_summary=failure_summary,
-        suspected_root_causes=suspected_root_causes,
+        failure_summary=_failure_summary(evidence),
+        suspected_root_causes=_suspected_root_causes(evidence, common_findings, job_findings),
         evidence_by_source=_evidence_by_source(evidence, analysis, artifact_summaries),
         multi_ai_findings=_unique([*common_findings, *job_findings])[:12],
         disagreements=_unique([*disagreements, *next_questions])[:8],
-        recommended_fix_strategy=_redact(recommended_fix_strategy)[:1200],
-        files_likely_involved=files_likely_involved,
-        commands_to_verify=commands_to_verify,
-        risks=_unique(risks)[:12],
+        recommended_fix_strategy=_recommended_fix_strategy(recommended_actions),
+        files_likely_involved=_files_likely_involved(evidence, job_findings, common_findings),
+        commands_to_verify=_commands_to_verify(evidence),
+        risks=_repair_risks(evidence, analysis, synthesis, failed_jobs, job_findings, common_findings),
         human_decision_required=True,
         codex_handoff_prompt="",
         max_attempts=body.max_attempts,
@@ -548,6 +503,84 @@ def _build_repair_packet(
     )
     packet.codex_handoff_prompt = _codex_handoff_prompt(task, packet)
     return _redact_packet(packet)
+
+
+def _analysis_job_findings(analysis) -> list[str]:
+    return [
+        f"{job.provider}/{job.role}: {job.answer_preview}"
+        for job in analysis.jobs
+        if job.status == "succeeded" and job.answer_preview
+    ]
+
+
+def _analysis_failed_jobs(analysis) -> list[str]:
+    return [
+        f"{job.provider}/{job.role}: {job.error_message}"
+        for job in analysis.jobs
+        if job.status in {"failed", "blocked"} and job.error_message
+    ]
+
+
+def _synthesis_list(synthesis, field: str) -> list[Any]:
+    return list(getattr(synthesis, field, []) or []) if synthesis else []
+
+
+def _repair_risks(
+    evidence: FailureEvidencePacketResponse,
+    analysis,
+    synthesis,
+    failed_jobs: list[str],
+    job_findings: list[str],
+    common_findings: list[Any],
+) -> list[str]:
+    risks = _unique([
+        *_synthesis_list(synthesis, "risks"),
+        *failed_jobs,
+        *evidence.blocked_reasons,
+        "Human decision is required before any repair execution.",
+    ])
+    if analysis.overall_status == "partial":
+        risks.append("Multi-AI repair analysis was partial; at least one source failed or was blocked.")
+    if not job_findings and not common_findings:
+        risks.append("No successful Multi-AI repair finding was available; rely on failure evidence and human review.")
+    return _unique(risks)[:12]
+
+
+def _files_likely_involved(
+    evidence: FailureEvidencePacketResponse,
+    job_findings: list[str],
+    common_findings: list[Any],
+) -> list[str]:
+    return _extract_file_hints(" ".join([
+        evidence.failed_command_summary,
+        evidence.stdout_excerpt,
+        evidence.stderr_excerpt,
+        " ".join(job_findings),
+        " ".join(str(item) for item in common_findings),
+    ]))
+
+
+def _recommended_fix_strategy(recommended_actions: list[Any]) -> str:
+    strategy = (
+        str(recommended_actions[0])
+        if recommended_actions
+        else "Make the smallest targeted repair based on the failure evidence, then rerun the listed verification commands."
+    )
+    return _redact(strategy)[:1200]
+
+
+def _failure_summary(evidence: FailureEvidencePacketResponse) -> str:
+    source = evidence.failed_command_summary or "; ".join(evidence.blocked_reasons) or "failure evidence collected"
+    return _redact(f"{evidence.failure_type} at {evidence.failed_step}: {source}")[:600]
+
+
+def _suspected_root_causes(
+    evidence: FailureEvidencePacketResponse,
+    common_findings: list[Any],
+    job_findings: list[str],
+) -> list[str]:
+    causes = _unique([*evidence.blocked_reasons[:4], *common_findings[:4], *job_findings[:4]])[:8]
+    return causes or [f"Failure type {evidence.failure_type} requires manual diagnosis from the collected evidence."]
 
 
 def _evidence_by_source(evidence: FailureEvidencePacketResponse, analysis, artifact_summaries: list[Any]) -> list[RepairEvidenceBySource]:
