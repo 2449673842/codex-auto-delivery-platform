@@ -643,7 +643,7 @@ export interface FailureEvidenceRedactionStatus {
 export interface FailureEvidencePacketResponse {
   task_id: number
   project_id: number
-  failure_type: RepairFailureType | string
+  failure_type: RepairFailureType
   failed_step: string
   failed_command_summary: string
   stdout_excerpt: string
