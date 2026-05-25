@@ -11,6 +11,7 @@ import type {
   BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse,
   McpToolDescriptor, McpCallRequest, McpCallResponse,
   MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse,
+  FailureEvidencePreviewRequest, FailureEvidencePacketResponse,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -194,6 +195,12 @@ export async function executeMultiAiEvidenceRun(body: MultiAiEvidenceRunRequest)
 export async function fetchMultiAiEvidenceRuns(taskId: number): Promise<MultiAiEvidenceRunResponse[]> {
   const { data } = await client.get(`/tasks/${taskId}/multi-ai-evidence-runs`)
   return data.data || []
+}
+
+// ── Repair Loop / Failure Evidence preview only ──
+export async function previewFailureEvidencePacket(body: FailureEvidencePreviewRequest): Promise<FailureEvidencePacketResponse> {
+  const { data } = await client.post('/repair-loop/failure-evidence/preview', body)
+  return data.data
 }
 
 // ── MCP Bridge / read-only + dry-run tool semantics ──

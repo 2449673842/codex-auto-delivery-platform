@@ -858,6 +858,45 @@ async function testMultiAiEvidenceRunRoutedPartial(page, taskId) {
   await clearEvidenceRunRoutes(page)
 }
 
+async function testFailureEvidencePreviewPanel(page, taskId) {
+  log('\n========== S20.1 Failure Evidence Packet Preview ==========')
+  const previewCounter = { count: 0 }
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
+  await setFailureEvidenceRoute(page, failureEvidencePayload(taskId), 200, previewCounter)
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await checkT(page, 'Failure Evidence Packet Preview / 失败证据包预览', 'S20-1 panel shown')
+  await checkT(page, 'Failure Evidence preview is read-only', 'S20-2 read-only label shown')
+  await checkT(page, 'No provider call', 'S20-3 no provider label shown')
+  await checkT(page, 'No Browser AI execution', 'S20-4 no browser ai execution label shown')
+  await checkT(page, 'No repository writes', 'S20-5 no repository writes label shown')
+  await checkT(page, 'No PR / CI / Sonar / Deploy', 'S20-6 no external delivery label shown')
+  await checkT(page, 'No auto approve / merge', 'S20-7 no approve merge label shown')
+  await page.locator('.failure-evidence-preview select').first().selectOption('browser_ai_failed')
+  await checkInputValue(page, '.failure-evidence-preview input', '4000', 'S20-8 max excerpt default shown')
+  await page.locator('.failure-evidence-preview').getByRole('button', { name: 'Preview' }).click()
+  await page.waitForTimeout(300)
+  if (previewCounter.count === 1) pass('S20-9 preview endpoint called')
+  else fail('S20-9 preview endpoint call count', previewCounter.count)
+  await checkT(page, 'failure evidence packet', 'S20-10 packet shown')
+  await checkT(page, 'failure_type: browser_ai_failed', 'S20-11 failure type shown')
+  await checkT(page, 'failed_step: browser_ai', 'S20-12 failed step shown')
+  await checkT(page, 'read_only=true', 'S20-13 read only true shown')
+  await checkT(page, 'persisted=false', 'S20-14 persisted false shown')
+  await checkT(page, 'redaction_applied=true', 'S20-15 redaction shown')
+  await checkT(page, 'truncated=false', 'S20-16 truncation shown')
+  await checkT(page, 'selector_failed', 'S20-17 safety reason shown')
+  await checkT(page, 'No provider call is made.', 'S20-18 safety note shown')
+  await checkBodyExcludes(page, 'Auto fix repository', 'S20-19 no auto fix entry')
+  await checkBodyExcludes(page, 'Create PR', 'S20-20 no create PR entry')
+  const deployEntries = await page.locator('button:has-text("Deploy"), a:has-text("Deploy")').count()
+  if (deployEntries === 0) pass('S20-21 no deploy entry')
+  else fail('S20-21 no deploy entry', deployEntries)
+  await checkBodyExcludes(page, 'Merge PR', 'S20-22 no merge entry')
+  await clearFailureEvidenceRoutes(page)
+}
+
 async function testMcpBridgePanel(page, taskId) {
   log('\n========== MCP. MCP Bridge Read-only Dry-run ==========')
   const mcpCounter = { count: 0 }
@@ -965,6 +1004,11 @@ async function setEvidenceRunRoute(page, action, payload, status = 200, counter 
   await page.route(`**/api/multi-ai-evidence-runs/${action}`, route => fulfillJson(route, payload, status, counter))
 }
 
+async function setFailureEvidenceRoute(page, payload, status = 200, counter = null) {
+  await page.unroute('**/api/repair-loop/failure-evidence/preview').catch(() => {})
+  await page.route('**/api/repair-loop/failure-evidence/preview', route => fulfillJson(route, payload, status, counter))
+}
+
 async function setBrowserAiProfilesRoute(page) {
   await page.unroute('**/api/browser-ai/provider-profiles').catch(() => {})
   await page.route('**/api/browser-ai/provider-profiles', route => fulfillJson(route, {
@@ -996,6 +1040,10 @@ async function clearEvidenceRunRoutes(page) {
   await page.unroute('**/api/tasks/*/agent-runs').catch(() => {})
   await page.unroute('**/api/tasks/*/artifacts').catch(() => {})
   await page.unroute('**/api/answer-synthesis/preview').catch(() => {})
+}
+
+async function clearFailureEvidenceRoutes(page) {
+  await page.unroute('**/api/repair-loop/failure-evidence/preview').catch(() => {})
 }
 
 async function fulfillJson(route, payload, status, counter) {
@@ -1084,6 +1132,38 @@ function evidenceJob(sequenceNo, provider, role, status, runArtifact = {}, answe
     artifact_ids: runArtifact.artifact_id ? [runArtifact.artifact_id] : [],
     answer_preview: answerPreview,
   }
+}
+
+function failureEvidencePayload(taskId, overrides = {}) {
+  return { success: true, data: {
+    task_id: taskId,
+    project_id: 1,
+    failure_type: overrides.failure_type || 'browser_ai_failed',
+    failed_step: overrides.failed_step || 'browser_ai',
+    failed_command_summary: 'browser_ai execute failed',
+    stdout_excerpt: 'visible output excerpt',
+    stderr_excerpt: 'selector failure stderr',
+    blocked_reasons: ['selector_failed'],
+    related_agent_run_ids: [901],
+    related_artifact_ids: [],
+    related_dispatch_batch_id: null,
+    related_dispatch_job_ids: [],
+    source_commit_hint: 'verify_current_master_before_acting',
+    safety_notes: [
+      'Failure Evidence preview is read-only.',
+      'No provider call is made.',
+      'No Browser AI execution or browser launch is performed.',
+      'No repository writes, PR, CI, Sonar, Deploy, approve, or merge are performed.',
+    ],
+    redaction_status: {
+      redaction_applied: true,
+      truncated: false,
+      max_chars: 4000,
+    },
+    read_only: true,
+    persisted: false,
+    ...overrides,
+  }, message: 'ok' }
 }
 
 function mcpToolsPayload() {
@@ -1547,6 +1627,7 @@ async function main() {
   await testBrowserAiFailures(page, task.id)
   await testMultiAiEvidenceRunPanel(page, task.id)
   await testMultiAiEvidenceRunRoutedPartial(page, task.id)
+  await testFailureEvidencePreviewPanel(page, task.id)
   await testMcpBridgePanel(page, task.id)
   await testApprovals(page)
   await testHumanRequired(page)

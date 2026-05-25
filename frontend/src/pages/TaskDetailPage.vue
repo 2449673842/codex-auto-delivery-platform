@@ -452,6 +452,87 @@
         </div>
       </section>
 
+      <!-- Failure Evidence Packet Preview -->
+      <section class="card failure-evidence-preview">
+        <div class="section-header">
+          <h2>Failure Evidence Packet Preview / 失败证据包预览</h2>
+          <span class="workspace-readonly">Read-only preview</span>
+        </div>
+        <div class="workspace-safety">
+          <span class="label-badge label-ai">Failure Evidence preview is read-only</span>
+          <span class="label-badge label-provider">No provider call</span>
+          <span class="label-badge label-provider">No Browser AI execution</span>
+          <span class="label-badge label-applied">No repository writes</span>
+          <span class="label-badge label-exec">No PR / CI / Sonar / Deploy</span>
+          <span class="label-badge label-merged">No auto approve / merge</span>
+        </div>
+        <div class="failure-evidence-form">
+          <label>
+            failure_type
+            <select v-model="failureEvidenceForm.failure_type">
+              <option value="sandbox_failed">sandbox_failed</option>
+              <option value="sandbox_gate_blocked">sandbox_gate_blocked</option>
+              <option value="verification_failed">verification_failed</option>
+              <option value="ci_failed">ci_failed</option>
+              <option value="sonar_failed">sonar_failed</option>
+              <option value="review_blocked">review_blocked</option>
+              <option value="browser_ai_failed">browser_ai_failed</option>
+              <option value="multi_ai_evidence_partial">multi_ai_evidence_partial</option>
+            </select>
+          </label>
+          <label>
+            agent_run_id
+            <input v-model.number="failureEvidenceForm.source.agent_run_id" type="number" min="1" placeholder="optional" />
+          </label>
+          <label>
+            artifact_id
+            <input v-model.number="failureEvidenceForm.source.artifact_id" type="number" min="1" placeholder="optional" />
+          </label>
+          <label>
+            dispatch_batch_id
+            <input v-model.number="failureEvidenceForm.source.dispatch_batch_id" type="number" min="1" placeholder="optional" />
+          </label>
+          <label>
+            dispatch_job_id
+            <input v-model.number="failureEvidenceForm.source.dispatch_job_id" type="number" min="1" placeholder="optional" />
+          </label>
+          <label>
+            max_excerpt_chars
+            <input v-model.number="failureEvidenceForm.max_excerpt_chars" type="number" min="200" max="12000" />
+          </label>
+          <div class="form-actions wide">
+            <button class="btn btn-primary btn-sm" @click="previewFailureEvidence" :disabled="failureEvidenceLoading || !task">Preview</button>
+          </div>
+        </div>
+        <p v-if="failureEvidenceError" class="run-error">{{ failureEvidenceError }}</p>
+        <div v-if="failureEvidencePacket" class="real-ai-result failure-evidence-result">
+          <strong>failure evidence packet</strong>
+          <div class="dispatch-job-meta">
+            <span>failure_type: {{ failureEvidencePacket.failure_type }}</span>
+            <span>failed_step: {{ failureEvidencePacket.failed_step }}</span>
+            <span>read_only={{ failureEvidencePacket.read_only }}</span>
+            <span>persisted={{ failureEvidencePacket.persisted }}</span>
+            <span>redaction_applied={{ failureEvidencePacket.redaction_status.redaction_applied }}</span>
+            <span>truncated={{ failureEvidencePacket.redaction_status.truncated }}</span>
+          </div>
+          <div class="dispatch-job-meta">
+            <span>related_agent_run_ids: {{ formatArtifactIds(failureEvidencePacket.related_agent_run_ids) }}</span>
+            <span>related_artifact_ids: {{ formatArtifactIds(failureEvidencePacket.related_artifact_ids) }}</span>
+            <span>related_dispatch_batch_id: {{ failureEvidencePacket.related_dispatch_batch_id || '-' }}</span>
+            <span>related_dispatch_job_ids: {{ formatArtifactIds(failureEvidencePacket.related_dispatch_job_ids) }}</span>
+          </div>
+          <p v-if="failureEvidencePacket.failed_command_summary" class="run-output">{{ failureEvidencePacket.failed_command_summary }}</p>
+          <div v-if="failureEvidencePacket.blocked_reasons.length" class="run-error">
+            <span>blocked_reasons:</span>
+            <span v-for="reason in failureEvidencePacket.blocked_reasons" :key="reason">{{ reason }}</span>
+          </div>
+          <div class="safety-notes">
+            <span v-for="note in failureEvidencePacket.safety_notes" :key="note" class="label-badge label-ai">{{ note }}</span>
+          </div>
+          <pre>{{ formatFailureEvidencePacket(failureEvidencePacket) }}</pre>
+        </div>
+      </section>
+
       <!-- Agent Runs -->
       <section class="card">
         <div class="section-header">
@@ -1086,12 +1167,12 @@ import {
   fetchDispatchBatches, previewAnswerSynthesis, previewAiHandoff,
   dryRunAiDispatch, executeAiDispatch,
   dryRunBrowserAi, executeBrowserAi, fetchBrowserAiProviderProfiles,
-  previewMultiAiEvidenceRun, executeMultiAiEvidenceRun,
+  previewMultiAiEvidenceRun, executeMultiAiEvidenceRun, previewFailureEvidencePacket,
   fetchCodeContext,
   applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate, evaluateSandboxGate,
   fetchMcpTools, callMcpTool,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -1212,6 +1293,20 @@ const multiAiExecuteResult = ref<MultiAiEvidenceRunResponse | null>(null)
 const multiAiRefreshMessages = ref<string[]>([])
 const multiAiConcurrencyNote = 'bounded concurrency is planned; current MVP executes jobs sequentially'
 const evidenceProviderOptions = computed(() => browserAiProfiles.value.filter(profile => profile.provider !== 'custom' || profile.selectors_configured || profile.provider === 'custom'))
+const failureEvidenceForm = ref<FailureEvidencePreviewRequest>({
+  task_id: 0,
+  failure_type: 'sandbox_gate_blocked',
+  source: {
+    agent_run_id: null,
+    artifact_id: null,
+    dispatch_batch_id: null,
+    dispatch_job_id: null,
+  },
+  max_excerpt_chars: 4000,
+})
+const failureEvidencePacket = ref<FailureEvidencePacketResponse | null>(null)
+const failureEvidenceLoading = ref(false)
+const failureEvidenceError = ref('')
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -1370,6 +1465,10 @@ function formatEvidenceSafetyGate(gate: MultiAiEvidenceSafetyGate) {
   return JSON.stringify(gate, null, 2)
 }
 
+function formatFailureEvidencePacket(packet: FailureEvidencePacketResponse) {
+  return JSON.stringify(packet, null, 2)
+}
+
 function stepHint(name: string, status: string) {
   if (status === 'failed') {
     const hints: Record<string, string> = {
@@ -1407,6 +1506,21 @@ function buildEvidenceRunRequest(): MultiAiEvidenceRunRequest | null {
     task_id: task.value.id,
     providers: multiAiForm.value.mode === 'broadcast' ? multiAiForm.value.providers : [],
     roles: multiAiForm.value.mode === 'routed' ? multiAiForm.value.roles : [],
+  }
+}
+
+function buildFailureEvidenceRequest(): FailureEvidencePreviewRequest | null {
+  if (!task.value) return null
+  const source = failureEvidenceForm.value.source
+  return {
+    ...failureEvidenceForm.value,
+    task_id: task.value.id,
+    source: {
+      agent_run_id: source.agent_run_id || null,
+      artifact_id: source.artifact_id || null,
+      dispatch_batch_id: source.dispatch_batch_id || null,
+      dispatch_job_id: source.dispatch_job_id || null,
+    },
   }
 }
 
@@ -1463,6 +1577,7 @@ async function refresh() {
   browserAiForm.value.project_id = task.value.project_id
   browserAiForm.value.task_id = task.value.id
   multiAiForm.value.task_id = task.value.id
+  failureEvidenceForm.value.task_id = task.value.id
   agentRuns.value = await fetchAgentRuns(id)
   agentReviews.value = await fetchAgentReviews(id)
   approvalDecisions.value = await fetchApprovalDecisions(id)
@@ -1593,6 +1708,21 @@ async function executeEvidenceRun() {
     multiAiError.value = e.message || 'Multi-AI Evidence Run execute failed'
   } finally {
     multiAiLoading.value = false
+  }
+}
+
+async function previewFailureEvidence() {
+  const body = buildFailureEvidenceRequest()
+  if (!body) return
+  failureEvidenceLoading.value = true
+  failureEvidenceError.value = ''
+  try {
+    failureEvidencePacket.value = await previewFailureEvidencePacket(body)
+  } catch (e: any) {
+    failureEvidencePacket.value = null
+    failureEvidenceError.value = e.message || 'Failure Evidence Packet preview failed'
+  } finally {
+    failureEvidenceLoading.value = false
   }
 }
 
@@ -1909,6 +2039,7 @@ async function handleCreateAgentReview() {
 .real-ai-sandbox strong { font-size: 13px; }
 .browser-ai-run { border-left: 3px solid #00897b; }
 .multi-ai-evidence-run { border-left: 3px solid #6a1b9a; }
+.failure-evidence-preview { border-left: 3px solid #ad5700; }
 .browser-ai-help { margin: 8px 0 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
 .browser-ai-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
 .browser-ai-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
@@ -1918,6 +2049,10 @@ async function handleCreateAgentReview() {
 .multi-ai-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
 .multi-ai-form .wide { grid-column: 1 / -1; }
 .multi-ai-form textarea { min-height: 90px; resize: vertical; }
+.failure-evidence-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
+.failure-evidence-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
+.failure-evidence-form .wide { grid-column: 1 / -1; }
+.failure-evidence-result pre { max-height: 420px; overflow: auto; }
 .provider-picker { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
 .checkbox-row { display: inline-flex !important; flex-direction: row !important; align-items: center; gap: 6px !important; }
 .routed-roles { display: flex; flex-direction: column; gap: 8px; }
