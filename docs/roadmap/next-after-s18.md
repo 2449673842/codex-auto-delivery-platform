@@ -143,20 +143,60 @@ S21 不做：
 
 目标：把任务证据变成长期可读的时间线和证据板。
 
-页面应展示：
+拆分路线：
 
-- Task created
-- AI run started / finished / failed
-- Browser AI answer saved
-- Artifact created
-- Sandbox applied
-- Sandbox gate passed / blocked
-- Answer Synthesis refreshed
-- MCP handoff generated
-- Evidence Run job started / succeeded / failed
-- Repair attempt created
-- Verification result imported
-- PR status imported
+- S22.0：Evidence Board / Run Timeline 设计
+- S22.1：Evidence Summary API
+- S22.2：TaskDetail Timeline UI
+- S22.3：Evidence Board filters / details
+- S22.4：Skill Review Report artifact import，必要时再做
+
+S22.0 只做设计文档，不新增 API、前端页面、数据库或业务代码。
+
+S22.1 / S22.2 MVP 先做：
+
+- 聚合已有 TaskEvent / AgentRun / TaskArtifact / DispatchBatch / DispatchJob
+- 返回 timeline items
+- 返回 evidence summaries
+- TaskDetail 显示 timeline list
+- TaskDetail 显示 evidence board list
+- 不新增复杂数据库表
+- 不执行外部命令
+- 不调用 provider
+
+Run Timeline 应展示：
+
+- task_created
+- ai_run_started / ai_run_finished / ai_run_failed
+- artifact_created
+- browser_ai_answer_saved
+- multi_ai_evidence_started / multi_ai_evidence_finished
+- synthesis_refreshed
+- failure_evidence_previewed
+- repair_packet_generated
+- repair_handoff_previewed
+- repair_attempt_created / repair_attempt_status_changed
+- verification_result_imported
+- skill_review_report_imported
+
+Evidence Board 应覆盖：
+
+- Task created / updated
+- AgentRun
+- TaskArtifact
+- TaskEvent
+- DispatchBatch / DispatchJob
+- Browser AI answer artifact
+- Multi-AI Evidence Run artifacts
+- Answer Synthesis
+- Failure Evidence Packet
+- Repair Packet
+- Codex / OMX Repair Handoff
+- Repair Attempt Timeline
+- Verification Result artifact
+- PR / CI / Sonar Reader skill review report
+- Sandbox / Gate artifact
+- Patch artifact
 
 价值：
 
@@ -168,6 +208,19 @@ S21 不做：
 哪个测试失败？
 最后为什么继续或停止？
 ```
+
+S22 不做：
+
+- 不自动执行代码
+- 不写真实仓库
+- 不读取 `.env` / secret_ref
+- 不调用 provider
+- 不打开 Browser AI
+- 不主动查询 GitHub / Sonar API，S21 已决定 skill 化
+- 不创建 GitHub PR / CI / Sonar / Deploy
+- 不自动 approve / merge / deploy
+- 不替代 Codex / OMX
+- 不做无限 repair loop
 
 ### S23 — Project Memory
 
