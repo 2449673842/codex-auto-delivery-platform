@@ -103,7 +103,7 @@ S20 先做设计，不直接实现自动修复。
 
 ### S21 — PR / CI / Sonar Reader skill 真实试跑
 
-目标：验证 PR / CI / Sonar Reader 是否适合继续留在 Codex skill，而不是平台化。
+目标：验证 PR / CI / Sonar Reader 是否适合继续留在 Codex / OMX skill，而不是先平台化为 reader API。
 
 试跑内容：
 
@@ -119,12 +119,25 @@ S20 先做设计，不直接实现自动修复。
 - PR body 是否中文、是否包含验证结果
 - 输出主脑复审报告
 
+交付物：
+
+- `docs/strategy/pr-ci-sonar-reader-skill-trial.md`
+- `docs/skills/pr-ci-sonar-reader-skill.md`
+
 判断：
 
 ```text
 如果 skill 能覆盖 80% 高频复审需求，平台 PR Reader 暂缓。
 如果需要长期记录、UI 展示、跨任务检索，则把证据归档能力放入 Evidence Board / Timeline。
 ```
+
+S21 不做：
+
+- 不新增后端 API
+- 不新增前端页面
+- 不新增数据库
+- 不实现平台 PR / CI / Sonar Reader
+- 不新增平台 PR / CI / Sonar / Deploy 能力
 
 ### S22 — Evidence Board / Run Timeline
 
