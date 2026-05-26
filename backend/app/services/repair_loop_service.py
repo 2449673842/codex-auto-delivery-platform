@@ -20,11 +20,14 @@ from app.schemas.repair_loop import (
     FailureEvidencePacketResponse,
     FailureEvidencePreviewRequest,
     FailureEvidenceRedactionStatus,
+    RepairAttemptCreateRequest,
+    RepairAttemptResponse,
     RepairEvidenceBySource,
     RepairHandoffPreviewRequest,
     RepairHandoffPreviewResponse,
     RepairPacketGenerateRequest,
     RepairPacketResponse,
+    RepairVerificationResultRequest,
 )
 from app.services import answer_synthesis_service, multi_ai_evidence_run_service
 from app.services.ai_output_governance_service import redact_secrets
@@ -83,6 +86,24 @@ HANDOFF_SAFETY_NOTES = [
 ]
 
 REPAIR_HANDOFF_TARGETS = {"codex", "omx", "generic_ai"}
+REPAIR_ATTEMPT_EXECUTORS = {"codex", "omx", "user", "generic_ai"}
+REPAIR_ATTEMPT_STATUSES = {
+    "planned",
+    "handoff_created",
+    "in_progress",
+    "verification_failed",
+    "verification_passed",
+    "stopped",
+}
+REPAIR_ATTEMPT_ACTIVE_STATUSES = {"planned", "handoff_created", "in_progress"}
+REPAIR_VERIFICATION_STATUSES = {"verification_passed", "verification_failed"}
+REPAIR_ATTEMPT_EVENT_TYPE = "repair_attempt"
+REPAIR_ATTEMPT_SAFETY_NOTES = [
+    "Timeline only; the platform does not execute repair.",
+    "Verification result is imported, not run by the platform.",
+    "No repository writes, PR, CI, Sonar, Deploy, approve, merge, or auto next attempt is performed.",
+    "max_attempts defaults to 1; users must explicitly create or stop attempt records.",
+]
 
 
 class _EvidenceCollector:
@@ -284,6 +305,114 @@ async def preview_repair_handoff(db: AsyncSession, body: RepairHandoffPreviewReq
         read_only=True,
         persisted=False,
     )
+
+
+async def create_repair_attempt(db: AsyncSession, body: RepairAttemptCreateRequest) -> RepairAttemptResponse:
+    if body.executor not in REPAIR_ATTEMPT_EXECUTORS:
+        raise HTTPException(status_code=400, detail="invalid_repair_attempt_executor")
+    if body.handoff_target not in REPAIR_HANDOFF_TARGETS and body.handoff_target != "user":
+        raise HTTPException(status_code=400, detail="invalid_repair_handoff_target")
+    task = await db.get(Task, body.task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    repair_packet = await db.get(TaskArtifact, body.repair_packet_artifact_id)
+    _ensure_artifact_for_task(repair_packet, body.task_id, "repair_packet_artifact_not_found")
+    if repair_packet.artifact_type != "repair_packet":
+        raise HTTPException(status_code=400, detail="artifact_is_not_repair_packet")
+    if body.failure_evidence_artifact_id is not None:
+        failure_artifact = await db.get(TaskArtifact, body.failure_evidence_artifact_id)
+        _ensure_artifact_for_task(failure_artifact, body.task_id, "failure_evidence_artifact_not_found")
+    active = await _active_attempt_for_repair_packet(db, body.task_id, body.repair_packet_artifact_id)
+    if active:
+        raise HTTPException(status_code=400, detail="active_repair_attempt_exists_for_repair_packet")
+
+    attempt_no = await _next_attempt_no(db, body.task_id)
+    payload = {
+        "repair_attempt_id": None,
+        "attempt_no": attempt_no,
+        "initiator": "user",
+        "executor": body.executor,
+        "failure_evidence_artifact_id": body.failure_evidence_artifact_id,
+        "repair_packet_artifact_id": body.repair_packet_artifact_id,
+        "handoff_target": body.handoff_target,
+        "status": "planned",
+        "verification_result_artifact_ids": [],
+        "summary": _redact(body.summary),
+        "safety_notes": REPAIR_ATTEMPT_SAFETY_NOTES.copy(),
+        "max_attempts": 1,
+        "read_only": False,
+        "persisted": True,
+    }
+    event = TaskEvent(
+        task_id=task.id,
+        event_type=REPAIR_ATTEMPT_EVENT_TYPE,
+        actor="user",
+        to_status="planned",
+        message=payload["summary"] or "Repair attempt planned",
+        payload_json=_safe_json(payload),
+    )
+    db.add(event)
+    await db.flush()
+    payload["repair_attempt_id"] = event.id
+    event.payload_json = _safe_json(payload)
+    _append_attempt_event(db, task.id, event.id, None, "planned", "Repair attempt planned", payload)
+    await db.commit()
+    await db.refresh(event)
+    return _attempt_response(task, event)
+
+
+async def list_repair_attempts(db: AsyncSession, task_id: int) -> list[RepairAttemptResponse]:
+    task = await db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    result = await db.execute(
+        select(TaskEvent)
+        .where(TaskEvent.task_id == task_id, TaskEvent.event_type == REPAIR_ATTEMPT_EVENT_TYPE)
+        .order_by(TaskEvent.id.asc())
+    )
+    return [_attempt_response(task, event) for event in result.scalars().all()]
+
+
+async def mark_repair_handoff_created(db: AsyncSession, attempt_id: int) -> RepairAttemptResponse:
+    task, event, payload = await _get_attempt(db, attempt_id)
+    if payload["status"] == "stopped":
+        raise HTTPException(status_code=400, detail="repair_attempt_stopped")
+    if payload["status"] not in {"planned", "handoff_created"}:
+        raise HTTPException(status_code=400, detail="invalid_repair_attempt_transition")
+    return await _update_attempt_status(db, task, event, payload, "handoff_created", "Repair handoff created")
+
+
+async def import_repair_verification_result(
+    db: AsyncSession,
+    attempt_id: int,
+    body: RepairVerificationResultRequest,
+) -> RepairAttemptResponse:
+    if body.status not in REPAIR_VERIFICATION_STATUSES:
+        raise HTTPException(status_code=400, detail="invalid_verification_result_status")
+    task, event, payload = await _get_attempt(db, attempt_id)
+    if payload["status"] == "stopped":
+        raise HTTPException(status_code=400, detail="repair_attempt_stopped")
+    artifact = _verification_result_artifact(task.id, attempt_id, body)
+    db.add(artifact)
+    await db.flush()
+    await db.refresh(artifact)
+    verification_ids = list(payload.get("verification_result_artifact_ids") or [])
+    verification_ids.append(artifact.id)
+    payload["verification_result_artifact_ids"] = verification_ids
+    payload["summary"] = _redact(body.summary or payload.get("summary") or "")
+    old_status = payload["status"]
+    _set_attempt_payload(event, payload, body.status, from_status=old_status)
+    _append_attempt_event(db, task.id, event.id, old_status, body.status, "Repair verification result imported", payload)
+    await db.commit()
+    await db.refresh(event)
+    return _attempt_response(task, event)
+
+
+async def stop_repair_attempt(db: AsyncSession, attempt_id: int) -> RepairAttemptResponse:
+    task, event, payload = await _get_attempt(db, attempt_id)
+    if payload["status"] == "stopped":
+        return _attempt_response(task, event)
+    return await _update_attempt_status(db, task, event, payload, "stopped", "Repair attempt stopped")
 
 
 async def _collect_requested_sources(
@@ -772,6 +901,173 @@ def _repair_packet_handoff_lines(packet: RepairPacketResponse) -> list[str]:
     lines.append("- do_not_do:")
     lines.extend(f"  - {item}" for item in packet.do_not_do)
     return lines
+
+
+async def _active_attempt_for_repair_packet(db: AsyncSession, task_id: int, repair_packet_artifact_id: int) -> TaskEvent | None:
+    result = await db.execute(
+        select(TaskEvent)
+        .where(TaskEvent.task_id == task_id, TaskEvent.event_type == REPAIR_ATTEMPT_EVENT_TYPE)
+        .order_by(desc(TaskEvent.id))
+    )
+    for event in result.scalars().all():
+        payload = _attempt_payload(event)
+        if (
+            payload.get("repair_packet_artifact_id") == repair_packet_artifact_id
+            and payload.get("status") in REPAIR_ATTEMPT_ACTIVE_STATUSES
+        ):
+            return event
+    return None
+
+
+async def _next_attempt_no(db: AsyncSession, task_id: int) -> int:
+    result = await db.execute(
+        select(TaskEvent)
+        .where(TaskEvent.task_id == task_id, TaskEvent.event_type == REPAIR_ATTEMPT_EVENT_TYPE)
+        .order_by(desc(TaskEvent.id))
+    )
+    attempt_numbers = [
+        int(payload["attempt_no"])
+        for payload in (_attempt_payload(event) for event in result.scalars().all())
+        if isinstance(payload.get("attempt_no"), int)
+    ]
+    return max(attempt_numbers, default=0) + 1
+
+
+async def _get_attempt(db: AsyncSession, attempt_id: int) -> tuple[Task, TaskEvent, dict[str, Any]]:
+    event = await db.get(TaskEvent, attempt_id)
+    if not event or event.event_type != REPAIR_ATTEMPT_EVENT_TYPE:
+        raise HTTPException(status_code=404, detail="repair_attempt_not_found")
+    task = await db.get(Task, event.task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    return task, event, _attempt_payload(event)
+
+
+async def _update_attempt_status(
+    db: AsyncSession,
+    task: Task,
+    event: TaskEvent,
+    payload: dict[str, Any],
+    status: str,
+    message: str,
+) -> RepairAttemptResponse:
+    old_status = payload["status"]
+    _set_attempt_payload(event, payload, status, from_status=old_status)
+    _append_attempt_event(db, task.id, event.id, old_status, status, message, payload)
+    await db.commit()
+    await db.refresh(event)
+    return _attempt_response(task, event)
+
+
+def _set_attempt_payload(
+    event: TaskEvent,
+    payload: dict[str, Any],
+    status: str,
+    *,
+    from_status: str | None = None,
+) -> None:
+    if status not in REPAIR_ATTEMPT_STATUSES:
+        raise HTTPException(status_code=400, detail="invalid_repair_attempt_status")
+    payload["status"] = status
+    event.from_status = from_status
+    event.to_status = status
+    event.message = payload.get("summary") or status
+    event.payload_json = _safe_json(payload)
+
+
+def _append_attempt_event(
+    db: AsyncSession,
+    task_id: int,
+    attempt_id: int,
+    from_status: str | None,
+    to_status: str,
+    message: str,
+    payload: dict[str, Any],
+) -> None:
+    db.add(TaskEvent(
+        task_id=task_id,
+        event_type="repair_attempt_status",
+        actor="user",
+        from_status=from_status,
+        to_status=to_status,
+        message=message,
+        payload_json=_safe_json({
+            "repair_attempt_id": attempt_id,
+            "attempt_no": payload.get("attempt_no"),
+            "status": to_status,
+            "executor": payload.get("executor"),
+            "repair_packet_artifact_id": payload.get("repair_packet_artifact_id"),
+            "verification_result_artifact_ids": payload.get("verification_result_artifact_ids", []),
+            "timeline_only": True,
+            "no_auto_next_attempt": True,
+        }),
+    ))
+
+
+def _attempt_response(task: Task, event: TaskEvent) -> RepairAttemptResponse:
+    payload = _attempt_payload(event)
+    created = event.created_at.isoformat() if event.created_at else ""
+    return RepairAttemptResponse(
+        repair_attempt_id=event.id,
+        task_id=task.id,
+        project_id=task.project_id,
+        attempt_no=int(payload.get("attempt_no") or 1),
+        initiator=str(payload.get("initiator") or "user"),
+        executor=str(payload.get("executor") or ""),
+        failure_evidence_artifact_id=payload.get("failure_evidence_artifact_id"),
+        repair_packet_artifact_id=int(payload.get("repair_packet_artifact_id") or 0),
+        handoff_target=str(payload.get("handoff_target") or ""),
+        status=str(payload.get("status") or event.to_status or "planned"),
+        verification_result_artifact_ids=list(payload.get("verification_result_artifact_ids") or []),
+        summary=str(payload.get("summary") or event.message or ""),
+        safety_notes=list(payload.get("safety_notes") or REPAIR_ATTEMPT_SAFETY_NOTES),
+        created_at=created,
+        updated_at=created,
+        read_only=False,
+        persisted=True,
+    )
+
+
+def _attempt_payload(event: TaskEvent) -> dict[str, Any]:
+    payload = _loads_dict(event.payload_json)
+    if not payload:
+        raise HTTPException(status_code=400, detail="repair_attempt_payload_invalid")
+    return payload
+
+
+def _verification_result_artifact(task_id: int, attempt_id: int, body: RepairVerificationResultRequest) -> TaskArtifact:
+    content = _safe_json({
+        "repair_attempt_id": attempt_id,
+        "status": body.status,
+        "summary": body.summary,
+        "commands": body.commands,
+        "artifact_content": body.artifact_content,
+        "imported_only": True,
+        "platform_executed_commands": False,
+    })
+    data = content.encode("utf-8")
+    return TaskArtifact(
+        task_id=task_id,
+        artifact_type="verification_result",
+        filename=f"repair_attempt_{attempt_id}_verification_result.json",
+        content=content,
+        metadata_json=_safe_json({
+            "type": "verification_result",
+            "repair_attempt_id": attempt_id,
+            "status": body.status,
+            "imported_only": True,
+            "platform_executed_commands": False,
+        }),
+        size_bytes=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+
+
+def _ensure_artifact_for_task(artifact: TaskArtifact | None, task_id: int, detail: str) -> None:
+    if artifact is None:
+        raise HTTPException(status_code=404, detail=detail)
+    if artifact.task_id != task_id:
+        raise HTTPException(status_code=400, detail="artifact_task_mismatch")
 
 
 def _redact_packet(packet: RepairPacketResponse) -> RepairPacketResponse:

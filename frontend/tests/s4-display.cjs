@@ -1002,6 +1002,66 @@ async function testRepairHandoffPanel(page, taskId) {
   await clearFailureEvidenceRoutes(page)
 }
 
+async function testRepairAttemptTimelinePanel(page, taskId) {
+  log('\n========== S20.4 Repair Attempt Timeline ==========')
+  const calls = { create: 0, handoff: 0, verify: 0, stop: 0 }
+  const state = { attempts: [] }
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
+  await setRepairAttemptsRoutes(page, state, calls)
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  for (const [text, label] of [
+    ['Repair Attempt Timeline', 'S20.4-1 panel shown'],
+    ['Timeline only', 'S20.4-2 timeline only label'],
+    ['Platform does not execute repair', 'S20.4-3 no platform execution label'],
+    ['Verification result is imported, not run by platform', 'S20.4-4 imported verification label'],
+    ['No auto next attempt', 'S20.4-5 no auto next attempt label'],
+    ['No repository writes', 'S20.4-6 no repository writes label'],
+    ['No auto PR / merge / deploy', 'S20.4-7 no auto delivery label'],
+  ]) await checkT(page, text, label)
+  await page.locator('.repair-attempt-timeline input[placeholder="latest repair packet id"]').fill('802')
+  await page.locator('.repair-attempt-timeline input[placeholder="optional"]').fill('801')
+  await page.locator('.repair-attempt-timeline').getByRole('button', { name: 'Create Attempt' }).click()
+  await page.waitForTimeout(300)
+  if (calls.create === 1) pass('S20.4-8 create attempt endpoint called')
+  else fail('S20.4-8 create attempt endpoint call count', calls.create)
+  for (const [text, label] of [
+    ['attempt #1', 'S20.4-9 attempt number shown'],
+    ['planned', 'S20.4-10 planned status shown'],
+    ['executor: codex', 'S20.4-11 executor shown'],
+    ['handoff_target: codex', 'S20.4-12 handoff target shown'],
+    ['failure_evidence_artifact_id: 801', 'S20.4-13 failure evidence artifact shown'],
+    ['repair_packet_artifact_id: 802', 'S20.4-14 repair packet artifact shown'],
+  ]) await checkT(page, text, label)
+  await page.locator('.repair-attempt-timeline').getByRole('button', { name: 'Mark Handoff Created' }).click()
+  await page.waitForTimeout(250)
+  if (calls.handoff === 1) pass('S20.4-15 handoff-created endpoint called')
+  else fail('S20.4-15 handoff-created endpoint call count', calls.handoff)
+  await checkT(page, 'handoff_created', 'S20.4-16 handoff_created status shown')
+  await page.locator('.repair-attempt-timeline textarea[placeholder="One imported command per line"]').fill('python -m pytest backend/tests/test_repair_loop_attempts.py -q --rootdir backend')
+  await page.locator('.repair-attempt-timeline textarea[placeholder="Imported verification log excerpt"]').fill('8 passed')
+  await page.locator('.repair-attempt-timeline').getByRole('button', { name: 'Import Verification Result' }).click()
+  await page.waitForTimeout(250)
+  if (calls.verify === 1) pass('S20.4-17 verification import endpoint called')
+  else fail('S20.4-17 verification import endpoint call count', calls.verify)
+  await checkT(page, 'verification_passed', 'S20.4-18 verification_passed status shown')
+  await checkT(page, 'verification_result_artifact_ids: 912', 'S20.4-19 verification artifact id shown')
+  await page.locator('.repair-attempt-timeline').getByRole('button', { name: 'Stop Attempt' }).click()
+  await page.waitForTimeout(250)
+  if (calls.stop === 1) pass('S20.4-20 stop endpoint called')
+  else fail('S20.4-20 stop endpoint call count', calls.stop)
+  await checkT(page, 'stopped', 'S20.4-21 stopped status shown')
+  for (const [text, label] of [
+    ['Auto next attempt', 'S20.4-22 no auto next attempt entry'],
+    ['Auto merge', 'S20.4-23 no auto merge entry'],
+  ]) await checkBodyExcludes(page, text, label)
+  const deployEntries = await page.locator('button:has-text("Deploy"), a:has-text("Deploy")').count()
+  if (deployEntries === 0) pass('S20.4-24 no deploy entry')
+  else fail('S20.4-24 no deploy entry', deployEntries)
+  await clearRepairAttemptsRoutes(page)
+}
+
 async function testMcpBridgePanel(page, taskId) {
   log('\n========== MCP. MCP Bridge Read-only Dry-run ==========')
   const mcpCounter = { count: 0 }
@@ -1124,6 +1184,37 @@ async function setRepairHandoffRoute(page, payload, status = 200, counter = null
   await page.route('**/api/repair-loop/codex-handoff/preview', route => fulfillJson(route, payload, status, counter))
 }
 
+async function setRepairAttemptsRoutes(page, state, calls) {
+  await clearRepairAttemptsRoutes(page)
+  await page.route('**/api/tasks/*/repair-attempts', route => fulfillJson(route, { success: true, data: state.attempts, message: 'ok' }, 200))
+  await page.route('**/api/repair-loop/attempts', async route => {
+    calls.create += 1
+    state.attempts = [repairAttemptPayload(1, route.request().postDataJSON?.() || {})]
+    await fulfillJson(route, { success: true, data: state.attempts[0], message: 'ok' }, 200)
+  })
+  await page.route('**/api/repair-loop/attempts/*/handoff-created', async route => {
+    calls.handoff += 1
+    state.attempts = state.attempts.map(attempt => ({ ...attempt, status: 'handoff_created' }))
+    await fulfillJson(route, { success: true, data: state.attempts[0], message: 'ok' }, 200)
+  })
+  await page.route('**/api/repair-loop/attempts/*/verification-result', async route => {
+    calls.verify += 1
+    const body = route.request().postDataJSON?.() || {}
+    state.attempts = state.attempts.map(attempt => ({
+      ...attempt,
+      status: body.status || 'verification_passed',
+      verification_result_artifact_ids: [912],
+      summary: body.summary || attempt.summary,
+    }))
+    await fulfillJson(route, { success: true, data: state.attempts[0], message: 'ok' }, 200)
+  })
+  await page.route('**/api/repair-loop/attempts/*/stop', async route => {
+    calls.stop += 1
+    state.attempts = state.attempts.map(attempt => ({ ...attempt, status: 'stopped' }))
+    await fulfillJson(route, { success: true, data: state.attempts[0], message: 'ok' }, 200)
+  })
+}
+
 async function setBrowserAiProfilesRoute(page) {
   await page.unroute('**/api/browser-ai/provider-profiles').catch(() => {})
   await page.route('**/api/browser-ai/provider-profiles', route => fulfillJson(route, {
@@ -1169,6 +1260,14 @@ async function clearRepairHandoffRoutes(page) {
   await page.unroute('**/api/repair-loop/codex-handoff/preview').catch(() => {})
 }
 
+async function clearRepairAttemptsRoutes(page) {
+  await page.unroute('**/api/tasks/*/repair-attempts').catch(() => {})
+  await page.unroute('**/api/repair-loop/attempts').catch(() => {})
+  await page.unroute('**/api/repair-loop/attempts/*/handoff-created').catch(() => {})
+  await page.unroute('**/api/repair-loop/attempts/*/verification-result').catch(() => {})
+  await page.unroute('**/api/repair-loop/attempts/*/stop').catch(() => {})
+}
+
 async function clearTaskDetailMockRoutes(page) {
   await clearDashboardRoutes(page)
   for (const routePattern of [
@@ -1190,6 +1289,7 @@ async function clearTaskDetailMockRoutes(page) {
   await clearFailureEvidenceRoutes(page)
   await clearRepairPacketRoutes(page)
   await clearRepairHandoffRoutes(page)
+  await clearRepairAttemptsRoutes(page)
 }
 
 async function fulfillJson(route, payload, status, counter) {
@@ -1383,6 +1483,33 @@ function repairHandoffPayload(taskId, overrides = {}) {
     persisted: false,
     ...overrides,
   }, message: 'ok' }
+}
+
+function repairAttemptPayload(id, request = {}, overrides = {}) {
+  return {
+    repair_attempt_id: id,
+    task_id: request.task_id || 1,
+    project_id: 1,
+    attempt_no: 1,
+    initiator: 'user',
+    executor: request.executor || 'codex',
+    failure_evidence_artifact_id: request.failure_evidence_artifact_id ?? 801,
+    repair_packet_artifact_id: request.repair_packet_artifact_id || 802,
+    handoff_target: request.handoff_target || 'codex',
+    status: 'planned',
+    verification_result_artifact_ids: [],
+    summary: request.summary || 'Use Codex to apply the narrow repair from the repair packet.',
+    safety_notes: [
+      'Timeline only; platform does not execute repair.',
+      'Verification result is imported, not run by platform.',
+      'No auto next attempt.',
+    ],
+    created_at: '2026-05-26T10:00:00Z',
+    updated_at: '2026-05-26T10:00:00Z',
+    read_only: false,
+    persisted: true,
+    ...overrides,
+  }
 }
 
 function mcpToolsPayload() {
@@ -1849,6 +1976,7 @@ async function main() {
   await testFailureEvidencePreviewPanel(page, task.id)
   await testRepairPacketGenerationPanel(page, task.id)
   await testRepairHandoffPanel(page, task.id)
+  await testRepairAttemptTimelinePanel(page, task.id)
   await testMcpBridgePanel(page, task.id)
   await testApprovals(page)
   await testHumanRequired(page)

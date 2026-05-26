@@ -12,7 +12,9 @@ import type {
   McpToolDescriptor, McpCallRequest, McpCallResponse,
   MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse,
   FailureEvidencePreviewRequest, FailureEvidencePacketResponse,
-  RepairPacketGenerateRequest, RepairHandoffPreviewRequest, RepairHandoffPreviewResponse, RepairPacketResponse,
+  RepairAttemptCreateRequest, RepairAttemptResponse, RepairHandoffPreviewRequest,
+  RepairHandoffPreviewResponse, RepairPacketGenerateRequest, RepairPacketResponse,
+  RepairVerificationResultRequest,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -211,6 +213,34 @@ export async function generateRepairPacket(body: RepairPacketGenerateRequest): P
 
 export async function previewRepairHandoff(body: RepairHandoffPreviewRequest): Promise<RepairHandoffPreviewResponse> {
   const { data } = await client.post('/repair-loop/codex-handoff/preview', body)
+  return data.data
+}
+
+export async function createRepairAttempt(body: RepairAttemptCreateRequest): Promise<RepairAttemptResponse> {
+  const { data } = await client.post('/repair-loop/attempts', body)
+  return data.data
+}
+
+export async function fetchRepairAttempts(taskId: number): Promise<RepairAttemptResponse[]> {
+  const { data } = await client.get(`/tasks/${taskId}/repair-attempts`)
+  return data.data || []
+}
+
+export async function markRepairHandoffCreated(attemptId: number): Promise<RepairAttemptResponse> {
+  const { data } = await client.post(`/repair-loop/attempts/${attemptId}/handoff-created`)
+  return data.data
+}
+
+export async function importRepairVerificationResult(
+  attemptId: number,
+  body: RepairVerificationResultRequest,
+): Promise<RepairAttemptResponse> {
+  const { data } = await client.post(`/repair-loop/attempts/${attemptId}/verification-result`, body)
+  return data.data
+}
+
+export async function stopRepairAttempt(attemptId: number): Promise<RepairAttemptResponse> {
+  const { data } = await client.post(`/repair-loop/attempts/${attemptId}/stop`)
   return data.data
 }
 
