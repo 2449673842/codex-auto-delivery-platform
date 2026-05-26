@@ -724,3 +724,41 @@ export interface RepairHandoffPreviewResponse {
   read_only: boolean
   persisted: boolean
 }
+
+export type RepairAttemptExecutor = 'codex' | 'omx' | 'user' | 'generic_ai'
+
+export interface RepairAttemptCreateRequest {
+  task_id: number
+  executor: RepairAttemptExecutor
+  failure_evidence_artifact_id: number | null
+  repair_packet_artifact_id: number
+  handoff_target: RepairAttemptExecutor
+  summary: string
+}
+
+export interface RepairVerificationResultRequest {
+  status: 'verification_passed' | 'verification_failed'
+  summary: string
+  commands: string[]
+  artifact_content: string
+}
+
+export interface RepairAttemptResponse {
+  repair_attempt_id: number
+  task_id: number
+  project_id: number
+  attempt_no: number
+  initiator: string
+  executor: RepairAttemptExecutor
+  failure_evidence_artifact_id: number | null
+  repair_packet_artifact_id: number
+  handoff_target: RepairAttemptExecutor
+  status: 'planned' | 'handoff_created' | 'in_progress' | 'verification_failed' | 'verification_passed' | 'stopped'
+  verification_result_artifact_ids: number[]
+  summary: string
+  safety_notes: string[]
+  created_at: string
+  updated_at: string
+  read_only: boolean
+  persisted: boolean
+}

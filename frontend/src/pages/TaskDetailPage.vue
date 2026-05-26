@@ -680,6 +680,125 @@
         </div>
       </section>
 
+      <section class="card repair-attempt-timeline">
+        <div class="section-header">
+          <h2>Repair Attempt Timeline</h2>
+          <span class="muted">S20.4 timeline only</span>
+        </div>
+        <div class="workspace-safety">
+          <span class="label-badge label-ai">Timeline only</span>
+          <span class="label-badge label-provider">Platform does not execute repair</span>
+          <span class="label-badge label-redacted">Verification result is imported, not run by platform</span>
+          <span class="label-badge label-provider">No auto next attempt</span>
+          <span class="label-badge label-applied">No repository writes</span>
+          <span class="label-badge label-exec">No auto PR / merge / deploy</span>
+        </div>
+        <p class="section-note">Tracks repair attempts that are executed outside the platform by Codex, OMX, a user, or a generic AI.</p>
+        <div class="repair-attempt-form">
+          <label>
+            executor
+            <select v-model="repairAttemptForm.executor">
+              <option value="codex">codex</option>
+              <option value="omx">omx</option>
+              <option value="user">user</option>
+              <option value="generic_ai">generic_ai</option>
+            </select>
+          </label>
+          <label>
+            handoff_target
+            <select v-model="repairAttemptForm.handoff_target">
+              <option value="codex">codex</option>
+              <option value="omx">omx</option>
+              <option value="user">user</option>
+              <option value="generic_ai">generic_ai</option>
+            </select>
+          </label>
+          <label>
+            repair_packet_artifact_id
+            <input v-model.number="repairAttemptForm.repair_packet_artifact_id" type="number" min="1" placeholder="latest repair packet id" />
+          </label>
+          <label>
+            failure_evidence_artifact_id
+            <input v-model.number="repairAttemptForm.failure_evidence_artifact_id" type="number" min="1" placeholder="optional" />
+          </label>
+          <label class="wide">
+            summary
+            <textarea v-model="repairAttemptForm.summary" rows="2"></textarea>
+          </label>
+          <div class="form-actions wide">
+            <button class="btn btn-primary btn-sm" @click="createRepairAttemptFromTimeline" :disabled="repairAttemptLoading || !repairAttemptForm.repair_packet_artifact_id">
+              Create Attempt
+            </button>
+            <button class="btn btn-sm" @click="loadRepairAttemptsForTask" :disabled="repairAttemptLoading">Refresh Attempts</button>
+          </div>
+        </div>
+        <p v-if="repairAttemptError" class="run-error">{{ repairAttemptError }}</p>
+        <div class="repair-verification-form">
+          <label>
+            attempt_id
+            <input v-model.number="repairVerificationForm.attempt_id" type="number" min="1" placeholder="attempt id" />
+          </label>
+          <label>
+            status
+            <select v-model="repairVerificationForm.status">
+              <option value="verification_passed">verification_passed</option>
+              <option value="verification_failed">verification_failed</option>
+            </select>
+          </label>
+          <label class="wide">
+            summary
+            <input v-model="repairVerificationForm.summary" placeholder="verification result summary" />
+          </label>
+          <label class="wide">
+            commands
+            <textarea v-model="repairVerificationForm.commands_text" rows="2" placeholder="One imported command per line"></textarea>
+          </label>
+          <label class="wide">
+            artifact_content
+            <textarea v-model="repairVerificationForm.artifact_content" rows="3" placeholder="Imported verification log excerpt"></textarea>
+          </label>
+          <div class="form-actions wide">
+            <button class="btn btn-sm" @click="markSelectedAttemptHandoffCreated" :disabled="repairAttemptLoading || !repairVerificationForm.attempt_id">
+              Mark Handoff Created
+            </button>
+            <button class="btn btn-primary btn-sm" @click="importSelectedVerificationResult" :disabled="repairAttemptLoading || !repairVerificationForm.attempt_id">
+              Import Verification Result
+            </button>
+            <button class="btn btn-warn btn-sm" @click="stopSelectedRepairAttempt" :disabled="repairAttemptLoading || !repairVerificationForm.attempt_id">
+              Stop Attempt
+            </button>
+          </div>
+        </div>
+        <div v-if="repairAttempts.length" class="repair-attempt-list">
+          <div v-for="attempt in repairAttempts" :key="attempt.repair_attempt_id" class="repair-attempt-item">
+            <div class="dispatch-batch-header">
+              <strong>attempt #{{ attempt.attempt_no }}</strong>
+              <span class="run-status-badge" :class="attempt.status">{{ attempt.status }}</span>
+              <span>repair_attempt_id: {{ attempt.repair_attempt_id }}</span>
+            </div>
+            <div class="dispatch-job-meta">
+              <span>executor: {{ attempt.executor }}</span>
+              <span>handoff_target: {{ attempt.handoff_target }}</span>
+              <span>failure_evidence_artifact_id: {{ attempt.failure_evidence_artifact_id || '-' }}</span>
+              <span>repair_packet_artifact_id: {{ attempt.repair_packet_artifact_id }}</span>
+              <span>verification_result_artifact_ids: {{ formatArtifactIds(attempt.verification_result_artifact_ids) }}</span>
+              <span>summary: {{ attempt.summary || '-' }}</span>
+              <span>created_at: {{ formatTime(attempt.created_at) }}</span>
+              <span>updated_at: {{ formatTime(attempt.updated_at) }}</span>
+              <span>read_only={{ attempt.read_only }}</span>
+              <span>persisted={{ attempt.persisted }}</span>
+            </div>
+            <div class="safety-notes">
+              <span v-for="note in attempt.safety_notes" :key="`${attempt.repair_attempt_id}-${note}`" class="label-badge label-ai">{{ note }}</span>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-sm" @click="selectRepairAttempt(attempt)">Select Attempt</button>
+            </div>
+          </div>
+        </div>
+        <p v-else class="section-note">No repair attempts recorded for this task.</p>
+      </section>
+
       <!-- Agent Runs -->
       <section class="card">
         <div class="section-header">
@@ -1315,11 +1434,12 @@ import {
   dryRunAiDispatch, executeAiDispatch,
   dryRunBrowserAi, executeBrowserAi, fetchBrowserAiProviderProfiles,
   previewMultiAiEvidenceRun, executeMultiAiEvidenceRun, previewFailureEvidencePacket, generateRepairPacket, previewRepairHandoff,
+  createRepairAttempt, fetchRepairAttempts, markRepairHandoffCreated, importRepairVerificationResult, stopRepairAttempt,
   fetchCodeContext,
   applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate, evaluateSandboxGate,
   fetchMcpTools, callMcpTool,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse, RepairPacketGenerateRequest, RepairHandoffPreviewRequest, RepairHandoffPreviewResponse, RepairPacketResponse } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse, RepairPacketGenerateRequest, RepairHandoffPreviewRequest, RepairHandoffPreviewResponse, RepairPacketResponse, RepairAttemptCreateRequest, RepairAttemptResponse, RepairVerificationResultRequest } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -1474,6 +1594,23 @@ const repairHandoffResult = ref<RepairHandoffPreviewResponse | null>(null)
 const repairHandoffLoading = ref(false)
 const repairHandoffError = ref('')
 const repairHandoffCopyMessage = ref('')
+const repairAttemptForm = ref<Omit<RepairAttemptCreateRequest, 'task_id'>>({
+  executor: 'codex',
+  failure_evidence_artifact_id: null,
+  repair_packet_artifact_id: 0,
+  handoff_target: 'codex',
+  summary: 'Use the repair packet for one narrow external repair attempt.',
+})
+const repairVerificationForm = ref({
+  attempt_id: 0,
+  status: 'verification_passed' as RepairVerificationResultRequest['status'],
+  summary: 'Imported verification result.',
+  commands_text: '',
+  artifact_content: '',
+})
+const repairAttempts = ref<RepairAttemptResponse[]>([])
+const repairAttemptLoading = ref(false)
+const repairAttemptError = ref('')
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -1712,6 +1849,27 @@ function buildRepairHandoffRequest(): RepairHandoffPreviewRequest | null {
   }
 }
 
+function buildRepairAttemptRequest(): RepairAttemptCreateRequest | null {
+  if (!task.value || !repairAttemptForm.value.repair_packet_artifact_id) return null
+  return {
+    task_id: task.value.id,
+    executor: repairAttemptForm.value.executor,
+    failure_evidence_artifact_id: repairAttemptForm.value.failure_evidence_artifact_id || null,
+    repair_packet_artifact_id: repairAttemptForm.value.repair_packet_artifact_id,
+    handoff_target: repairAttemptForm.value.handoff_target,
+    summary: repairAttemptForm.value.summary,
+  }
+}
+
+function buildRepairVerificationRequest(): RepairVerificationResultRequest {
+  return {
+    status: repairVerificationForm.value.status,
+    summary: repairVerificationForm.value.summary,
+    commands: repairVerificationForm.value.commands_text.split('\n').map(command => command.trim()).filter(Boolean),
+    artifact_content: repairVerificationForm.value.artifact_content,
+  }
+}
+
 function addEvidenceRole() {
   multiAiForm.value.roles.push({ role: 'risk', provider: 'gemini_web', prompt: 'Check risks and missing evidence.' })
 }
@@ -1780,6 +1938,7 @@ async function refresh() {
   approvalDecisions.value = await fetchApprovalDecisions(id)
   await loadDispatchBatches(id)
   await loadAiHandoff()
+  await loadRepairAttempts(id)
   codeContext.value = await fetchCodeContext(id)
   sandboxResults.value = await fetchSandboxResults(id)
   applyResult.value = null
@@ -1933,6 +2092,7 @@ async function generateRepairPacketFromEvidence() {
     repairPacketResult.value = await generateRepairPacket(body)
     if (repairPacketResult.value.repair_packet_artifact_id) {
       repairHandoffForm.value.repair_packet_artifact_id = repairPacketResult.value.repair_packet_artifact_id
+      repairAttemptForm.value.repair_packet_artifact_id = repairPacketResult.value.repair_packet_artifact_id
       repairHandoffResult.value = null
     }
     artifactRefreshKey.value += 1
@@ -1958,6 +2118,89 @@ async function previewCodexRepairHandoff() {
     repairHandoffError.value = e.message || 'Repair handoff preview failed'
   } finally {
     repairHandoffLoading.value = false
+  }
+}
+
+async function loadRepairAttempts(id: number) {
+  repairAttemptError.value = ''
+  try {
+    repairAttempts.value = await fetchRepairAttempts(id)
+  } catch (e: any) {
+    repairAttempts.value = []
+    repairAttemptError.value = e.message || 'Repair attempts failed to load'
+  }
+}
+
+async function loadRepairAttemptsForTask() {
+  if (!task.value) return
+  await loadRepairAttempts(task.value.id)
+}
+
+function selectRepairAttempt(attempt: RepairAttemptResponse) {
+  repairVerificationForm.value.attempt_id = attempt.repair_attempt_id
+  repairAttemptForm.value.repair_packet_artifact_id = attempt.repair_packet_artifact_id
+  repairAttemptForm.value.failure_evidence_artifact_id = attempt.failure_evidence_artifact_id
+}
+
+async function createRepairAttemptFromTimeline() {
+  const body = buildRepairAttemptRequest()
+  if (!body || !task.value) return
+  repairAttemptLoading.value = true
+  repairAttemptError.value = ''
+  try {
+    const attempt = await createRepairAttempt(body)
+    selectRepairAttempt(attempt)
+    await loadRepairAttempts(task.value.id)
+  } catch (e: any) {
+    repairAttemptError.value = e.message || 'Repair attempt creation failed'
+  } finally {
+    repairAttemptLoading.value = false
+  }
+}
+
+async function markSelectedAttemptHandoffCreated() {
+  if (!task.value || !repairVerificationForm.value.attempt_id) return
+  repairAttemptLoading.value = true
+  repairAttemptError.value = ''
+  try {
+    const attempt = await markRepairHandoffCreated(repairVerificationForm.value.attempt_id)
+    selectRepairAttempt(attempt)
+    await loadRepairAttempts(task.value.id)
+  } catch (e: any) {
+    repairAttemptError.value = e.message || 'Repair handoff status update failed'
+  } finally {
+    repairAttemptLoading.value = false
+  }
+}
+
+async function importSelectedVerificationResult() {
+  if (!task.value || !repairVerificationForm.value.attempt_id) return
+  repairAttemptLoading.value = true
+  repairAttemptError.value = ''
+  try {
+    const attempt = await importRepairVerificationResult(repairVerificationForm.value.attempt_id, buildRepairVerificationRequest())
+    selectRepairAttempt(attempt)
+    artifactRefreshKey.value += 1
+    await loadRepairAttempts(task.value.id)
+  } catch (e: any) {
+    repairAttemptError.value = e.message || 'Verification result import failed'
+  } finally {
+    repairAttemptLoading.value = false
+  }
+}
+
+async function stopSelectedRepairAttempt() {
+  if (!task.value || !repairVerificationForm.value.attempt_id) return
+  repairAttemptLoading.value = true
+  repairAttemptError.value = ''
+  try {
+    const attempt = await stopRepairAttempt(repairVerificationForm.value.attempt_id)
+    selectRepairAttempt(attempt)
+    await loadRepairAttempts(task.value.id)
+  } catch (e: any) {
+    repairAttemptError.value = e.message || 'Repair attempt stop failed'
+  } finally {
+    repairAttemptLoading.value = false
   }
 }
 
@@ -2287,6 +2530,7 @@ async function handleCreateAgentReview() {
 .failure-evidence-preview { border-left: 3px solid #ad5700; }
 .repair-packet-generation { border-left: 3px solid #2e7d32; }
 .repair-handoff-preview { border-left: 3px solid #2563eb; }
+.repair-attempt-timeline { border-left: 3px solid #455a64; }
 .browser-ai-help { margin: 8px 0 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
 .browser-ai-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
 .browser-ai-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
@@ -2301,10 +2545,18 @@ async function handleCreateAgentReview() {
 .failure-evidence-form .wide { grid-column: 1 / -1; }
 .failure-evidence-result pre { max-height: 420px; overflow: auto; }
 .repair-packet-form,
-.repair-handoff-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
+.repair-handoff-form,
+.repair-attempt-form,
+.repair-verification-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
 .repair-packet-form label,
-.repair-handoff-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
-.repair-packet-form .wide { grid-column: 1 / -1; }
+.repair-handoff-form label,
+.repair-attempt-form label,
+.repair-verification-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
+.repair-packet-form .wide,
+.repair-attempt-form .wide,
+.repair-verification-form .wide { grid-column: 1 / -1; }
+.repair-attempt-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.repair-attempt-item { padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
 .repair-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .repair-list span { padding: 3px 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; font-size: 12px; color: var(--color-text-secondary); }
 .provider-picker { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }

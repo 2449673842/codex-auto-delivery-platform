@@ -118,3 +118,39 @@ class RepairHandoffPreviewResponse(BaseModel):
     requires_master_verification: bool = True
     read_only: bool = True
     persisted: bool = False
+
+
+class RepairAttemptCreateRequest(BaseModel):
+    task_id: int
+    executor: str = "codex"
+    failure_evidence_artifact_id: int | None = None
+    repair_packet_artifact_id: int
+    handoff_target: str = "codex"
+    summary: str = ""
+
+
+class RepairVerificationResultRequest(BaseModel):
+    status: str
+    summary: str = ""
+    commands: list[str] = Field(default_factory=list)
+    artifact_content: str = ""
+
+
+class RepairAttemptResponse(BaseModel):
+    repair_attempt_id: int
+    task_id: int
+    project_id: int
+    attempt_no: int
+    initiator: str = "user"
+    executor: str
+    failure_evidence_artifact_id: int | None = None
+    repair_packet_artifact_id: int
+    handoff_target: str
+    status: str
+    verification_result_artifact_ids: list[int] = Field(default_factory=list)
+    summary: str = ""
+    safety_notes: list[str] = Field(default_factory=list)
+    created_at: str = ""
+    updated_at: str = ""
+    read_only: bool = False
+    persisted: bool = True
