@@ -100,3 +100,21 @@ class RepairPacketResponse(BaseModel):
     read_only: bool = False
     persisted: bool = True
     safety_notes: list[str] = Field(default_factory=list)
+
+
+class RepairHandoffPreviewRequest(BaseModel):
+    task_id: int
+    repair_packet_artifact_id: int
+    target: str = "codex"
+
+
+class RepairHandoffPreviewResponse(BaseModel):
+    task_id: int
+    project_id: int
+    target: str
+    handoff_prompt: str
+    safety_notes: list[str] = Field(default_factory=list)
+    source_repair_packet_artifact_id: int
+    requires_master_verification: bool = True
+    read_only: bool = True
+    persisted: bool = False

@@ -12,7 +12,7 @@ import type {
   McpToolDescriptor, McpCallRequest, McpCallResponse,
   MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse,
   FailureEvidencePreviewRequest, FailureEvidencePacketResponse,
-  RepairPacketGenerateRequest, RepairPacketResponse,
+  RepairPacketGenerateRequest, RepairHandoffPreviewRequest, RepairHandoffPreviewResponse, RepairPacketResponse,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -206,6 +206,11 @@ export async function previewFailureEvidencePacket(body: FailureEvidencePreviewR
 
 export async function generateRepairPacket(body: RepairPacketGenerateRequest): Promise<RepairPacketResponse> {
   const { data } = await client.post('/repair-loop/repair-packet/generate', body)
+  return data.data
+}
+
+export async function previewRepairHandoff(body: RepairHandoffPreviewRequest): Promise<RepairHandoffPreviewResponse> {
+  const { data } = await client.post('/repair-loop/codex-handoff/preview', body)
   return data.data
 }
 

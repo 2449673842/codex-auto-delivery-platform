@@ -706,3 +706,21 @@ export interface RepairPacketResponse {
   persisted: boolean
   safety_notes: string[]
 }
+
+export interface RepairHandoffPreviewRequest {
+  task_id: number
+  repair_packet_artifact_id: number
+  target: 'codex' | 'omx' | 'generic_ai'
+}
+
+export interface RepairHandoffPreviewResponse {
+  task_id: number
+  project_id: number
+  target: 'codex' | 'omx' | 'generic_ai'
+  handoff_prompt: string
+  safety_notes: string[]
+  source_repair_packet_artifact_id: number
+  requires_master_verification: boolean
+  read_only: boolean
+  persisted: boolean
+}

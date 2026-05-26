@@ -941,6 +941,67 @@ async function testRepairPacketGenerationPanel(page, taskId) {
   await clearFailureEvidenceRoutes(page)
 }
 
+async function testRepairHandoffPanel(page, taskId) {
+  log('\n========== S20.3 Codex / OMX Repair Handoff ==========')
+  const failureCounter = { count: 0 }
+  const repairCounter = { count: 0 }
+  const handoffCounter = { count: 0 }
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
+  await setFailureEvidenceRoute(page, failureEvidencePayload(taskId), 200, failureCounter)
+  await setRepairPacketRoute(page, repairPacketPayload(taskId), 200, repairCounter)
+  await setRepairHandoffRoute(page, repairHandoffPayload(taskId), 200, handoffCounter)
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  const labels = [
+    ['Codex / OMX Repair Handoff', 'S20.3-1 panel shown'],
+    ['Handoff only', 'S20.3-2 handoff only label'],
+    ['No repair execution', 'S20.3-3 no execution label'],
+    ['No repository writes by platform', 'S20.3-4 no repository writes label'],
+    ['No auto merge / deploy', 'S20.3-5 no auto merge deploy label'],
+    ['Requires current master verification', 'S20.3-6 master verification label'],
+  ]
+  for (const [text, label] of labels) await checkT(page, text, label)
+  await page.locator('.repair-handoff-preview select').selectOption('omx')
+  await page.locator('.repair-handoff-preview select').selectOption('generic_ai')
+  await page.locator('.repair-handoff-preview select').selectOption('codex')
+  pass('S20.3-7 target can switch Codex / OMX / Generic AI')
+  await page.locator('.failure-evidence-preview').getByRole('button', { name: 'Preview' }).click()
+  await page.waitForTimeout(250)
+  await page.locator('.repair-packet-generation').getByRole('button', { name: 'Generate Repair Packet' }).click()
+  await page.waitForTimeout(300)
+  await checkInputValue(page, '.repair-handoff-preview input', '802', 'S20.3-8 latest repair packet id filled')
+  await page.locator('.repair-handoff-preview').getByRole('button', { name: 'Preview Handoff' }).click()
+  await page.waitForTimeout(300)
+  if (handoffCounter.count === 1) pass('S20.3-9 handoff endpoint called')
+  else fail('S20.3-9 handoff endpoint call count', handoffCounter.count)
+  const resultTexts = [
+    ['repair handoff prompt', 'S20.3-10 handoff prompt shown'],
+    ['source_repair_packet_artifact_id: 802', 'S20.3-11 source artifact shown'],
+    ['requires_master_verification=true', 'S20.3-12 master verification true shown'],
+    ['read_only=true', 'S20.3-13 read only true shown'],
+    ['persisted=false', 'S20.3-14 persisted false shown'],
+  ]
+  for (const [text, label] of resultTexts) await checkT(page, text, label)
+  for (const [text, label] of [
+    ['Read AGENTS.md before acting.', 'S20.3-15 prompt includes AGENTS'],
+    ['Run verification commands.', 'S20.3-16 prompt includes verification commands'],
+    ['Create PR and wait for mastermind review.', 'S20.3-17 prompt includes PR review wait'],
+  ]) await checkBodyIncludes(page, text, label)
+  await checkT(page, 'Handoff only; no repair execution is performed by the platform.', 'S20.3-18 safety note shown')
+  await checkEl(page, '.repair-handoff-preview button:has-text("Copy Handoff")', 'S20.3-19 copy button exists')
+  for (const [text, label] of [
+    ['Auto fix repository', 'S20.3-20 no auto fix entry'],
+    ['Auto merge', 'S20.3-21 no auto merge entry'],
+  ]) await checkBodyExcludes(page, text, label)
+  const deployEntries = await page.locator('button:has-text("Deploy"), a:has-text("Deploy")').count()
+  if (deployEntries === 0) pass('S20.3-22 no deploy entry')
+  else fail('S20.3-22 no deploy entry', deployEntries)
+  await clearRepairHandoffRoutes(page)
+  await clearRepairPacketRoutes(page)
+  await clearFailureEvidenceRoutes(page)
+}
+
 async function testMcpBridgePanel(page, taskId) {
   log('\n========== MCP. MCP Bridge Read-only Dry-run ==========')
   const mcpCounter = { count: 0 }
@@ -1058,6 +1119,11 @@ async function setRepairPacketRoute(page, payload, status = 200, counter = null)
   await page.route('**/api/repair-loop/repair-packet/generate', route => fulfillJson(route, payload, status, counter))
 }
 
+async function setRepairHandoffRoute(page, payload, status = 200, counter = null) {
+  await page.unroute('**/api/repair-loop/codex-handoff/preview').catch(() => {})
+  await page.route('**/api/repair-loop/codex-handoff/preview', route => fulfillJson(route, payload, status, counter))
+}
+
 async function setBrowserAiProfilesRoute(page) {
   await page.unroute('**/api/browser-ai/provider-profiles').catch(() => {})
   await page.route('**/api/browser-ai/provider-profiles', route => fulfillJson(route, {
@@ -1097,6 +1163,33 @@ async function clearFailureEvidenceRoutes(page) {
 
 async function clearRepairPacketRoutes(page) {
   await page.unroute('**/api/repair-loop/repair-packet/generate').catch(() => {})
+}
+
+async function clearRepairHandoffRoutes(page) {
+  await page.unroute('**/api/repair-loop/codex-handoff/preview').catch(() => {})
+}
+
+async function clearTaskDetailMockRoutes(page) {
+  await clearDashboardRoutes(page)
+  for (const routePattern of [
+    '**/api/browser-ai/provider-profiles',
+    '**/api/tasks/*/dispatch-batches',
+    '**/api/answer-synthesis/preview',
+    '**/api/ai-handoff/preview',
+    '**/api/mcp/tools**',
+    '**/api/mcp/call**',
+    '**/api/ai-dispatch/dry-run',
+    '**/api/ai-dispatch/execute',
+    '**/api/browser-ai/dry-run',
+    '**/api/browser-ai/execute',
+    '**/api/multi-ai-evidence-runs/preview',
+    '**/api/multi-ai-evidence-runs/execute',
+    '**/api/tasks/*/agent-runs',
+    '**/api/tasks/*/artifacts',
+  ]) await page.unroute(routePattern).catch(() => {})
+  await clearFailureEvidenceRoutes(page)
+  await clearRepairPacketRoutes(page)
+  await clearRepairHandoffRoutes(page)
 }
 
 async function fulfillJson(route, payload, status, counter) {
@@ -1260,6 +1353,34 @@ function repairPacketPayload(taskId, overrides = {}) {
       'Repair Packet Generation uses evidence collection only; it does not modify code.',
       'No repository writes, PR, CI, Sonar, Deploy, approve, or merge are performed.',
     ],
+    ...overrides,
+  }, message: 'ok' }
+}
+
+function repairHandoffPayload(taskId, overrides = {}) {
+  return { success: true, data: {
+    task_id: taskId,
+    project_id: 1,
+    target: 'codex',
+    handoff_prompt: [
+      'Read AGENTS.md before acting.',
+      'Verify current master before making changes.',
+      'Use the repair packet.',
+      'Make one narrow fix only.',
+      'Run verification commands.',
+      'Create PR and wait for mastermind review.',
+      'Do not read `.env`.',
+      'Do not auto merge.',
+    ].join('\n'),
+    safety_notes: [
+      'Handoff only; no repair execution is performed by the platform.',
+      'No repository writes are performed by the platform.',
+      'No provider call, Browser AI execution, shell, subprocess, `.env`, secret_ref, or Project.root_path access is performed.',
+    ],
+    source_repair_packet_artifact_id: 802,
+    requires_master_verification: true,
+    read_only: true,
+    persisted: false,
     ...overrides,
   }, message: 'ok' }
 }
@@ -1727,6 +1848,7 @@ async function main() {
   await testMultiAiEvidenceRunRoutedPartial(page, task.id)
   await testFailureEvidencePreviewPanel(page, task.id)
   await testRepairPacketGenerationPanel(page, task.id)
+  await testRepairHandoffPanel(page, task.id)
   await testMcpBridgePanel(page, task.id)
   await testApprovals(page)
   await testHumanRequired(page)
@@ -1738,6 +1860,7 @@ async function main() {
   await testAiHandoffApiFailure(page, task.id)
   await testNoUnsafeWorkspaceActions(page)
   // Create a separate task without code context for 404 test
+  await clearTaskDetailMockRoutes(page)
   const bareTask = await apiPost('/tasks', { project_id: task.project_id, title: 'S4 no-ctx test', planner: 'test', description: 'No code context' })
   if (bareTask.data?.id) await testNoCodeContext(page, bareTask.data.id)
   // Navigate back to main task
