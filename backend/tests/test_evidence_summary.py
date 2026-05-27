@@ -69,6 +69,16 @@ def _secret_fixture() -> str:
     )
 
 
+def _artifact(task: dict, artifact_type: str, filename: str, content: str, metadata: dict) -> TaskArtifact:
+    return TaskArtifact(
+        task_id=task["id"],
+        artifact_type=artifact_type,
+        filename=filename,
+        content=content,
+        metadata_json=json.dumps(metadata),
+    )
+
+
 async def _seed_all_sources(task: dict) -> dict[str, int]:
     async with get_session_factory()() as session:
         agent = AgentProfile(
@@ -143,51 +153,51 @@ async def _seed_all_sources(task: dict) -> dict[str, int]:
         attempt.payload_json = json.dumps(attempt_payload)
         status_event.payload_json = json.dumps({"repair_attempt_id": attempt.id, "status": "handoff_created"})
 
-        repair_packet = TaskArtifact(
-            task_id=task["id"],
-            artifact_type="repair_packet",
-            filename="repair_packet.json",
-            content=json.dumps({
+        repair_packet = _artifact(
+            task,
+            "repair_packet",
+            "repair_packet.json",
+            json.dumps({
                 "failure_summary": f"sandbox failed {_secret_fixture()}",
                 "recommended_fix_strategy": "Make one narrow fix.",
                 "safety_notes": ["Codex / OMX or user must execute repair."],
                 "human_decision_required": True,
             }),
-            metadata_json=json.dumps({
+            {
                 "type": "repair_packet",
                 "status": "completed",
                 "dispatch_batch_id": 0,
                 "summary": "Repair packet summary",
                 "human_decision_required": True,
-            }),
+            },
         )
-        verification = TaskArtifact(
-            task_id=task["id"],
-            artifact_type="verification_result",
-            filename="verification_result.json",
-            content="verification imported",
-            metadata_json=json.dumps({"type": "verification_result", "status": "verification_passed", "repair_attempt_id": attempt.id}),
+        verification = _artifact(
+            task,
+            "verification_result",
+            "verification_result.json",
+            "verification imported",
+            {"type": "verification_result", "status": "verification_passed", "repair_attempt_id": attempt.id},
         )
-        browser = TaskArtifact(
-            task_id=task["id"],
-            artifact_type="browser_ai_answer",
-            filename="browser.md",
-            content="browser answer",
-            metadata_json=json.dumps({"type": "browser_ai_answer", "provider": "browser_ai", "role": "reviewer", "agent_run_id": succeeded_run.id}),
+        browser = _artifact(
+            task,
+            "browser_ai_answer",
+            "browser.md",
+            "browser answer",
+            {"type": "browser_ai_answer", "provider": "browser_ai", "role": "reviewer", "agent_run_id": succeeded_run.id},
         )
-        generic = TaskArtifact(
-            task_id=task["id"],
-            artifact_type="note",
-            filename="note.txt",
-            content="generic artifact",
-            metadata_json=json.dumps({"summary": "Generic artifact summary"}),
+        generic = _artifact(
+            task,
+            "note",
+            "note.txt",
+            "generic artifact",
+            {"summary": "Generic artifact summary"},
         )
-        long_artifact = TaskArtifact(
-            task_id=task["id"],
-            artifact_type="note",
-            filename="long.txt",
-            content="x" * 2500,
-            metadata_json=json.dumps({"summary": "Long artifact"}),
+        long_artifact = _artifact(
+            task,
+            "note",
+            "long.txt",
+            "x" * 2500,
+            {"summary": "Long artifact"},
         )
         session.add_all([repair_packet, verification, browser, generic, long_artifact])
         await session.flush()
