@@ -241,6 +241,36 @@ S22 不做：
 
 MCP Bridge、Codex skill、Browser AI prompt 都可以读取 Project Memory 的摘要，减少重复解释背景。
 
+拆分路线：
+
+- S23.0：Project Memory 设计文档
+- S23.1：Project Memory read-only schema / API
+- S23.2：TaskDetail / Project page Memory UI
+- S23.3：Memory-backed handoff packet
+- S23.4：Memory stale review / update flow
+
+S23.0 只做设计文档，不新增 API、前端页面、数据库或业务代码。
+
+Project Memory 应覆盖：
+
+- `project_profile`：项目名称、目标、技术栈、repo 信息、主要目录结构
+- `runbook`：后端 / 前端启动方式、常用端口、环境变量名称要求、本地服务依赖
+- `verification_policy`：targeted pytest、full pytest、compileall、npm build、frontend smoke、Browser AI mock smoke、SonarCloud gate
+- `delivery_policy`：每阶段独立 PR、不直接 push master、中文 PR body、主脑复审后合入
+- `safety_policy`：不读取 `.env` / `secret_ref`、不回显 secret、不写真实仓库、不自动 merge / deploy
+- `known_failure`：Sonar secret false positive、placeholder 文件损坏、Browser AI selector failure、stable response timeout、GitHub TLS / proxy 失败
+- `user_preference`：保守阶段推进、平台作为证据层 / 记忆层、不做弱版 Codex
+- `handoff_template`：Codex / OMX / PR review / repair handoff / Browser AI provider run 模板
+
+S23 第一版必须保守：
+
+- 不自动扫描仓库生成 memory
+- 不读取 `.env`
+- 不保存 secret 值
+- 不自动相信 AI 输出
+- memory 写入需要用户确认或明确来源
+- memory 需要 source references、updated_at、confidence、stale 标记
+
 ### S24 — 真正 MCP Transport / Skill Adapter
 
 目标：把当前 REST debug endpoint 升级为真正外部 AI 可接入的方式。
