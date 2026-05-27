@@ -168,7 +168,12 @@ def _event_timeline_items(events: list[TaskEvent]) -> list[TimelineItem]:
 def _agent_run_timeline_items(runs: list[AgentRun]) -> list[TimelineItem]:
     items: list[TimelineItem] = []
     for run in runs:
-        event_type = "ai_run_failed" if run.status == "failed" else "ai_run_finished" if run.status == "succeeded" else "ai_run_started"
+        if run.status == "failed":
+            event_type = "ai_run_failed"
+        elif run.status == "succeeded":
+            event_type = "ai_run_finished"
+        else:
+            event_type = "ai_run_started"
         items.append(TimelineItem(
             time=_iso(run.finished_at or run.started_at or run.created_at),
             type=event_type,
@@ -191,7 +196,7 @@ def _artifact_timeline_items(artifacts: list[TaskArtifact]) -> list[TimelineItem
             time=_iso(artifact.created_at),
             type=event_type,
             title=_title(event_type),
-            status=_artifact_status(artifact, metadata),
+            status=_artifact_status(metadata),
             source=_artifact_source(artifact, metadata),
             linked_ids=EvidenceLinkedIds(
                 agent_run_id=_int_or_none(metadata.get("agent_run_id")),
@@ -245,15 +250,14 @@ def _event_board_items(events: list[TaskEvent]) -> list[EvidenceBoardItem]:
         payload = _loads_dict(event.payload_json)
         evidence_type = "repair_attempt" if event.event_type.startswith("repair_attempt") else "task_event"
         excerpt = _excerpt(event.message or _json(payload) or event.event_type)
-        items.append(EvidenceBoardItem(
+        items.append(_board_item(
             evidence_type=evidence_type,
             source=_event_source(event),
             status=event.to_status or payload.get("status") or event.event_type,
             repair_attempt_id=_repair_attempt_id(event, payload),
             summary=_short(event.message or event.event_type),
-            raw_excerpt=excerpt.text,
             safety_notes=_safety_notes(payload),
-            redaction_status=excerpt.status,
+            excerpt=excerpt,
         ))
     return items
 
@@ -263,7 +267,7 @@ def _agent_run_board_items(runs: list[AgentRun]) -> list[EvidenceBoardItem]:
     for run in runs:
         provider = _agent_provider(run)
         excerpt = _excerpt("\n".join(filter(None, [run.output_summary, run.output_log, run.error_message, run.raw_result_json])))
-        items.append(EvidenceBoardItem(
+        items.append(_board_item(
             evidence_type="agent_run",
             source=provider or "agent_run",
             status=run.status,
@@ -271,9 +275,8 @@ def _agent_run_board_items(runs: list[AgentRun]) -> list[EvidenceBoardItem]:
             role=run.run_type or "",
             agent_run_id=run.id,
             summary=_short(run.error_message or run.output_summary or run.run_type),
-            raw_excerpt=excerpt.text,
             safety_notes=_safety_notes(_loads_dict(run.raw_result_json)),
-            redaction_status=excerpt.status,
+            excerpt=excerpt,
         ))
     return items
 
@@ -284,10 +287,10 @@ def _artifact_board_items(artifacts: list[TaskArtifact]) -> list[EvidenceBoardIt
         metadata = _loads_dict(artifact.metadata_json)
         evidence_type = _artifact_evidence_type(artifact)
         excerpt = _excerpt(artifact.content or _json(metadata), source_truncated=artifact.is_truncated)
-        items.append(EvidenceBoardItem(
+        items.append(_board_item(
             evidence_type=evidence_type,
             source=_artifact_source(artifact, metadata),
-            status=_artifact_status(artifact, metadata),
+            status=_artifact_status(metadata),
             provider=str(metadata.get("provider") or ""),
             role=str(metadata.get("role") or metadata.get("target") or ""),
             artifact_id=artifact.id,
@@ -296,9 +299,8 @@ def _artifact_board_items(artifacts: list[TaskArtifact]) -> list[EvidenceBoardIt
             dispatch_job_id=_int_or_none(metadata.get("dispatch_job_id")),
             repair_attempt_id=_int_or_none(metadata.get("repair_attempt_id")),
             summary=_artifact_summary(artifact, metadata),
-            raw_excerpt=excerpt.text,
             safety_notes=_safety_notes(metadata),
-            redaction_status=excerpt.status,
+            excerpt=excerpt,
         ))
     return items
 
@@ -309,20 +311,19 @@ def _dispatch_board_items(batches: list[DispatchBatch], jobs: list[DispatchJob])
         metadata = _loads_dict(batch.metadata_json)
         summary = _loads_dict(batch.summary_json)
         excerpt = _excerpt("\n".join(filter(None, [batch.task_goal, _json(summary), _json(metadata)])))
-        items.append(EvidenceBoardItem(
+        items.append(_board_item(
             evidence_type="multi_ai_evidence",
             source=_dispatch_source(batch),
             status=batch.status,
             dispatch_batch_id=batch.id,
             summary=_short(summary.get("summary") or batch.task_goal or batch.batch_mode),
-            raw_excerpt=excerpt.text,
             safety_notes=_safety_notes(metadata),
-            redaction_status=excerpt.status,
+            excerpt=excerpt,
         ))
     for job in jobs:
         metadata = _loads_dict(job.metadata_json)
         excerpt = _excerpt("\n".join(filter(None, [job.question, job.error_message, _json(metadata)])))
-        items.append(EvidenceBoardItem(
+        items.append(_board_item(
             evidence_type="multi_ai_evidence",
             source="multi_ai_evidence" if metadata.get("type") == "multi_ai_evidence_job" else "dispatch_job",
             status=job.status,
@@ -332,11 +333,44 @@ def _dispatch_board_items(batches: list[DispatchBatch], jobs: list[DispatchJob])
             dispatch_batch_id=job.batch_id,
             dispatch_job_id=job.id,
             summary=_short(job.error_message or job.question),
-            raw_excerpt=excerpt.text,
             safety_notes=_safety_notes(metadata),
-            redaction_status=excerpt.status,
+            excerpt=excerpt,
         ))
     return items
+
+
+def _board_item(
+    *,
+    evidence_type: str,
+    source: str,
+    status: str,
+    summary: str,
+    excerpt: "_Excerpt",
+    safety_notes: list[str],
+    provider: str = "",
+    role: str = "",
+    artifact_id: int | None = None,
+    agent_run_id: int | None = None,
+    dispatch_batch_id: int | None = None,
+    dispatch_job_id: int | None = None,
+    repair_attempt_id: int | None = None,
+) -> EvidenceBoardItem:
+    return EvidenceBoardItem(
+        evidence_type=evidence_type,
+        source=source,
+        status=status,
+        provider=provider,
+        role=role,
+        artifact_id=artifact_id,
+        agent_run_id=agent_run_id,
+        dispatch_batch_id=dispatch_batch_id,
+        dispatch_job_id=dispatch_job_id,
+        repair_attempt_id=repair_attempt_id,
+        summary=summary,
+        raw_excerpt=excerpt.text,
+        safety_notes=safety_notes,
+        redaction_status=excerpt.status,
+    )
 
 
 class _Excerpt:
@@ -405,7 +439,7 @@ def _artifact_source(artifact: TaskArtifact, metadata: dict[str, Any]) -> str:
     return "artifact"
 
 
-def _artifact_status(artifact: TaskArtifact, metadata: dict[str, Any]) -> str:
+def _artifact_status(metadata: dict[str, Any]) -> str:
     return str(metadata.get("status") or metadata.get("overall_status") or "completed")
 
 
