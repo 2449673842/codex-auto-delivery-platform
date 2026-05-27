@@ -857,8 +857,20 @@
           <div class="evidence-board-panel">
             <div class="section-header compact">
               <strong>Evidence Board</strong>
-              <span class="workspace-readonly">{{ evidenceBoardItems.length }} summaries</span>
+              <span class="workspace-readonly">filtered {{ filteredEvidenceBoardItems.length }} / {{ evidenceBoardTotalCount }} summaries</span>
             </div>
+            <div class="evidence-board-controls">
+              <label v-for="field in evidenceBoardFilterFields" :key="field">
+                {{ field }}
+                <select v-model="evidenceBoardFilter[field]">
+                  <option value="">All</option>
+                  <option v-for="value in evidenceFilterOptions[field]" :key="`${field}-${value}`" :value="value">{{ value || '-' }}</option>
+                </select>
+              </label>
+              <button class="btn btn-sm" @click="clearEvidenceBoardFilters">Clear filters</button>
+              <span class="workspace-readonly">filtered count: {{ filteredEvidenceBoardItems.length }} / total count: {{ evidenceBoardTotalCount }}</span>
+            </div>
+            <p v-if="evidenceBoardCopyMessage" class="copy-message">{{ evidenceBoardCopyMessage }}</p>
             <div v-if="evidenceBoard" class="evidence-filters">
               <span>filters evidence_type: {{ evidenceBoard.filters.evidence_type.join(', ') || '-' }}</span>
               <span>source: {{ evidenceBoard.filters.source.join(', ') || '-' }}</span>
@@ -866,11 +878,16 @@
               <span>provider: {{ evidenceBoard.filters.provider.join(', ') || '-' }}</span>
               <span>role: {{ evidenceBoard.filters.role.join(', ') || '-' }}</span>
             </div>
-            <div v-if="evidenceBoardItems.length" class="evidence-board-list">
-              <div v-for="item in evidenceBoardItems" :key="`${item.evidence_type}-${item.artifact_id}-${item.summary}`" class="evidence-board-item">
+            <div v-if="filteredEvidenceBoardItems.length" class="evidence-board-list">
+              <div v-for="item in filteredEvidenceBoardItems" :key="`${item.evidence_type}-${item.artifact_id}-${item.summary}`" class="evidence-board-item">
                 <div class="timeline-item-header">
                   <strong>{{ item.evidence_type }}</strong>
                   <span class="run-status-badge" :class="item.status">{{ item.status }}</span>
+                </div>
+                <div class="evidence-item-badges">
+                  <span class="label-badge label-applied">has_artifact={{ evidenceItemHasArtifact(item) }}</span>
+                  <span class="label-badge label-warn">has_risk={{ evidenceItemHasRisk(item) }}</span>
+                  <span class="label-badge label-ai">safety boundary: {{ evidenceSafetyBoundary(item) }}</span>
                 </div>
                 <div class="dispatch-job-meta">
                   <span>source: {{ item.source }}</span>
@@ -880,8 +897,17 @@
                   <span>summary: {{ item.summary || '-' }}</span>
                   <span>redaction_status: redaction_applied={{ item.redaction_status.redaction_applied }}, truncated={{ item.redaction_status.truncated }}, max_chars={{ item.redaction_status.max_chars }}</span>
                 </div>
+                <div class="form-actions">
+                  <button class="btn btn-sm" @click="copyEvidenceSummary(item)">Copy evidence summary</button>
+                  <button class="btn btn-sm" @click="copyEvidenceLinkedIds(item)">Copy linked ids</button>
+                </div>
                 <details class="evidence-excerpt">
-                  <summary>raw_excerpt</summary>
+                  <summary>Evidence detail</summary>
+                  <div class="dispatch-job-meta">
+                    <span v-for="row in evidenceDetailRows(item)" :key="`${item.evidence_type}-${row}`">{{ row }}</span>
+                  </div>
+                  <p class="section-note">safety_notes: {{ item.safety_notes.join('; ') || '-' }}</p>
+                  <p class="section-note">raw_excerpt</p>
                   <pre>{{ item.raw_excerpt || '-' }}</pre>
                 </details>
                 <div class="safety-notes">
@@ -889,7 +915,7 @@
                 </div>
               </div>
             </div>
-            <p v-else class="section-note">No evidence board summaries returned.</p>
+            <p v-else class="section-note">No evidence board summaries match the current filters.</p>
           </div>
         </div>
       </section>
@@ -1711,6 +1737,16 @@ const timeline = ref<TimelineResponse | null>(null)
 const evidenceBoard = ref<EvidenceBoardResponse | null>(null)
 const evidenceSummaryLoading = ref(false)
 const evidenceSummaryError = ref('')
+const evidenceBoardCopyMessage = ref('')
+const evidenceBoardFilterFields = ['evidence_type', 'source', 'status', 'provider', 'role'] as const
+type EvidenceBoardFilterField = typeof evidenceBoardFilterFields[number]
+const evidenceBoardFilter = ref<Record<EvidenceBoardFilterField, string>>({
+  evidence_type: '',
+  source: '',
+  status: '',
+  provider: '',
+  role: '',
+})
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -1756,6 +1792,22 @@ const availableActions = computed(() => {
 
 const timelineItems = computed<TimelineItem[]>(() => (timeline.value?.items || []).slice(-20).reverse())
 const evidenceBoardItems = computed<EvidenceBoardItem[]>(() => evidenceBoard.value?.items || [])
+const evidenceBoardTotalCount = computed(() => evidenceBoardItems.value.length)
+const evidenceFilterOptions = computed(() => {
+  const responseFilters = evidenceBoard.value?.filters
+  const fromItems = (key: EvidenceBoardFilterField) => {
+    const values = evidenceBoardItems.value.map((item) => item[key] || '').filter((value) => value !== '')
+    return Array.from(new Set(values)).sort()
+  }
+  return evidenceBoardFilterFields.reduce((options, field) => ({
+    ...options,
+    [field]: responseFilters?.[field]?.length ? responseFilters[field] : fromItems(field),
+  }), {} as Record<EvidenceBoardFilterField, string[]>)
+})
+const filteredEvidenceBoardItems = computed(() => evidenceBoardItems.value.filter((item) => {
+  const filters = evidenceBoardFilter.value
+  return evidenceBoardFilterFields.every((field) => !filters[field] || item[field] === filters[field])
+}))
 
 function runTypeLabel(t: string) {
   return AGENT_RUN_TYPE_LABELS[t] || t
@@ -2243,6 +2295,7 @@ async function loadRepairAttemptsForTask() {
 async function loadEvidenceSummary(id: number) {
   evidenceSummaryLoading.value = true
   evidenceSummaryError.value = ''
+  evidenceBoardCopyMessage.value = ''
   try {
     const [timelineResult, boardResult] = await Promise.all([
       fetchTaskTimeline(id),
@@ -2283,6 +2336,68 @@ function formatEvidenceItemLinkedIds(item: EvidenceBoardItem) {
     dispatch_job_id: item.dispatch_job_id,
     repair_attempt_id: item.repair_attempt_id,
   })
+}
+
+function clearEvidenceBoardFilters() {
+  evidenceBoardFilter.value = Object.fromEntries(evidenceBoardFilterFields.map((field) => [field, ''])) as Record<EvidenceBoardFilterField, string>
+}
+
+function evidenceItemHasArtifact(item: EvidenceBoardItem) {
+  return item.artifact_id !== null && item.artifact_id !== undefined
+}
+
+function evidenceItemHasRisk(item: EvidenceBoardItem) {
+  const riskText = [
+    item.summary,
+    item.raw_excerpt,
+    ...(item.safety_notes || []),
+  ].join(' ').toLowerCase()
+  return ['risk', 'failed', 'blocked', 'warning', 'unsafe', 'human decision'].some((keyword) => riskText.includes(keyword))
+}
+
+function evidenceSafetyBoundary(item: EvidenceBoardItem) {
+  const notes = item.safety_notes || []
+  const boundary = notes.find((note) => /no |read-only|must|not |human/i.test(note))
+  return boundary || 'none recorded'
+}
+
+function evidenceSummaryText(item: EvidenceBoardItem) {
+  return [
+    ...evidenceBoardFilterFields.map((field) => `${field}: ${item[field] || '-'}`),
+    `linked ids: ${formatEvidenceItemLinkedIds(item)}`,
+    `summary: ${item.summary || '-'}`,
+    `has_artifact=${evidenceItemHasArtifact(item)}`,
+    `has_risk=${evidenceItemHasRisk(item)}`,
+    `safety_notes: ${(item.safety_notes || []).join('; ') || '-'}`,
+  ].join('\n')
+}
+
+function evidenceDetailRows(item: EvidenceBoardItem) {
+  return [
+    ...evidenceBoardFilterFields.map((field) => `${field}: ${item[field] || '-'}`),
+    `linked ids: ${formatEvidenceItemLinkedIds(item)}`,
+    `summary: ${item.summary || '-'}`,
+    `has_artifact=${evidenceItemHasArtifact(item)}`,
+    `has_risk=${evidenceItemHasRisk(item)}`,
+    `redaction_status: redaction_applied=${item.redaction_status.redaction_applied}, truncated=${item.redaction_status.truncated}, max_chars=${item.redaction_status.max_chars}`,
+  ]
+}
+
+async function copyEvidenceText(text: string, successMessage: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    evidenceBoardCopyMessage.value = successMessage
+  } catch {
+    evidenceBoardCopyMessage.value = 'copy failed; select the text manually'
+  }
+}
+
+async function copyEvidenceSummary(item: EvidenceBoardItem) {
+  await copyEvidenceText(evidenceSummaryText(item), 'evidence summary copied')
+}
+
+async function copyEvidenceLinkedIds(item: EvidenceBoardItem) {
+  await copyEvidenceText(formatEvidenceItemLinkedIds(item), 'linked ids copied')
 }
 
 function selectRepairAttempt(attempt: RepairAttemptResponse) {
@@ -2714,12 +2829,18 @@ async function handleCreateAgentReview() {
 .evidence-summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
 .timeline-panel,
 .evidence-board-panel { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.evidence-board-controls { display: grid; grid-template-columns: repeat(5, minmax(96px, 1fr)); gap: 8px; align-items: end; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
+.evidence-board-controls label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--color-text-secondary); }
+.evidence-board-controls button,
+.evidence-board-controls .workspace-readonly { align-self: end; }
+.evidence-board-controls .workspace-readonly { grid-column: 1 / -1; }
 .timeline-list,
 .evidence-board-list { display: flex; flex-direction: column; gap: 10px; }
 .timeline-item,
 .evidence-board-item { padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
 .timeline-item-header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
 .timeline-item-header strong { font-size: 13px; word-break: break-word; }
+.evidence-item-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .evidence-excerpt { margin-top: 8px; }
 .evidence-excerpt summary { cursor: pointer; color: var(--color-text-secondary); font-size: 12px; }
 .evidence-excerpt pre { margin-top: 6px; max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--color-text-secondary); padding: 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fff; }
@@ -2822,6 +2943,7 @@ async function handleCreateAgentReview() {
 .label-merged { background: #ce93d8; color: #000000; }
 .label-exec { background: #ffcdd2; color: #b71c1c; }
 .label-applied { background: #ffcdd2; color: #b71c1c; }
+.label-warn { background: #fff3e0; color: #8a3000; }
 .approval-decision-item { padding: 10px 0; border-bottom: 1px solid var(--color-border); }
 .approval-decision-item:last-child { border-bottom: none; }
 .approval-decision-header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
@@ -2924,6 +3046,11 @@ async function handleCreateAgentReview() {
 .sandbox-gate-reasons li { font-size: 12px; margin: 2px 0; }
 .sandbox-gate-actions { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
 .sandbox-gate-pending-note { font-size: 11px; color: var(--color-text-secondary); font-style: italic; }
+
+@media (max-width: 900px) {
+  .evidence-summary-grid,
+  .evidence-board-controls { grid-template-columns: 1fr; }
+}
 
 .btn-primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
 .btn-approve { background: #4caf50; color: #fff; border-color: #4caf50; }
