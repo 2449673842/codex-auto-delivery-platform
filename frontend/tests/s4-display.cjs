@@ -1062,6 +1062,86 @@ async function testRepairAttemptTimelinePanel(page, taskId) {
   await clearRepairAttemptsRoutes(page)
 }
 
+async function testEvidenceSummaryPanel(page, taskId) {
+  log('\n========== S22.2 Run Timeline / Evidence Board ===========')
+  const timelineCounter = { count: 0 }
+  const evidenceCounter = { count: 0 }
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
+  await setEvidenceSummaryRoutes(
+    page,
+    timelinePayload(taskId),
+    evidenceBoardPayload(taskId),
+    200,
+    timelineCounter,
+    evidenceCounter,
+  )
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  for (const [text, label] of [
+    ['Run Timeline / Evidence Board', 'S22.2-1 panel shown'],
+    ['Run Timeline', 'S22.2-2 timeline section shown'],
+    ['Evidence Board', 'S22.2-3 evidence board section shown'],
+    ['Timeline is read-only', 'S22.2-4 timeline read-only label shown'],
+    ['Evidence Board is read-only', 'S22.2-5 evidence board read-only label shown'],
+    ['No provider call', 'S22.2-6 no provider label shown'],
+    ['No Browser AI execution', 'S22.2-7 no browser ai label shown'],
+    ['No repository writes', 'S22.2-8 no repository writes label shown'],
+    ['No GitHub / Sonar query', 'S22.2-9 no GitHub Sonar query label shown'],
+    ['No PR / CI / Sonar / Deploy', 'S22.2-10 no external delivery label shown'],
+    ['No auto approve / merge', 'S22.2-11 no approve merge label shown'],
+    ['timeline read_only=true', 'S22.2-12 timeline read_only shown'],
+    ['timeline persisted=false', 'S22.2-13 timeline persisted shown'],
+    ['evidence_board read_only=true', 'S22.2-14 evidence read_only shown'],
+    ['evidence_board persisted=false', 'S22.2-15 evidence persisted shown'],
+    ['type: repair_packet_generated', 'S22.2-16 timeline type shown'],
+    ['completed', 'S22.2-17 timeline status shown'],
+    ['source: repair_loop', 'S22.2-18 timeline source shown'],
+    ['summary: Generated one-attempt repair packet from failure evidence.', 'S22.2-19 timeline summary shown'],
+    ['repair_packet', 'S22.2-20 evidence type shown'],
+    ['summary: Narrow repair strategy for sandbox gate failure.', 'S22.2-21 evidence summary shown'],
+    ['redaction_status: redaction_applied=true, truncated=false, max_chars=2000', 'S22.2-23 redaction status shown'],
+    ['no_repository_writes', 'S22.2-24 safety flag shown'],
+    ['Codex / OMX or user must execute repair.', 'S22.2-25 safety note shown'],
+  ]) await checkT(page, text, label)
+  for (const [text, label] of [
+    ['artifact_id: 802', 'S22.2-22a linked artifact id shown'],
+    ['dispatch_batch_id: 201', 'S22.2-22b linked dispatch batch id shown'],
+    ['repair_attempt_id: 1', 'S22.2-22c linked repair attempt id shown'],
+  ]) await checkBodyIncludes(page, text, label)
+  await checkEl(page, '.evidence-summary-panel button:has-text("Refresh Timeline / Evidence Board")', 'S22.2-26 refresh button exists')
+  await page.locator('.evidence-summary-panel').getByRole('button', { name: 'Refresh Timeline / Evidence Board' }).click()
+  await page.waitForTimeout(300)
+  if (timelineCounter.count >= 2 && evidenceCounter.count >= 2) pass('S22.2-27 refresh reloads both read-only APIs')
+  else fail('S22.2-27 refresh API call counts', `timeline=${timelineCounter.count}, evidence=${evidenceCounter.count}`)
+  for (const [text, label] of [
+    ['Auto fix repository', 'S22.2-28 no auto fix entry'],
+    ['Auto merge', 'S22.2-29 no auto merge entry'],
+  ]) await checkBodyExcludes(page, text, label)
+  const deployEntries = await page.locator('button:has-text("Deploy"), a:has-text("Deploy")').count()
+  if (deployEntries === 0) pass('S22.2-30 no deploy entry')
+  else fail('S22.2-30 no deploy entry', deployEntries)
+  await clearEvidenceSummaryRoutes(page)
+}
+
+async function testEvidenceSummaryApiFailure(page, taskId) {
+  log('\n========== S22.2 Evidence Summary API Failure ===========')
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
+  await setEvidenceSummaryRoutes(
+    page,
+    { detail: 'timeline unavailable' },
+    { detail: 'evidence board unavailable' },
+    500,
+  )
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await checkT(page, 'Run Timeline / Evidence Board', 'S22.2-31 panel remains visible on API failure')
+  await checkBodyIncludes(page, 'timeline unavailable', 'S22.2-32 API failure error shown')
+  await checkT(page, 'Agent 运行', 'S22.2-33 existing TaskDetail modules remain visible')
+  await clearEvidenceSummaryRoutes(page)
+}
+
 async function testMcpBridgePanel(page, taskId) {
   log('\n========== MCP. MCP Bridge Read-only Dry-run ==========')
   const mcpCounter = { count: 0 }
@@ -1215,6 +1295,19 @@ async function setRepairAttemptsRoutes(page, state, calls) {
   })
 }
 
+async function setEvidenceSummaryRoutes(
+  page,
+  timelineData,
+  evidenceBoardData,
+  status = 200,
+  timelineCounter = null,
+  evidenceCounter = null,
+) {
+  await clearEvidenceSummaryRoutes(page)
+  await page.route('**/api/tasks/*/timeline', route => fulfillJson(route, timelineData, status, timelineCounter))
+  await page.route('**/api/tasks/*/evidence-board', route => fulfillJson(route, evidenceBoardData, status, evidenceCounter))
+}
+
 async function setBrowserAiProfilesRoute(page) {
   await page.unroute('**/api/browser-ai/provider-profiles').catch(() => {})
   await page.route('**/api/browser-ai/provider-profiles', route => fulfillJson(route, {
@@ -1268,6 +1361,11 @@ async function clearRepairAttemptsRoutes(page) {
   await page.unroute('**/api/repair-loop/attempts/*/stop').catch(() => {})
 }
 
+async function clearEvidenceSummaryRoutes(page) {
+  await page.unroute('**/api/tasks/*/timeline').catch(() => {})
+  await page.unroute('**/api/tasks/*/evidence-board').catch(() => {})
+}
+
 async function clearTaskDetailMockRoutes(page) {
   await clearDashboardRoutes(page)
   for (const routePattern of [
@@ -1290,6 +1388,7 @@ async function clearTaskDetailMockRoutes(page) {
   await clearRepairPacketRoutes(page)
   await clearRepairHandoffRoutes(page)
   await clearRepairAttemptsRoutes(page)
+  await clearEvidenceSummaryRoutes(page)
 }
 
 async function fulfillJson(route, payload, status, counter) {
@@ -1510,6 +1609,73 @@ function repairAttemptPayload(id, request = {}, overrides = {}) {
     persisted: true,
     ...overrides,
   }
+}
+
+function timelinePayload(taskId, overrides = {}) {
+  return { success: true, data: {
+    task_id: taskId,
+    project_id: 1,
+    items: [
+      {
+        time: '2026-05-26T10:00:00Z',
+        type: 'repair_packet_generated',
+        title: 'Repair packet generated',
+        status: 'completed',
+        source: 'repair_loop',
+        linked_ids: {
+          agent_run_id: null,
+          artifact_id: 802,
+          dispatch_batch_id: 201,
+          dispatch_job_id: null,
+          repair_attempt_id: 1,
+        },
+        summary: 'Generated one-attempt repair packet from failure evidence.',
+        safety_flags: ['no_repository_writes', 'human_decision_required'],
+      },
+    ],
+    read_only: true,
+    persisted: false,
+    ...overrides,
+  }, message: 'ok' }
+}
+
+function evidenceBoardPayload(taskId, overrides = {}) {
+  return { success: true, data: {
+    task_id: taskId,
+    project_id: 1,
+    filters: {
+      evidence_type: ['repair_packet'],
+      source: ['repair_loop'],
+      status: ['completed'],
+      provider: ['browser_ai'],
+      role: ['reviewer'],
+    },
+    items: [
+      {
+        evidence_type: 'repair_packet',
+        source: 'repair_loop',
+        status: 'completed',
+        provider: 'browser_ai',
+        role: 'reviewer',
+        artifact_id: 802,
+        agent_run_id: null,
+        dispatch_batch_id: 201,
+        dispatch_job_id: null,
+        repair_attempt_id: 1,
+        summary: 'Narrow repair strategy for sandbox gate failure.',
+        raw_excerpt: 'Failure summary redacted excerpt',
+        safety_notes: ['Codex / OMX or user must execute repair.'],
+        redaction_status: {
+          redaction_applied: true,
+          truncated: false,
+          max_chars: 2000,
+        },
+      },
+    ],
+    read_only: true,
+    persisted: false,
+    ...overrides,
+  }, message: 'ok' }
 }
 
 function mcpToolsPayload() {
@@ -1977,6 +2143,8 @@ async function main() {
   await testRepairPacketGenerationPanel(page, task.id)
   await testRepairHandoffPanel(page, task.id)
   await testRepairAttemptTimelinePanel(page, task.id)
+  await testEvidenceSummaryPanel(page, task.id)
+  await testEvidenceSummaryApiFailure(page, task.id)
   await testMcpBridgePanel(page, task.id)
   await testApprovals(page)
   await testHumanRequired(page)

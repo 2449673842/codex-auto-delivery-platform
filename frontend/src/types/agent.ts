@@ -762,3 +762,71 @@ export interface RepairAttemptResponse {
   read_only: boolean
   persisted: boolean
 }
+
+// ── Evidence Board / Run Timeline read-only summaries ──
+export interface EvidenceLinkedIds {
+  agent_run_id: number | null
+  artifact_id: number | null
+  dispatch_batch_id: number | null
+  dispatch_job_id: number | null
+  repair_attempt_id: number | null
+}
+
+export interface TimelineItem {
+  time: string
+  type: string
+  title: string
+  status: string
+  source: string
+  linked_ids: EvidenceLinkedIds
+  summary: string
+  safety_flags: string[]
+}
+
+export interface TimelineResponse {
+  task_id: number
+  project_id: number
+  items: TimelineItem[]
+  read_only: boolean
+  persisted: boolean
+}
+
+export interface EvidenceRedactionStatus {
+  redaction_applied: boolean
+  truncated: boolean
+  max_chars: number
+}
+
+export interface EvidenceBoardFilters {
+  evidence_type: string[]
+  source: string[]
+  status: string[]
+  provider: string[]
+  role: string[]
+}
+
+export interface EvidenceBoardItem {
+  evidence_type: string
+  source: string
+  status: string
+  provider: string
+  role: string
+  artifact_id: number | null
+  agent_run_id: number | null
+  dispatch_batch_id: number | null
+  dispatch_job_id: number | null
+  repair_attempt_id: number | null
+  summary: string
+  raw_excerpt: string
+  safety_notes: string[]
+  redaction_status: EvidenceRedactionStatus
+}
+
+export interface EvidenceBoardResponse {
+  task_id: number
+  project_id: number
+  filters: EvidenceBoardFilters
+  items: EvidenceBoardItem[]
+  read_only: boolean
+  persisted: boolean
+}
