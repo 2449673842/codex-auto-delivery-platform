@@ -116,6 +116,17 @@ async function orchestrateSteps(taskId) {
 async function launchBrowser() {
   const b = await chromium.launch({ headless: true, channel: 'chrome' })
   const c = await b.newContext({ ignoreHTTPSErrors: true })
+  await c.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: FE })
+  await c.addInitScript(() => {
+    const clipboardStore = { value: '' }
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (value) => { clipboardStore.value = value },
+        readText: async () => clipboardStore.value,
+      },
+    })
+  })
   const p = await c.newPage()
   const ce = []
   p.on('console', msg => { if (msg.type() === 'error') ce.push(msg.text()) })
@@ -145,6 +156,20 @@ async function checkBodyExcludes(page, text, label) {
   const body = await page.locator('body').innerText()
   if (body.includes(text)) fail(`${label}: "${text}" should be absent`, '')
   else pass(`${label}: "${text}" absent`)
+}
+
+async function checkTexts(page, entries) {
+  for (const [text, label] of entries) await checkT(page, text, label)
+}
+
+async function checkUnsafeDeliveryAbsent(page, prefix, includeAutoNext = false) {
+  const forbidden = includeAutoNext
+    ? [['Auto next attempt', `${prefix} no auto next attempt entry`], ['Auto merge', `${prefix} no auto merge entry`]]
+    : [['Auto fix repository', `${prefix} no auto fix entry`], ['Auto merge', `${prefix} no auto merge entry`]]
+  for (const [text, label] of forbidden) await checkBodyExcludes(page, text, label)
+  const deployEntries = await page.locator('button:has-text("Deploy"), a:has-text("Deploy")').count()
+  if (deployEntries === 0) pass(`${prefix} no deploy entry`)
+  else fail(`${prefix} no deploy entry`, deployEntries)
 }
 
 async function checkInputValue(page, selector, expected, label) {
@@ -1066,19 +1091,13 @@ async function testEvidenceSummaryPanel(page, taskId) {
   log('\n========== S22.2 Run Timeline / Evidence Board ===========')
   const timelineCounter = { count: 0 }
   const evidenceCounter = { count: 0 }
-  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
-  await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
-  await setEvidenceSummaryRoutes(
+  await openEvidenceSummaryPage(
     page,
-    timelinePayload(taskId),
-    evidenceBoardPayload(taskId),
-    200,
+    taskId,
     timelineCounter,
     evidenceCounter,
   )
-  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
-  await page.waitForTimeout(500)
-  for (const [text, label] of [
+  await checkTexts(page, [
     ['Run Timeline / Evidence Board', 'S22.2-1 panel shown'],
     ['Run Timeline', 'S22.2-2 timeline section shown'],
     ['Evidence Board', 'S22.2-3 evidence board section shown'],
@@ -1103,7 +1122,7 @@ async function testEvidenceSummaryPanel(page, taskId) {
     ['redaction_status: redaction_applied=true, truncated=false, max_chars=2000', 'S22.2-23 redaction status shown'],
     ['no_repository_writes', 'S22.2-24 safety flag shown'],
     ['Codex / OMX or user must execute repair.', 'S22.2-25 safety note shown'],
-  ]) await checkT(page, text, label)
+  ])
   for (const [text, label] of [
     ['artifact_id: 802', 'S22.2-22a linked artifact id shown'],
     ['dispatch_batch_id: 201', 'S22.2-22b linked dispatch batch id shown'],
@@ -1114,13 +1133,7 @@ async function testEvidenceSummaryPanel(page, taskId) {
   await page.waitForTimeout(300)
   if (timelineCounter.count >= 2 && evidenceCounter.count >= 2) pass('S22.2-27 refresh reloads both read-only APIs')
   else fail('S22.2-27 refresh API call counts', `timeline=${timelineCounter.count}, evidence=${evidenceCounter.count}`)
-  for (const [text, label] of [
-    ['Auto fix repository', 'S22.2-28 no auto fix entry'],
-    ['Auto merge', 'S22.2-29 no auto merge entry'],
-  ]) await checkBodyExcludes(page, text, label)
-  const deployEntries = await page.locator('button:has-text("Deploy"), a:has-text("Deploy")').count()
-  if (deployEntries === 0) pass('S22.2-30 no deploy entry')
-  else fail('S22.2-30 no deploy entry', deployEntries)
+  await checkUnsafeDeliveryAbsent(page, 'S22.2-28')
   await clearEvidenceSummaryRoutes(page)
 }
 
@@ -1140,6 +1153,100 @@ async function testEvidenceSummaryApiFailure(page, taskId) {
   await checkBodyIncludes(page, 'timeline unavailable', 'S22.2-32 API failure error shown')
   await checkT(page, 'Agent 运行', 'S22.2-33 existing TaskDetail modules remain visible')
   await clearEvidenceSummaryRoutes(page)
+}
+
+async function testEvidenceBoardFiltersDetails(page, taskId) {
+  log('\n========== S22.3 Evidence Board Filters / Details ==========')
+  const timelineCounter = { count: 0 }
+  const evidenceCounter = { count: 0 }
+  await openEvidenceSummaryPage(
+    page,
+    taskId,
+    timelineCounter,
+    evidenceCounter,
+    evidenceBoardPayload(taskId, { items: evidenceBoardFilterItems() }),
+  )
+  await checkTexts(page, [
+    ['filtered count: 3 / total count: 3', 'S22.3-1 filtered count shown'],
+    ['has_artifact=true', 'S22.3-2 has artifact true shown'],
+    ['has_artifact=false', 'S22.3-3 has artifact false shown'],
+    ['has_risk=true', 'S22.3-4 has risk true shown'],
+    ['safety boundary: Codex / OMX or user must execute repair.', 'S22.3-5 safety boundary shown'],
+    ['Copy evidence summary', 'S22.3-6 copy summary button shown'],
+    ['Copy linked ids', 'S22.3-7 copy linked ids button shown'],
+    ['Refresh Timeline / Evidence Board', 'S22.3-8 refresh button remains'],
+  ])
+  for (const selectorLabel of [
+    ['.evidence-board-controls select >> nth=0', 'S22.3-9 evidence_type filter exists'],
+    ['.evidence-board-controls select >> nth=1', 'S22.3-10 source filter exists'],
+    ['.evidence-board-controls select >> nth=2', 'S22.3-11 status filter exists'],
+    ['.evidence-board-controls select >> nth=3', 'S22.3-12 provider filter exists'],
+    ['.evidence-board-controls select >> nth=4', 'S22.3-13 role filter exists'],
+  ]) await checkEl(page, selectorLabel[0], selectorLabel[1])
+  const timelineBefore = await page.locator('.timeline-item').count()
+  await page.locator('.evidence-board-controls select').nth(0).selectOption('repair_packet')
+  await page.waitForTimeout(150)
+  await checkT(page, 'filtered count: 1 / total count: 3', 'S22.3-14 evidence_type filter changes count')
+  await checkBodyIncludes(page, 'Narrow repair strategy for sandbox gate failure.', 'S22.3-15 repair packet remains after type filter')
+  await checkBodyExcludes(page, 'Imported verification failed warning', 'S22.3-16 non-matching item hidden after type filter')
+  const timelineAfterType = await page.locator('.timeline-item').count()
+  if (timelineAfterType === timelineBefore) pass('S22.3-17 Run Timeline unaffected by evidence_type filter')
+  else fail('S22.3-17 Run Timeline unaffected by evidence_type filter', `before=${timelineBefore}, after=${timelineAfterType}`)
+  await page.locator('.evidence-board-controls button:has-text("Clear filters")').click()
+  await page.waitForTimeout(150)
+  await checkT(page, 'filtered count: 3 / total count: 3', 'S22.3-18 clear filters restores count')
+  await page.locator('.evidence-board-controls select').nth(1).selectOption('repair_loop')
+  await page.waitForTimeout(150)
+  await checkT(page, 'filtered count: 2 / total count: 3', 'S22.3-19 source filter changes count')
+  await page.locator('.evidence-board-controls button:has-text("Clear filters")').click()
+  await page.locator('.evidence-board-controls select').nth(2).selectOption('failed')
+  await page.waitForTimeout(150)
+  await checkT(page, 'filtered count: 1 / total count: 3', 'S22.3-20 status filter changes count')
+  await checkBodyIncludes(page, 'Imported verification failed warning', 'S22.3-21 failed evidence shown')
+  await page.locator('.evidence-board-controls button:has-text("Clear filters")').click()
+  await page.locator('.evidence-board-controls select').nth(3).selectOption('browser_ai')
+  await page.waitForTimeout(150)
+  await checkT(page, 'filtered count: 1 / total count: 3', 'S22.3-22 provider filter changes count')
+  await page.locator('.evidence-board-controls button:has-text("Clear filters")').click()
+  await page.locator('.evidence-board-controls select').nth(4).selectOption('tester')
+  await page.waitForTimeout(150)
+  await checkT(page, 'filtered count: 1 / total count: 3', 'S22.3-23 role filter changes count')
+  await page.locator('.evidence-board-controls button:has-text("Clear filters")').click()
+  await page.locator('.evidence-board-item').first().locator('summary').click()
+  await page.waitForTimeout(150)
+  await checkTexts(page, [
+    ['Evidence detail', 'S22.3-24 evidence detail expands'],
+    ['raw_excerpt', 'S22.3-25 raw excerpt detail visible'],
+    ['safety_notes: Codex / OMX or user must execute repair.', 'S22.3-26 safety notes detail visible'],
+    ['redaction_status: redaction_applied=true, truncated=false, max_chars=2000', 'S22.3-27 redaction detail visible'],
+  ])
+  await page.locator('.evidence-board-item').first().getByRole('button', { name: 'Copy evidence summary' }).click()
+  await page.waitForTimeout(150)
+  await checkT(page, 'evidence summary copied', 'S22.3-28 copy evidence summary works')
+  await page.locator('.evidence-board-item').first().getByRole('button', { name: 'Copy linked ids' }).click()
+  await page.waitForTimeout(150)
+  await checkT(page, 'linked ids copied', 'S22.3-29 copy linked ids works')
+  await page.locator('.evidence-summary-panel').getByRole('button', { name: 'Refresh Timeline / Evidence Board' }).click()
+  await page.waitForTimeout(250)
+  if (timelineCounter.count >= 2 && evidenceCounter.count >= 2) pass('S22.3-30 refresh still reloads APIs')
+  else fail('S22.3-30 refresh API call counts', `timeline=${timelineCounter.count}, evidence=${evidenceCounter.count}`)
+  await checkUnsafeDeliveryAbsent(page, 'S22.3-31')
+  await clearEvidenceSummaryRoutes(page)
+}
+
+async function openEvidenceSummaryPage(page, taskId, timelineCounter, evidenceCounter, boardPayload = evidenceBoardPayload(taskId)) {
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
+  await setEvidenceSummaryRoutes(
+    page,
+    timelinePayload(taskId),
+    boardPayload,
+    200,
+    timelineCounter,
+    evidenceCounter,
+  )
+  await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
 }
 
 async function testMcpBridgePanel(page, taskId) {
@@ -1640,42 +1747,88 @@ function timelinePayload(taskId, overrides = {}) {
 }
 
 function evidenceBoardPayload(taskId, overrides = {}) {
+  const items = overrides.items || [evidenceBoardItem({
+    evidence_type: 'repair_packet',
+    provider: 'browser_ai',
+    role: 'reviewer',
+    artifact_id: 802,
+    dispatch_batch_id: 201,
+    repair_attempt_id: 1,
+    summary: 'Narrow repair strategy for sandbox gate failure.',
+    raw_excerpt: 'Failure summary redacted excerpt',
+    safety_notes: ['Codex / OMX or user must execute repair.'],
+  })]
+  const filterFields = ['evidence_type', 'source', 'status', 'provider', 'role']
   return { success: true, data: {
     task_id: taskId,
     project_id: 1,
-    filters: {
-      evidence_type: ['repair_packet'],
-      source: ['repair_loop'],
-      status: ['completed'],
-      provider: ['browser_ai'],
-      role: ['reviewer'],
-    },
-    items: [
-      {
-        evidence_type: 'repair_packet',
-        source: 'repair_loop',
-        status: 'completed',
-        provider: 'browser_ai',
-        role: 'reviewer',
-        artifact_id: 802,
-        agent_run_id: null,
-        dispatch_batch_id: 201,
-        dispatch_job_id: null,
-        repair_attempt_id: 1,
-        summary: 'Narrow repair strategy for sandbox gate failure.',
-        raw_excerpt: 'Failure summary redacted excerpt',
-        safety_notes: ['Codex / OMX or user must execute repair.'],
-        redaction_status: {
-          redaction_applied: true,
-          truncated: false,
-          max_chars: 2000,
-        },
-      },
-    ],
+    filters: Object.fromEntries(filterFields.map(field => [
+      field,
+      [...new Set(items.map(item => item[field]).filter(Boolean))],
+    ])),
+    items,
     read_only: true,
     persisted: false,
     ...overrides,
   }, message: 'ok' }
+}
+
+function evidenceBoardItem(fields) {
+  return {
+    evidence_type: 'task_event',
+    source: 'repair_loop',
+    status: 'completed',
+    provider: '',
+    role: '',
+    artifact_id: null,
+    agent_run_id: null,
+    dispatch_batch_id: null,
+    dispatch_job_id: null,
+    repair_attempt_id: null,
+    summary: '',
+    raw_excerpt: '',
+    safety_notes: [],
+    redaction_status: {
+      redaction_applied: true,
+      truncated: false,
+      max_chars: 2000,
+    },
+    ...fields,
+  }
+}
+
+function evidenceBoardFilterItems() {
+  return [
+    evidenceBoardItem({
+      evidence_type: 'repair_packet',
+      provider: 'browser_ai',
+      role: 'reviewer',
+      artifact_id: 802,
+      dispatch_batch_id: 201,
+      repair_attempt_id: 1,
+      summary: 'Narrow repair strategy for sandbox gate failure.',
+      raw_excerpt: 'Failure summary redacted excerpt',
+      safety_notes: ['Codex / OMX or user must execute repair.'],
+    }),
+    evidenceBoardItem({
+      evidence_type: 'verification_result',
+      status: 'failed',
+      role: 'tester',
+      artifact_id: 912,
+      repair_attempt_id: 1,
+      summary: 'Imported verification failed warning.',
+      raw_excerpt: 'pytest failed with one blocked assertion warning',
+      safety_notes: ['Verification result is imported, not run by platform.'],
+    }),
+    evidenceBoardItem({
+      source: 'task_event',
+      provider: 'system',
+      role: 'audit',
+      summary: 'Task audit event without artifact.',
+      raw_excerpt: 'Task created and assigned.',
+      safety_notes: ['Evidence Board is read-only.'],
+    }),
+  ]
 }
 
 function mcpToolsPayload() {
@@ -2145,6 +2298,7 @@ async function main() {
   await testRepairAttemptTimelinePanel(page, task.id)
   await testEvidenceSummaryPanel(page, task.id)
   await testEvidenceSummaryApiFailure(page, task.id)
+  await testEvidenceBoardFiltersDetails(page, task.id)
   await testMcpBridgePanel(page, task.id)
   await testApprovals(page)
   await testHumanRequired(page)
