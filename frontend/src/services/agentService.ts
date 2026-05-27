@@ -15,6 +15,7 @@ import type {
   RepairAttemptCreateRequest, RepairAttemptResponse, RepairHandoffPreviewRequest,
   RepairHandoffPreviewResponse, RepairPacketGenerateRequest, RepairPacketResponse,
   RepairVerificationResultRequest,
+  TimelineResponse, EvidenceBoardResponse,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -241,6 +242,17 @@ export async function importRepairVerificationResult(
 
 export async function stopRepairAttempt(attemptId: number): Promise<RepairAttemptResponse> {
   const { data } = await client.post(`/repair-loop/attempts/${attemptId}/stop`)
+  return data.data
+}
+
+// ── Evidence Board / Run Timeline read-only summaries ──
+export async function fetchTaskTimeline(taskId: number): Promise<TimelineResponse> {
+  const { data } = await client.get(`/tasks/${taskId}/timeline`)
+  return data.data
+}
+
+export async function fetchTaskEvidenceBoard(taskId: number): Promise<EvidenceBoardResponse> {
+  const { data } = await client.get(`/tasks/${taskId}/evidence-board`)
   return data.data
 }
 

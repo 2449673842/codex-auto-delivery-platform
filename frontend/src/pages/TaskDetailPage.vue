@@ -799,6 +799,101 @@
         <p v-else class="section-note">No repair attempts recorded for this task.</p>
       </section>
 
+      <section class="card evidence-summary-panel">
+        <div class="section-header">
+          <h2>Run Timeline / Evidence Board</h2>
+          <div class="section-actions">
+            <button class="btn btn-sm" @click="refreshEvidenceSummary" :disabled="evidenceSummaryLoading">Refresh Timeline / Evidence Board</button>
+          </div>
+        </div>
+        <div class="workspace-safety">
+          <span class="label-badge label-ai">Timeline is read-only</span>
+          <span class="label-badge label-ai">Evidence Board is read-only</span>
+          <span class="label-badge label-provider">No provider call</span>
+          <span class="label-badge label-provider">No Browser AI execution</span>
+          <span class="label-badge label-applied">No repository writes</span>
+          <span class="label-badge label-redacted">No GitHub / Sonar query</span>
+          <span class="label-badge label-exec">No PR / CI / Sonar / Deploy</span>
+          <span class="label-badge label-merged">No auto approve / merge</span>
+        </div>
+        <p class="section-note">
+          S22.2 displays read-only summaries returned by the S22.1 APIs. It does not execute repair, call providers, query GitHub/Sonar, or write business records.
+        </p>
+        <p v-if="evidenceSummaryError" class="run-error">{{ evidenceSummaryError }}</p>
+        <div class="evidence-summary-flags">
+          <span>timeline read_only={{ timeline?.read_only ?? '-' }}</span>
+          <span>timeline persisted={{ timeline?.persisted ?? '-' }}</span>
+          <span>evidence_board read_only={{ evidenceBoard?.read_only ?? '-' }}</span>
+          <span>evidence_board persisted={{ evidenceBoard?.persisted ?? '-' }}</span>
+        </div>
+
+        <div class="evidence-summary-grid">
+          <div class="timeline-panel">
+            <div class="section-header compact">
+              <strong>Run Timeline</strong>
+              <span class="workspace-readonly">latest {{ timelineItems.length }} items</span>
+            </div>
+            <div v-if="timelineItems.length" class="timeline-list">
+              <div v-for="item in timelineItems" :key="`${item.time}-${item.type}-${item.summary}`" class="timeline-item">
+                <div class="timeline-item-header">
+                  <strong>{{ item.title }}</strong>
+                  <span class="run-status-badge" :class="item.status">{{ item.status }}</span>
+                </div>
+                <div class="dispatch-job-meta">
+                  <span>time: {{ formatTime(item.time) }}</span>
+                  <span>type: {{ item.type }}</span>
+                  <span>source: {{ item.source }}</span>
+                  <span>linked ids: {{ formatLinkedIds(item.linked_ids) }}</span>
+                  <span>summary: {{ item.summary || '-' }}</span>
+                </div>
+                <div class="safety-notes">
+                  <span v-for="flag in item.safety_flags" :key="`${item.type}-${flag}`" class="label-badge label-ai">{{ flag }}</span>
+                </div>
+              </div>
+            </div>
+            <p v-else class="section-note">No timeline items returned.</p>
+          </div>
+
+          <div class="evidence-board-panel">
+            <div class="section-header compact">
+              <strong>Evidence Board</strong>
+              <span class="workspace-readonly">{{ evidenceBoardItems.length }} summaries</span>
+            </div>
+            <div v-if="evidenceBoard" class="evidence-filters">
+              <span>filters evidence_type: {{ evidenceBoard.filters.evidence_type.join(', ') || '-' }}</span>
+              <span>source: {{ evidenceBoard.filters.source.join(', ') || '-' }}</span>
+              <span>status: {{ evidenceBoard.filters.status.join(', ') || '-' }}</span>
+              <span>provider: {{ evidenceBoard.filters.provider.join(', ') || '-' }}</span>
+              <span>role: {{ evidenceBoard.filters.role.join(', ') || '-' }}</span>
+            </div>
+            <div v-if="evidenceBoardItems.length" class="evidence-board-list">
+              <div v-for="item in evidenceBoardItems" :key="`${item.evidence_type}-${item.artifact_id}-${item.summary}`" class="evidence-board-item">
+                <div class="timeline-item-header">
+                  <strong>{{ item.evidence_type }}</strong>
+                  <span class="run-status-badge" :class="item.status">{{ item.status }}</span>
+                </div>
+                <div class="dispatch-job-meta">
+                  <span>source: {{ item.source }}</span>
+                  <span>provider: {{ item.provider || '-' }}</span>
+                  <span>role: {{ item.role || '-' }}</span>
+                  <span>linked ids: {{ formatEvidenceItemLinkedIds(item) }}</span>
+                  <span>summary: {{ item.summary || '-' }}</span>
+                  <span>redaction_status: redaction_applied={{ item.redaction_status.redaction_applied }}, truncated={{ item.redaction_status.truncated }}, max_chars={{ item.redaction_status.max_chars }}</span>
+                </div>
+                <details class="evidence-excerpt">
+                  <summary>raw_excerpt</summary>
+                  <pre>{{ item.raw_excerpt || '-' }}</pre>
+                </details>
+                <div class="safety-notes">
+                  <span v-for="note in item.safety_notes" :key="`${item.evidence_type}-${note}`" class="label-badge label-provider">{{ note }}</span>
+                </div>
+              </div>
+            </div>
+            <p v-else class="section-note">No evidence board summaries returned.</p>
+          </div>
+        </div>
+      </section>
+
       <!-- Agent Runs -->
       <section class="card">
         <div class="section-header">
@@ -1438,8 +1533,9 @@ import {
   fetchCodeContext,
   applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate, evaluateSandboxGate,
   fetchMcpTools, callMcpTool,
+  fetchTaskTimeline, fetchTaskEvidenceBoard,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse, RepairPacketGenerateRequest, RepairHandoffPreviewRequest, RepairHandoffPreviewResponse, RepairPacketResponse, RepairAttemptCreateRequest, RepairAttemptResponse, RepairVerificationResultRequest } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse, RepairPacketGenerateRequest, RepairHandoffPreviewRequest, RepairHandoffPreviewResponse, RepairPacketResponse, RepairAttemptCreateRequest, RepairAttemptResponse, RepairVerificationResultRequest, TimelineResponse, TimelineItem, EvidenceBoardResponse, EvidenceBoardItem, EvidenceLinkedIds } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -1611,6 +1707,10 @@ const repairVerificationForm = ref({
 const repairAttempts = ref<RepairAttemptResponse[]>([])
 const repairAttemptLoading = ref(false)
 const repairAttemptError = ref('')
+const timeline = ref<TimelineResponse | null>(null)
+const evidenceBoard = ref<EvidenceBoardResponse | null>(null)
+const evidenceSummaryLoading = ref(false)
+const evidenceSummaryError = ref('')
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -1653,6 +1753,9 @@ const availableActions = computed(() => {
   if (!task.value || isArchived.value) return []
   return ACTION_MAP[task.value.status] || []
 })
+
+const timelineItems = computed<TimelineItem[]>(() => (timeline.value?.items || []).slice(-20).reverse())
+const evidenceBoardItems = computed<EvidenceBoardItem[]>(() => evidenceBoard.value?.items || [])
 
 function runTypeLabel(t: string) {
   return AGENT_RUN_TYPE_LABELS[t] || t
@@ -1939,6 +2042,7 @@ async function refresh() {
   await loadDispatchBatches(id)
   await loadAiHandoff()
   await loadRepairAttempts(id)
+  await loadEvidenceSummary(id)
   codeContext.value = await fetchCodeContext(id)
   sandboxResults.value = await fetchSandboxResults(id)
   applyResult.value = null
@@ -2134,6 +2238,51 @@ async function loadRepairAttempts(id: number) {
 async function loadRepairAttemptsForTask() {
   if (!task.value) return
   await loadRepairAttempts(task.value.id)
+}
+
+async function loadEvidenceSummary(id: number) {
+  evidenceSummaryLoading.value = true
+  evidenceSummaryError.value = ''
+  try {
+    const [timelineResult, boardResult] = await Promise.all([
+      fetchTaskTimeline(id),
+      fetchTaskEvidenceBoard(id),
+    ])
+    timeline.value = timelineResult
+    evidenceBoard.value = boardResult
+  } catch (e: any) {
+    timeline.value = null
+    evidenceBoard.value = null
+    evidenceSummaryError.value = e.message || 'Evidence summary failed to load'
+  } finally {
+    evidenceSummaryLoading.value = false
+  }
+}
+
+async function refreshEvidenceSummary() {
+  if (!task.value) return
+  await loadEvidenceSummary(task.value.id)
+}
+
+function formatLinkedIds(ids: EvidenceLinkedIds) {
+  const parts = [
+    ['agent_run_id', ids.agent_run_id],
+    ['artifact_id', ids.artifact_id],
+    ['dispatch_batch_id', ids.dispatch_batch_id],
+    ['dispatch_job_id', ids.dispatch_job_id],
+    ['repair_attempt_id', ids.repair_attempt_id],
+  ].filter(([, value]) => value !== null && value !== undefined)
+  return parts.length ? parts.map(([key, value]) => `${key}: ${value}`).join(', ') : '-'
+}
+
+function formatEvidenceItemLinkedIds(item: EvidenceBoardItem) {
+  return formatLinkedIds({
+    agent_run_id: item.agent_run_id,
+    artifact_id: item.artifact_id,
+    dispatch_batch_id: item.dispatch_batch_id,
+    dispatch_job_id: item.dispatch_job_id,
+    repair_attempt_id: item.repair_attempt_id,
+  })
 }
 
 function selectRepairAttempt(attempt: RepairAttemptResponse) {
@@ -2557,6 +2706,23 @@ async function handleCreateAgentReview() {
 .repair-verification-form .wide { grid-column: 1 / -1; }
 .repair-attempt-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
 .repair-attempt-item { padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
+.evidence-summary-panel { border-left: 3px solid #00695c; }
+.evidence-summary-flags,
+.evidence-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+.evidence-summary-flags span,
+.evidence-filters span { padding: 3px 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; font-size: 12px; color: var(--color-text-secondary); }
+.evidence-summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.timeline-panel,
+.evidence-board-panel { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.timeline-list,
+.evidence-board-list { display: flex; flex-direction: column; gap: 10px; }
+.timeline-item,
+.evidence-board-item { padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
+.timeline-item-header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.timeline-item-header strong { font-size: 13px; word-break: break-word; }
+.evidence-excerpt { margin-top: 8px; }
+.evidence-excerpt summary { cursor: pointer; color: var(--color-text-secondary); font-size: 12px; }
+.evidence-excerpt pre { margin-top: 6px; max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--color-text-secondary); padding: 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fff; }
 .repair-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .repair-list span { padding: 3px 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; font-size: 12px; color: var(--color-text-secondary); }
 .provider-picker { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
