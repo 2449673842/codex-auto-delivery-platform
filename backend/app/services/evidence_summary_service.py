@@ -135,15 +135,12 @@ async def _load_sources(db: AsyncSession, task_id: int) -> tuple[
 
 
 def _task_created_item(task: Task) -> TimelineItem:
-    return TimelineItem(
-        time=_iso(task.created_at),
+    return _timeline_item(
+        happened_at=task.created_at,
         type="task_created",
-        title="Task created",
         status=task.status,
         source="task",
-        linked_ids=EvidenceLinkedIds(),
         summary=_short(f"{task.title}: {task.description or ''}"),
-        safety_flags=SAFETY_FLAGS.copy(),
     )
 
 
@@ -152,10 +149,9 @@ def _event_timeline_items(events: list[TaskEvent]) -> list[TimelineItem]:
     for event in events:
         payload = _loads_dict(event.payload_json)
         event_type = _timeline_type_for_event(event)
-        items.append(TimelineItem(
-            time=_iso(event.created_at),
+        items.append(_timeline_item(
+            happened_at=event.created_at,
             type=event_type,
-            title=_title(event_type),
             status=event.to_status or payload.get("status") or event.event_type,
             source=_event_source(event),
             linked_ids=EvidenceLinkedIds(repair_attempt_id=_repair_attempt_id(event, payload)),
@@ -174,10 +170,9 @@ def _agent_run_timeline_items(runs: list[AgentRun]) -> list[TimelineItem]:
             event_type = "ai_run_finished"
         else:
             event_type = "ai_run_started"
-        items.append(TimelineItem(
-            time=_iso(run.finished_at or run.started_at or run.created_at),
+        items.append(_timeline_item(
+            happened_at=run.finished_at or run.started_at or run.created_at,
             type=event_type,
-            title=_title(event_type),
             status=run.status,
             source=_agent_provider(run) or "agent_run",
             linked_ids=EvidenceLinkedIds(agent_run_id=run.id),
@@ -192,19 +187,12 @@ def _artifact_timeline_items(artifacts: list[TaskArtifact]) -> list[TimelineItem
     for artifact in artifacts:
         event_type = ARTIFACT_TIMELINE_TYPES.get(_artifact_evidence_type(artifact), "artifact_created")
         metadata = _loads_dict(artifact.metadata_json)
-        items.append(TimelineItem(
-            time=_iso(artifact.created_at),
+        items.append(_timeline_item(
+            happened_at=artifact.created_at,
             type=event_type,
-            title=_title(event_type),
             status=_artifact_status(metadata),
             source=_artifact_source(artifact, metadata),
-            linked_ids=EvidenceLinkedIds(
-                agent_run_id=_int_or_none(metadata.get("agent_run_id")),
-                artifact_id=artifact.id,
-                dispatch_batch_id=_int_or_none(metadata.get("dispatch_batch_id")),
-                dispatch_job_id=_int_or_none(metadata.get("dispatch_job_id")),
-                repair_attempt_id=_int_or_none(metadata.get("repair_attempt_id")),
-            ),
+            linked_ids=_artifact_linked_ids(artifact, metadata),
             summary=_short(metadata.get("summary") or artifact.filename or artifact.artifact_type),
             safety_flags=_artifact_safety_flags(artifact, metadata),
         ))
@@ -215,20 +203,18 @@ def _dispatch_timeline_items(batches: list[DispatchBatch], jobs: list[DispatchJo
     items: list[TimelineItem] = []
     for batch in batches:
         event_type = "multi_ai_evidence_finished" if _is_finished(batch.status) else "multi_ai_evidence_started"
-        items.append(TimelineItem(
-            time=_iso(batch.updated_at or batch.created_at),
+        items.append(_timeline_item(
+            happened_at=batch.updated_at or batch.created_at,
             type=event_type,
-            title=_title(event_type),
             status=batch.status,
             source=_dispatch_source(batch),
             linked_ids=EvidenceLinkedIds(dispatch_batch_id=batch.id),
             summary=_short(batch.task_goal or batch.batch_mode),
-            safety_flags=SAFETY_FLAGS.copy(),
         ))
     for job in jobs:
         metadata = _loads_dict(job.metadata_json)
-        items.append(TimelineItem(
-            time=_iso(job.finished_at or job.started_at or job.created_at),
+        items.append(_timeline_item(
+            happened_at=job.finished_at or job.started_at or job.created_at,
             type="multi_ai_evidence_finished" if _is_finished(job.status) else "multi_ai_evidence_started",
             title=f"Dispatch job {job.status}",
             status=job.status,
@@ -239,7 +225,6 @@ def _dispatch_timeline_items(batches: list[DispatchBatch], jobs: list[DispatchJo
                 dispatch_job_id=job.id,
             ),
             summary=_short(job.error_message or job.question),
-            safety_flags=SAFETY_FLAGS.copy(),
         ))
     return items
 
@@ -373,6 +358,29 @@ def _board_item(
     )
 
 
+def _timeline_item(
+    *,
+    happened_at: datetime | None,
+    type: str,
+    status: str,
+    source: str,
+    summary: str,
+    title: str | None = None,
+    linked_ids: EvidenceLinkedIds | None = None,
+    safety_flags: list[str] | None = None,
+) -> TimelineItem:
+    return TimelineItem(
+        time=_iso(happened_at),
+        type=type,
+        title=title or _title(type),
+        status=status,
+        source=source,
+        linked_ids=linked_ids or EvidenceLinkedIds(),
+        summary=summary,
+        safety_flags=safety_flags or SAFETY_FLAGS.copy(),
+    )
+
+
 class _Excerpt:
     def __init__(self, text: str, status: EvidenceRedactionStatus):
         self.text = text
@@ -437,6 +445,16 @@ def _artifact_source(artifact: TaskArtifact, metadata: dict[str, Any]) -> str:
     if evidence_type == "patch_artifact":
         return "patch"
     return "artifact"
+
+
+def _artifact_linked_ids(artifact: TaskArtifact, metadata: dict[str, Any]) -> EvidenceLinkedIds:
+    return EvidenceLinkedIds(
+        agent_run_id=_int_or_none(metadata.get("agent_run_id")),
+        artifact_id=artifact.id,
+        dispatch_batch_id=_int_or_none(metadata.get("dispatch_batch_id")),
+        dispatch_job_id=_int_or_none(metadata.get("dispatch_job_id")),
+        repair_attempt_id=_int_or_none(metadata.get("repair_attempt_id")),
+    )
 
 
 def _artifact_status(metadata: dict[str, Any]) -> str:
