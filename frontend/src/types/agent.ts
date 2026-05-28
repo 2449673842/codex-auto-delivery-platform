@@ -830,3 +830,59 @@ export interface EvidenceBoardResponse {
   read_only: boolean
   persisted: boolean
 }
+
+// ── Project Memory read-only summaries ──
+export interface ProjectMemorySourceRef {
+  source_type: string
+  path: string | null
+  section: string | null
+  pr_number: number | null
+  note: string | null
+}
+
+export interface ProjectMemoryRedactionStatus {
+  redaction_applied: boolean
+  truncated: boolean
+  max_chars: number
+}
+
+export interface ProjectMemoryItem {
+  memory_id: string
+  project_id: number
+  memory_type: string
+  title: string
+  summary: string
+  content: Record<string, unknown>
+  source_refs: ProjectMemorySourceRef[]
+  confidence: string
+  stale: boolean
+  updated_at: string
+  redaction_status: ProjectMemoryRedactionStatus
+}
+
+export interface ProjectMemoryFilters {
+  memory_type: string[]
+  confidence: string[]
+  stale: boolean[]
+}
+
+export interface ProjectMemoryResponse {
+  project_id: number
+  items: ProjectMemoryItem[]
+  filters: ProjectMemoryFilters
+  read_only: boolean
+  persisted: boolean
+  safety_notes: string[]
+}
+
+export interface ProjectMemorySummaryResponse {
+  project_id: number
+  summary: string
+  memory_count: number
+  memory_types: string[]
+  stale_count: number
+  high_confidence_count: number
+  read_only: boolean
+  persisted: boolean
+  safety_notes: string[]
+}

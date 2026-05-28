@@ -920,6 +920,104 @@
         </div>
       </section>
 
+      <section class="card project-memory-panel">
+        <div class="section-header">
+          <h2>Project Memory</h2>
+          <div class="section-actions">
+            <button class="btn btn-sm" @click="refreshProjectMemory" :disabled="projectMemoryLoading">Refresh Project Memory</button>
+          </div>
+        </div>
+        <div class="workspace-safety">
+          <span class="label-badge label-ai">Project Memory is read-only</span>
+          <span class="label-badge label-ai">No memory writes</span>
+          <span class="label-badge label-provider">No provider call</span>
+          <span class="label-badge label-provider">No Browser AI execution</span>
+          <span class="label-badge label-applied">No repository writes</span>
+          <span class="label-badge label-redacted">No GitHub / Sonar query</span>
+          <span class="label-badge label-exec">No PR / CI / Sonar / Deploy</span>
+          <span class="label-badge label-merged">No auto approve / merge</span>
+          <span class="label-badge label-warn">Memory may be stale; verify before acting</span>
+        </div>
+        <p class="section-note">
+          S23.2 displays read-only Project Memory from S23.1. It does not create candidates, confirm memory, mark stale records, call providers, or write business records.
+        </p>
+        <p v-if="projectMemoryError" class="run-error">{{ projectMemoryError }}</p>
+        <p v-if="projectMemoryCopyMessage" class="copy-message">{{ projectMemoryCopyMessage }}</p>
+
+        <div class="project-memory-flags">
+          <span>memory read_only={{ projectMemory?.read_only ?? '-' }}</span>
+          <span>memory persisted={{ projectMemory?.persisted ?? '-' }}</span>
+          <span>summary read_only={{ projectMemorySummary?.read_only ?? '-' }}</span>
+          <span>summary persisted={{ projectMemorySummary?.persisted ?? '-' }}</span>
+        </div>
+
+        <div v-if="projectMemorySummary" class="project-memory-summary">
+          <div class="section-header compact">
+            <strong>Project Memory Summary</strong>
+            <span class="workspace-readonly">memory_count={{ projectMemorySummary.memory_count }}</span>
+          </div>
+          <div class="dispatch-job-meta">
+            <span>memory_count: {{ projectMemorySummary.memory_count }}</span>
+            <span>memory_types: {{ projectMemorySummary.memory_types.join(', ') || '-' }}</span>
+            <span>stale_count: {{ projectMemorySummary.stale_count }}</span>
+            <span>high_confidence_count: {{ projectMemorySummary.high_confidence_count }}</span>
+            <span>summary: {{ projectMemorySummary.summary || '-' }}</span>
+          </div>
+          <div class="safety-notes">
+            <span v-for="note in projectMemorySummary.safety_notes" :key="`summary-${note}`" class="label-badge label-provider">{{ note }}</span>
+          </div>
+        </div>
+
+        <div class="project-memory-controls">
+          <label v-for="field in projectMemoryFilterFields" :key="field">
+            {{ field }}
+            <select v-model="projectMemoryFilter[field]">
+              <option value="">All</option>
+              <option v-for="value in projectMemoryFilterOptions[field]" :key="`${field}-${value}`" :value="String(value)">{{ String(value) }}</option>
+            </select>
+          </label>
+          <button class="btn btn-sm" @click="clearProjectMemoryFilters">Clear filters</button>
+          <span class="workspace-readonly">filtered count: {{ filteredProjectMemoryItems.length }} / total count: {{ projectMemoryTotalCount }}</span>
+        </div>
+
+        <div v-if="projectMemory" class="project-memory-filters">
+          <span>filters memory_type: {{ projectMemory.filters.memory_type.join(', ') || '-' }}</span>
+          <span>confidence: {{ projectMemory.filters.confidence.join(', ') || '-' }}</span>
+          <span>stale: {{ projectMemory.filters.stale.map(String).join(', ') || '-' }}</span>
+        </div>
+
+        <div v-if="filteredProjectMemoryItems.length" class="project-memory-list">
+          <div v-for="item in filteredProjectMemoryItems" :key="item.memory_id" class="project-memory-item">
+            <div class="timeline-item-header">
+              <strong>{{ item.title }}</strong>
+              <span class="run-status-badge ready">{{ item.memory_type }}</span>
+            </div>
+            <div class="dispatch-job-meta">
+              <span>memory_type: {{ item.memory_type }}</span>
+              <span>summary: {{ item.summary || '-' }}</span>
+              <span>confidence: {{ item.confidence }}</span>
+              <span>stale: {{ item.stale }}</span>
+              <span>updated_at: {{ formatTime(item.updated_at) }}</span>
+              <span>source_refs: {{ formatProjectMemorySourceRefs(item.source_refs) }}</span>
+              <span>redaction_status: redaction_applied={{ item.redaction_status.redaction_applied }}, truncated={{ item.redaction_status.truncated }}, max_chars={{ item.redaction_status.max_chars }}</span>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-sm" @click="copyProjectMemorySummary(item)">Copy memory summary</button>
+              <button class="btn btn-sm" @click="copyProjectMemorySourceRefs(item)">Copy source refs</button>
+            </div>
+            <details class="project-memory-content">
+              <summary>Memory content detail</summary>
+              <pre>{{ formatProjectMemoryContent(item.content) }}</pre>
+            </details>
+          </div>
+        </div>
+        <p v-else class="section-note">No Project Memory records match the current filters.</p>
+
+        <div v-if="projectMemory?.safety_notes.length" class="safety-notes">
+          <span v-for="note in projectMemory.safety_notes" :key="`memory-${note}`" class="label-badge label-ai">{{ note }}</span>
+        </div>
+      </section>
+
       <!-- Agent Runs -->
       <section class="card">
         <div class="section-header">
@@ -1560,8 +1658,9 @@ import {
   applyPatchInSandbox, fetchSandboxResults, fetchSandboxGate, evaluateSandboxGate,
   fetchMcpTools, callMcpTool,
   fetchTaskTimeline, fetchTaskEvidenceBoard,
+  fetchProjectMemory, fetchProjectMemorySummary,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse, RepairPacketGenerateRequest, RepairHandoffPreviewRequest, RepairHandoffPreviewResponse, RepairPacketResponse, RepairAttemptCreateRequest, RepairAttemptResponse, RepairVerificationResultRequest, TimelineResponse, TimelineItem, EvidenceBoardResponse, EvidenceBoardItem, EvidenceLinkedIds } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse, RepairPacketGenerateRequest, RepairHandoffPreviewRequest, RepairHandoffPreviewResponse, RepairPacketResponse, RepairAttemptCreateRequest, RepairAttemptResponse, RepairVerificationResultRequest, TimelineResponse, TimelineItem, EvidenceBoardResponse, EvidenceBoardItem, EvidenceLinkedIds, ProjectMemoryResponse, ProjectMemorySummaryResponse, ProjectMemoryItem, ProjectMemorySourceRef } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -1747,6 +1846,18 @@ const evidenceBoardFilter = ref<Record<EvidenceBoardFilterField, string>>({
   provider: '',
   role: '',
 })
+const projectMemory = ref<ProjectMemoryResponse | null>(null)
+const projectMemorySummary = ref<ProjectMemorySummaryResponse | null>(null)
+const projectMemoryLoading = ref(false)
+const projectMemoryError = ref('')
+const projectMemoryCopyMessage = ref('')
+const projectMemoryFilterFields = ['memory_type', 'confidence', 'stale'] as const
+type ProjectMemoryFilterField = typeof projectMemoryFilterFields[number]
+const projectMemoryFilter = ref<Record<ProjectMemoryFilterField, string>>({
+  memory_type: '',
+  confidence: '',
+  stale: '',
+})
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -1807,6 +1918,24 @@ const evidenceFilterOptions = computed(() => {
 const filteredEvidenceBoardItems = computed(() => evidenceBoardItems.value.filter((item) => {
   const filters = evidenceBoardFilter.value
   return evidenceBoardFilterFields.every((field) => !filters[field] || item[field] === filters[field])
+}))
+const projectMemoryItems = computed<ProjectMemoryItem[]>(() => projectMemory.value?.items || [])
+const projectMemoryTotalCount = computed(() => projectMemoryItems.value.length)
+const projectMemoryFilterOptions = computed(() => {
+  const responseFilters = projectMemory.value?.filters
+  const fromItems = (field: ProjectMemoryFilterField) => {
+    const values = projectMemoryItems.value.map((item) => String(item[field])).filter((value) => value !== '')
+    return Array.from(new Set(values)).sort()
+  }
+  return {
+    memory_type: responseFilters?.memory_type?.length ? responseFilters.memory_type : fromItems('memory_type'),
+    confidence: responseFilters?.confidence?.length ? responseFilters.confidence : fromItems('confidence'),
+    stale: responseFilters?.stale?.length ? responseFilters.stale.map(String) : fromItems('stale'),
+  } as Record<ProjectMemoryFilterField, string[]>
+})
+const filteredProjectMemoryItems = computed(() => projectMemoryItems.value.filter((item) => {
+  const filters = projectMemoryFilter.value
+  return projectMemoryFilterFields.every((field) => !filters[field] || String(item[field]) === filters[field])
 }))
 
 function runTypeLabel(t: string) {
@@ -2095,6 +2224,7 @@ async function refresh() {
   await loadAiHandoff()
   await loadRepairAttempts(id)
   await loadEvidenceSummary(id)
+  await loadProjectMemory(task.value.project_id)
   codeContext.value = await fetchCodeContext(id)
   sandboxResults.value = await fetchSandboxResults(id)
   applyResult.value = null
@@ -2317,6 +2447,31 @@ async function refreshEvidenceSummary() {
   await loadEvidenceSummary(task.value.id)
 }
 
+async function loadProjectMemory(projectId: number) {
+  projectMemoryLoading.value = true
+  projectMemoryError.value = ''
+  projectMemoryCopyMessage.value = ''
+  try {
+    const [memoryResult, summaryResult] = await Promise.all([
+      fetchProjectMemory(projectId),
+      fetchProjectMemorySummary(projectId),
+    ])
+    projectMemory.value = memoryResult
+    projectMemorySummary.value = summaryResult
+  } catch (e: any) {
+    projectMemory.value = null
+    projectMemorySummary.value = null
+    projectMemoryError.value = e.message || 'Project Memory failed to load'
+  } finally {
+    projectMemoryLoading.value = false
+  }
+}
+
+async function refreshProjectMemory() {
+  if (!task.value) return
+  await loadProjectMemory(task.value.project_id)
+}
+
 function formatLinkedIds(ids: EvidenceLinkedIds) {
   const parts = [
     ['agent_run_id', ids.agent_run_id],
@@ -2398,6 +2553,57 @@ async function copyEvidenceSummary(item: EvidenceBoardItem) {
 
 async function copyEvidenceLinkedIds(item: EvidenceBoardItem) {
   await copyEvidenceText(formatEvidenceItemLinkedIds(item), 'linked ids copied')
+}
+
+function clearProjectMemoryFilters() {
+  projectMemoryFilter.value = Object.fromEntries(projectMemoryFilterFields.map((field) => [field, ''])) as Record<ProjectMemoryFilterField, string>
+}
+
+function formatProjectMemorySourceRefs(refs: ProjectMemorySourceRef[]) {
+  if (!refs.length) return '-'
+  return refs.map((ref) => {
+    const parts = [
+      ref.source_type,
+      ref.path,
+      ref.section ? `section=${ref.section}` : '',
+      ref.pr_number ? `pr_number=${ref.pr_number}` : '',
+      ref.note ? `note=${ref.note}` : '',
+    ].filter(Boolean)
+    return parts.join(':')
+  }).join(', ')
+}
+
+function formatProjectMemoryContent(content: Record<string, unknown>) {
+  return JSON.stringify(content || {}, null, 2)
+}
+
+function projectMemorySummaryText(item: ProjectMemoryItem) {
+  return [
+    `memory_type: ${item.memory_type}`,
+    `title: ${item.title}`,
+    `summary: ${item.summary || '-'}`,
+    `confidence: ${item.confidence}`,
+    `stale: ${item.stale}`,
+    `updated_at: ${item.updated_at}`,
+    `source_refs: ${formatProjectMemorySourceRefs(item.source_refs)}`,
+  ].join('\n')
+}
+
+async function copyProjectMemoryText(text: string, successMessage: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    projectMemoryCopyMessage.value = successMessage
+  } catch {
+    projectMemoryCopyMessage.value = 'copy failed; select the text manually'
+  }
+}
+
+async function copyProjectMemorySummary(item: ProjectMemoryItem) {
+  await copyProjectMemoryText(projectMemorySummaryText(item), 'memory summary copied')
+}
+
+async function copyProjectMemorySourceRefs(item: ProjectMemoryItem) {
+  await copyProjectMemoryText(formatProjectMemorySourceRefs(item.source_refs), 'source refs copied')
 }
 
 function selectRepairAttempt(attempt: RepairAttemptResponse) {
@@ -2844,6 +3050,20 @@ async function handleCreateAgentReview() {
 .evidence-excerpt { margin-top: 8px; }
 .evidence-excerpt summary { cursor: pointer; color: var(--color-text-secondary); font-size: 12px; }
 .evidence-excerpt pre { margin-top: 6px; max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--color-text-secondary); padding: 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fff; }
+.project-memory-panel { border-left: 3px solid #4e6f1f; }
+.project-memory-flags,
+.project-memory-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+.project-memory-flags span,
+.project-memory-filters span { padding: 3px 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; font-size: 12px; color: var(--color-text-secondary); }
+.project-memory-summary,
+.project-memory-item { padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
+.project-memory-controls { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)) auto; gap: 8px; align-items: end; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; margin: 12px 0; }
+.project-memory-controls label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--color-text-secondary); }
+.project-memory-controls .workspace-readonly { grid-column: 1 / -1; }
+.project-memory-list { display: flex; flex-direction: column; gap: 10px; }
+.project-memory-content { margin-top: 8px; }
+.project-memory-content summary { cursor: pointer; color: var(--color-text-secondary); font-size: 12px; }
+.project-memory-content pre { margin-top: 6px; max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--color-text-secondary); padding: 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fff; }
 .repair-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .repair-list span { padding: 3px 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; font-size: 12px; color: var(--color-text-secondary); }
 .provider-picker { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
@@ -3049,7 +3269,8 @@ async function handleCreateAgentReview() {
 
 @media (max-width: 900px) {
   .evidence-summary-grid,
-  .evidence-board-controls { grid-template-columns: 1fr; }
+  .evidence-board-controls,
+  .project-memory-controls { grid-template-columns: 1fr; }
 }
 
 .btn-primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
