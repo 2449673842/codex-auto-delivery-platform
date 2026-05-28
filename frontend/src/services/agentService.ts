@@ -16,6 +16,7 @@ import type {
   RepairHandoffPreviewResponse, RepairPacketGenerateRequest, RepairPacketResponse,
   RepairVerificationResultRequest,
   TimelineResponse, EvidenceBoardResponse,
+  ProjectMemoryResponse, ProjectMemorySummaryResponse,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -253,6 +254,17 @@ export async function fetchTaskTimeline(taskId: number): Promise<TimelineRespons
 
 export async function fetchTaskEvidenceBoard(taskId: number): Promise<EvidenceBoardResponse> {
   const { data } = await client.get(`/tasks/${taskId}/evidence-board`)
+  return data.data
+}
+
+// ── Project Memory read-only project context ──
+export async function fetchProjectMemory(projectId: number): Promise<ProjectMemoryResponse> {
+  const { data } = await client.get(`/projects/${projectId}/memory`)
+  return data.data
+}
+
+export async function fetchProjectMemorySummary(projectId: number): Promise<ProjectMemorySummaryResponse> {
+  const { data } = await client.get(`/projects/${projectId}/memory/summary`)
   return data.data
 }
 

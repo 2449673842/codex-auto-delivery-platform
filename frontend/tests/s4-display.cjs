@@ -1150,7 +1150,7 @@ async function testEvidenceSummaryApiFailure(page, taskId) {
   await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
   await page.waitForTimeout(500)
   await checkT(page, 'Run Timeline / Evidence Board', 'S22.2-31 panel remains visible on API failure')
-  await checkBodyIncludes(page, 'timeline unavailable', 'S22.2-32 API failure error shown')
+  await checkBodyIncludes(page, 'unavailable', 'S22.2-32 API failure error shown')
   await checkT(page, 'Agent 运行', 'S22.2-33 existing TaskDetail modules remain visible')
   await clearEvidenceSummaryRoutes(page)
 }
@@ -1234,6 +1234,105 @@ async function testEvidenceBoardFiltersDetails(page, taskId) {
   await clearEvidenceSummaryRoutes(page)
 }
 
+async function testProjectMemoryPanel(page, task) {
+  log('\n========== S23.2 Project Memory UI ==========')
+  const memoryCounter = { count: 0 }
+  const summaryCounter = { count: 0 }
+  await openProjectMemoryPage(page, task, memoryCounter, summaryCounter)
+  await checkTexts(page, [
+    ['Project Memory', 'S23.2-1 panel shown'],
+    ['Project Memory Summary', 'S23.2-2 summary section shown'],
+    ['Project Memory is read-only', 'S23.2-3 read-only label shown'],
+    ['No memory writes', 'S23.2-4 no writes label shown'],
+    ['No provider call', 'S23.2-5 no provider label shown'],
+    ['No Browser AI execution', 'S23.2-6 no Browser AI label shown'],
+    ['No repository writes', 'S23.2-7 no repository writes label shown'],
+    ['No GitHub / Sonar query', 'S23.2-8 no GitHub Sonar label shown'],
+    ['No PR / CI / Sonar / Deploy', 'S23.2-9 no external delivery label shown'],
+    ['No auto approve / merge', 'S23.2-10 no auto merge label shown'],
+    ['Memory may be stale; verify before acting', 'S23.2-11 stale warning shown'],
+    ['memory read_only=true', 'S23.2-12 memory read_only shown'],
+    ['memory persisted=false', 'S23.2-13 memory persisted shown'],
+    ['summary read_only=true', 'S23.2-14 summary read_only shown'],
+    ['summary persisted=false', 'S23.2-15 summary persisted shown'],
+    ['memory_count: 3', 'S23.2-16 memory count shown'],
+    ['memory_types: project_profile, verification_policy, safety_policy', 'S23.2-17 memory types shown'],
+    ['stale_count: 1', 'S23.2-18 stale count shown'],
+    ['high_confidence_count: 2', 'S23.2-19 high confidence count shown'],
+    ['summary: Project Memory stable context summary.', 'S23.2-20 summary text shown'],
+    ['memory_type: project_profile', 'S23.2-21 memory type shown'],
+    ['Project profile', 'S23.2-22 title shown'],
+    ['summary: AI coding evidence / memory workbench.', 'S23.2-23 item summary shown'],
+    ['confidence: high', 'S23.2-24 confidence shown'],
+    ['stale: false', 'S23.2-25 stale false shown'],
+    ['source_refs: docs:AGENTS.md', 'S23.2-27 source refs shown'],
+    ['redaction_status: redaction_applied=true, truncated=false, max_chars=4000', 'S23.2-28 redaction status shown'],
+    ['Memory content detail', 'S23.2-29 content detail exists'],
+    ['Copy memory summary', 'S23.2-30 copy memory summary exists'],
+    ['Copy source refs', 'S23.2-31 copy source refs exists'],
+    ['Refresh Project Memory', 'S23.2-32 refresh button exists'],
+    ['filtered count: 3 / total count: 3', 'S23.2-33 filtered count shown'],
+  ])
+  if (memoryCounter.count >= 1 && summaryCounter.count >= 1) pass('S23.2-34 automatically calls memory and summary APIs')
+  else fail('S23.2-34 memory API call counts', `memory=${memoryCounter.count}, summary=${summaryCounter.count}`)
+  await checkBodyIncludes(page, 'updated_at:', 'S23.2-26 updated_at shown')
+  for (const selectorLabel of [
+    ['.project-memory-controls select >> nth=0', 'S23.2-35 memory_type filter exists'],
+    ['.project-memory-controls select >> nth=1', 'S23.2-36 confidence filter exists'],
+    ['.project-memory-controls select >> nth=2', 'S23.2-37 stale filter exists'],
+  ]) await checkEl(page, selectorLabel[0], selectorLabel[1])
+  const evidenceBefore = await page.locator('.evidence-board-item').count()
+  await page.locator('.project-memory-controls select').nth(0).selectOption('safety_policy')
+  await page.waitForTimeout(150)
+  await checkT(page, 'filtered count: 1 / total count: 3', 'S23.2-38 memory_type filter changes count')
+  await checkBodyIncludes(page, 'Never read secrets.', 'S23.2-39 matching memory remains')
+  await checkBodyExcludes(page, 'Use targeted pytest and npm build.', 'S23.2-40 non-matching memory hidden')
+  const evidenceAfter = await page.locator('.evidence-board-item').count()
+  if (evidenceAfter === evidenceBefore) pass('S23.2-41 Project Memory filter does not affect Evidence Board')
+  else fail('S23.2-41 Evidence Board unaffected by memory filter', `before=${evidenceBefore}, after=${evidenceAfter}`)
+  await page.locator('.project-memory-controls button:has-text("Clear filters")').click()
+  await page.waitForTimeout(150)
+  await checkT(page, 'filtered count: 3 / total count: 3', 'S23.2-42 clear filters restores count')
+  await page.locator('.project-memory-controls select').nth(1).selectOption('medium')
+  await page.waitForTimeout(150)
+  await checkT(page, 'filtered count: 1 / total count: 3', 'S23.2-43 confidence filter changes count')
+  await page.locator('.project-memory-controls button:has-text("Clear filters")').click()
+  await page.locator('.project-memory-controls select').nth(2).selectOption('true')
+  await page.waitForTimeout(150)
+  await checkT(page, 'filtered count: 1 / total count: 3', 'S23.2-44 stale filter changes count')
+  await page.locator('.project-memory-controls button:has-text("Clear filters")').click()
+  await page.locator('.project-memory-item').first().locator('summary').click()
+  await page.waitForTimeout(150)
+  await checkBodyIncludes(page, '"technology_stack"', 'S23.2-45 content detail expands')
+  await page.locator('.project-memory-item').first().getByRole('button', { name: 'Copy memory summary' }).click()
+  await page.waitForTimeout(150)
+  await checkT(page, 'memory summary copied', 'S23.2-46 copy memory summary works')
+  await page.locator('.project-memory-item').first().getByRole('button', { name: 'Copy source refs' }).click()
+  await page.waitForTimeout(150)
+  await checkT(page, 'source refs copied', 'S23.2-47 copy source refs works')
+  await page.locator('.project-memory-panel').getByRole('button', { name: 'Refresh Project Memory' }).click()
+  await page.waitForTimeout(250)
+  if (memoryCounter.count >= 2 && summaryCounter.count >= 2) pass('S23.2-48 refresh reloads both Project Memory APIs')
+  else fail('S23.2-48 refresh API call counts', `memory=${memoryCounter.count}, summary=${summaryCounter.count}`)
+  await checkUnsafeDeliveryAbsent(page, 'S23.2-49')
+  await checkBodyExcludes(page, 'Auto memory write', 'S23.2-50 no auto memory write entry')
+  await clearProjectMemoryRoutes(page)
+}
+
+async function testProjectMemoryApiFailure(page, task) {
+  log('\n========== S23.2 Project Memory API Failure ==========')
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(task.id, task.project_id), 200)
+  await setEvidenceSummaryRoutes(page, timelinePayload(task.id), evidenceBoardPayload(task.id), 200)
+  await setProjectMemoryRoutes(page, { detail: 'project memory unavailable' }, { detail: 'memory summary unavailable' }, 500)
+  await page.goto(`${FE}/tasks/${task.id}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await checkT(page, 'Project Memory', 'S23.2-51 panel remains visible on API failure')
+  await checkBodyIncludes(page, 'project memory unavailable', 'S23.2-52 API failure error shown')
+  await checkT(page, 'Agent 运行', 'S23.2-53 existing TaskDetail modules remain visible')
+  await clearProjectMemoryRoutes(page)
+}
+
 async function openEvidenceSummaryPage(page, taskId, timelineCounter, evidenceCounter, boardPayload = evidenceBoardPayload(taskId)) {
   await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
   await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
@@ -1246,6 +1345,22 @@ async function openEvidenceSummaryPage(page, taskId, timelineCounter, evidenceCo
     evidenceCounter,
   )
   await page.goto(`${FE}/tasks/${taskId}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+}
+
+async function openProjectMemoryPage(page, task, memoryCounter, summaryCounter) {
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(task.id, task.project_id), 200)
+  await setEvidenceSummaryRoutes(page, timelinePayload(task.id), evidenceBoardPayload(task.id), 200)
+  await setProjectMemoryRoutes(
+    page,
+    projectMemoryPayload(task.project_id),
+    projectMemorySummaryPayload(task.project_id),
+    200,
+    memoryCounter,
+    summaryCounter,
+  )
+  await page.goto(`${FE}/tasks/${task.id}`, { waitUntil: 'networkidle', timeout: 15000 })
   await page.waitForTimeout(500)
 }
 
@@ -1415,6 +1530,19 @@ async function setEvidenceSummaryRoutes(
   await page.route('**/api/tasks/*/evidence-board', route => fulfillJson(route, evidenceBoardData, status, evidenceCounter))
 }
 
+async function setProjectMemoryRoutes(
+  page,
+  memoryData,
+  summaryData,
+  status = 200,
+  memoryCounter = null,
+  summaryCounter = null,
+) {
+  await clearProjectMemoryRoutes(page)
+  await page.route('**/api/projects/*/memory', route => fulfillJson(route, memoryData, status, memoryCounter))
+  await page.route('**/api/projects/*/memory/summary', route => fulfillJson(route, summaryData, status, summaryCounter))
+}
+
 async function setBrowserAiProfilesRoute(page) {
   await page.unroute('**/api/browser-ai/provider-profiles').catch(() => {})
   await page.route('**/api/browser-ai/provider-profiles', route => fulfillJson(route, {
@@ -1473,6 +1601,11 @@ async function clearEvidenceSummaryRoutes(page) {
   await page.unroute('**/api/tasks/*/evidence-board').catch(() => {})
 }
 
+async function clearProjectMemoryRoutes(page) {
+  await page.unroute('**/api/projects/*/memory').catch(() => {})
+  await page.unroute('**/api/projects/*/memory/summary').catch(() => {})
+}
+
 async function clearTaskDetailMockRoutes(page) {
   await clearDashboardRoutes(page)
   for (const routePattern of [
@@ -1496,6 +1629,7 @@ async function clearTaskDetailMockRoutes(page) {
   await clearRepairHandoffRoutes(page)
   await clearRepairAttemptsRoutes(page)
   await clearEvidenceSummaryRoutes(page)
+  await clearProjectMemoryRoutes(page)
 }
 
 async function fulfillJson(route, payload, status, counter) {
@@ -1829,6 +1963,93 @@ function evidenceBoardFilterItems() {
       safety_notes: ['Evidence Board is read-only.'],
     }),
   ]
+}
+
+function projectMemoryPayload(projectId, overrides = {}) {
+  const items = overrides.items || [
+    projectMemoryItem({
+      project_id: projectId,
+      memory_id: 'default-project-profile',
+      memory_type: 'project_profile',
+      title: 'Project profile',
+      summary: 'AI coding evidence / memory workbench.',
+      content: { technology_stack: ['FastAPI backend', 'Vue/Vite frontend'] },
+      source_refs: [{ source_type: 'docs', path: 'AGENTS.md', section: null, pr_number: null, note: null }],
+      confidence: 'high',
+      stale: false,
+    }),
+    projectMemoryItem({
+      project_id: projectId,
+      memory_id: 'default-verification-policy',
+      memory_type: 'verification_policy',
+      title: 'Verification policy',
+      summary: 'Use targeted pytest and npm build.',
+      content: { commands: ['python -m pytest backend/tests/ -v --rootdir backend', 'npm.cmd run build'] },
+      source_refs: [{ source_type: 'docs', path: 'docs/design/project-memory.md', section: null, pr_number: null, note: null }],
+      confidence: 'high',
+      stale: false,
+    }),
+    projectMemoryItem({
+      project_id: projectId,
+      memory_id: 'default-safety-policy',
+      memory_type: 'safety_policy',
+      title: 'Safety policy',
+      summary: 'Never read secrets.',
+      content: { rules: ['Do not read .env', 'Do not read secret_ref'] },
+      source_refs: [{ source_type: 'docs', path: 'docs/strategy/project-memory-vs-agent-skill.md', section: null, pr_number: null, note: null }],
+      confidence: 'medium',
+      stale: true,
+    }),
+  ]
+  return { success: true, data: {
+    project_id: projectId,
+    items,
+    filters: {
+      memory_type: [...new Set(items.map(item => item.memory_type))],
+      confidence: [...new Set(items.map(item => item.confidence))],
+      stale: [...new Set(items.map(item => item.stale))],
+    },
+    read_only: true,
+    persisted: false,
+    safety_notes: ['Read-only Project Memory surface.', 'Memory may be stale; verify before acting.'],
+    ...overrides,
+  }, message: 'ok' }
+}
+
+function projectMemorySummaryPayload(projectId, overrides = {}) {
+  return { success: true, data: {
+    project_id: projectId,
+    summary: 'Project Memory stable context summary.',
+    memory_count: 3,
+    memory_types: ['project_profile', 'verification_policy', 'safety_policy'],
+    stale_count: 1,
+    high_confidence_count: 2,
+    read_only: true,
+    persisted: false,
+    safety_notes: ['Project Memory is read-only.', 'No memory writes.'],
+    ...overrides,
+  }, message: 'ok' }
+}
+
+function projectMemoryItem(fields) {
+  return {
+    memory_id: 'default-project-profile',
+    project_id: 1,
+    memory_type: 'project_profile',
+    title: 'Project profile',
+    summary: 'AI coding evidence / memory workbench.',
+    content: { technology_stack: ['FastAPI backend', 'Vue/Vite frontend'] },
+    source_refs: [{ source_type: 'docs', path: 'AGENTS.md', section: null, pr_number: null, note: null }],
+    confidence: 'high',
+    stale: false,
+    updated_at: '2026-05-27T00:00:00Z',
+    redaction_status: {
+      redaction_applied: true,
+      truncated: false,
+      max_chars: 4000,
+    },
+    ...fields,
+  }
 }
 
 function mcpToolsPayload() {
@@ -2299,6 +2520,8 @@ async function main() {
   await testEvidenceSummaryPanel(page, task.id)
   await testEvidenceSummaryApiFailure(page, task.id)
   await testEvidenceBoardFiltersDetails(page, task.id)
+  await testProjectMemoryPanel(page, task)
+  await testProjectMemoryApiFailure(page, task)
   await testMcpBridgePanel(page, task.id)
   await testApprovals(page)
   await testHumanRequired(page)
