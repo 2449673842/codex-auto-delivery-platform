@@ -10,13 +10,18 @@ from app.models.dispatch_batch import DispatchBatch
 from app.models.project import Project
 from app.models.task import Task
 from app.schemas.ai_handoff import (
+    AiHandoffMemoryItem,
+    AiHandoffMemoryRedactionStatus,
+    AiHandoffMemorySourceRef,
     AiHandoffPreviewRequest,
     AiHandoffPreviewResponse,
+    AiHandoffProjectMemorySummary,
     AiHandoffSourceIds,
 )
 from app.schemas.answer_synthesis import AnswerSynthesisPreviewRequest
 from app.services import answer_synthesis_service
 from app.services.answer_synthesis_service import _loads_dict, _loads_list, _redact
+from app.services.project_memory_service import get_project_memory, get_project_memory_summary
 
 
 PRODUCT_POSITIONING = "Personal Multi-AI Coding Workbench"
@@ -61,10 +66,42 @@ DOCS_TO_READ = [
     "docs/design/provider-adapter-strategy.md",
     "docs/design/self-improving-harness.md",
 ]
+MEMORY_TYPE_PRIORITY = [
+    "safety_policy",
+    "delivery_policy",
+    "verification_policy",
+    "user_preference",
+    "known_failure",
+    "project_profile",
+    "runbook",
+    "handoff_template",
+]
+MIN_REQUIRED_MEMORY_TYPES = {
+    "project_profile",
+    "verification_policy",
+    "delivery_policy",
+    "safety_policy",
+    "known_failure",
+    "user_preference",
+}
+MEMORY_HANDOFF_BOUNDARIES = [
+    "Project Memory is read-only context.",
+    "Memory may be stale; verify before acting.",
+    "Do not expose secrets.",
+    "Do not read `.env` or `secret_ref`.",
+    "Do not auto approve / merge / deploy.",
+    "Follow current task scope and PR boundary.",
+]
 
 
 def _redact_jsonable(value: Any) -> Any:
-    return json.loads(_redact(json.dumps(value, ensure_ascii=False, default=str)))
+    if isinstance(value, str):
+        return _redact(value)
+    if isinstance(value, list):
+        return [_redact_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_jsonable(item) for key, item in value.items()}
+    return value
 
 
 async def preview(db: AsyncSession, body: AiHandoffPreviewRequest) -> AiHandoffPreviewResponse:
@@ -74,8 +111,100 @@ async def preview(db: AsyncSession, body: AiHandoffPreviewRequest) -> AiHandoffP
     task = await _load_task(db, body.project_id, body.task_id)
     batches = await _load_recent_batches(db, task.id if task and body.include_recent_batches else None)
     synthesis = await _build_answer_synthesis(db, body, task, batches)
-    response = _build_response(body, project, task, batches, synthesis)
+    memory_summary = await build_project_memory_handoff_summary(
+        db,
+        project.id,
+        include_memory=body.include_memory,
+        memory_budget=body.memory_budget,
+        memory_types=body.memory_types,
+    )
+    response = _build_response(body, project, task, batches, synthesis, memory_summary)
     return _truncate_response(response, body.max_chars)
+
+
+async def build_project_memory_handoff_summary(
+    db: AsyncSession,
+    project_id: int,
+    *,
+    include_memory: bool,
+    memory_budget: int = 3000,
+    memory_types: list[str] | None = None,
+) -> AiHandoffProjectMemorySummary:
+    if not include_memory:
+        return _empty_project_memory_summary(memory_budget)
+    memory = await get_project_memory(db, project_id)
+    memory_summary = await get_project_memory_summary(db, project_id)
+    allowlist = {item for item in (memory_types or []) if item}
+    ordered_items = sorted(
+        [item for item in memory.items if not allowlist or item.memory_type in allowlist],
+        key=lambda item: _memory_priority(item.memory_type),
+    )
+    selected, truncated = _select_memory_items_for_budget(ordered_items, memory_budget)
+    selected_types = [item.memory_type for item in selected]
+    aggregate = _redact(_selected_memory_summary(memory_summary.summary, selected_types, bool(allowlist)))
+    if len(aggregate) > memory_budget:
+        aggregate = aggregate[:memory_budget].rstrip() + "\n...[truncated]"
+        truncated = True
+    if len(selected) < len(ordered_items):
+        truncated = True
+    return AiHandoffProjectMemorySummary(
+        included=True,
+        memory_count=len(selected),
+        memory_types=selected_types,
+        summary=aggregate,
+        items=selected,
+        redaction_status=AiHandoffMemoryRedactionStatus(
+            redaction_applied=True,
+            truncated=truncated,
+            max_chars=memory_budget,
+        ),
+    )
+
+
+def _select_memory_items_for_budget(items: list[Any], memory_budget: int) -> tuple[list[AiHandoffMemoryItem], bool]:
+    selected: list[AiHandoffMemoryItem] = []
+    used_chars = 0
+    truncated = False
+    for item in items:
+        candidate, item_truncated = _memory_item_for_remaining_budget(item, memory_budget - used_chars, bool(selected))
+        if candidate is None:
+            truncated = True
+            continue
+        selected.append(candidate)
+        used_chars += _memory_item_char_count(candidate)
+        truncated = truncated or item_truncated
+    return selected, truncated
+
+
+def _memory_item_for_remaining_budget(item: Any, remaining: int, has_selected_item: bool) -> tuple[AiHandoffMemoryItem | None, bool]:
+    if remaining <= 0:
+        return None, True
+    summary = _redact(str(item.summary or ""))
+    estimated = len(item.memory_type) + len(item.title) + len(summary) + 24
+    if estimated <= remaining:
+        return _memory_summary_item(item, summary), False
+    if item.memory_type not in MIN_REQUIRED_MEMORY_TYPES and has_selected_item:
+        return None, True
+    summary = summary[: max(0, remaining - len(item.memory_type) - len(item.title) - 32)].rstrip()
+    return _memory_summary_item(item, f"{summary}\n...[truncated]" if summary else "...[truncated]"), True
+
+
+def _memory_summary_item(item: Any, summary: str) -> AiHandoffMemoryItem:
+    return AiHandoffMemoryItem(
+        memory_type=item.memory_type,
+        title=_redact(item.title),
+        summary=summary,
+        source_refs=[
+            AiHandoffMemorySourceRef(**source_ref.model_dump())
+            for source_ref in item.source_refs
+        ],
+        confidence=item.confidence,
+        stale=item.stale,
+    )
+
+
+def _memory_item_char_count(item: AiHandoffMemoryItem) -> int:
+    return len(item.memory_type) + len(item.title) + len(item.summary) + 24
 
 
 async def _load_task(db: AsyncSession, project_id: int, task_id: int | None) -> Task | None:
@@ -133,6 +262,7 @@ def _build_response(
     task: Task | None,
     batches: list[DispatchBatch],
     synthesis: dict[str, Any],
+    memory_summary: AiHandoffProjectMemorySummary,
 ) -> AiHandoffPreviewResponse:
     source_ids = _source_ids(project.id, task.id if task else None, batches, synthesis)
     project_snapshot = _project_snapshot(project)
@@ -141,7 +271,7 @@ def _build_response(
     answer_summary = _answer_synthesis_summary(synthesis)
     steps = _next_steps(task, batches, answer_summary)
     safety_rules = SAFETY_RULES if body.include_safety_rules else []
-    next_prompt = _next_ai_prompt(task_summary, dispatch_summary, answer_summary, steps, safety_rules)
+    next_prompt = _next_ai_prompt(task_summary, dispatch_summary, answer_summary, steps, safety_rules, memory_summary)
     return AiHandoffPreviewResponse(
         project_id=project.id,
         task_id=task.id if task else None,
@@ -153,6 +283,7 @@ def _build_response(
         current_pr_summary=_current_pr_summary(task),
         recent_dispatch_summary=dispatch_summary,
         answer_synthesis_summary=answer_summary,
+        project_memory_summary=memory_summary,
         safety_rules=safety_rules,
         next_recommended_steps=steps,
         next_ai_prompt=next_prompt,
@@ -336,6 +467,7 @@ def _next_ai_prompt(
     answer_summary: dict[str, Any],
     steps: list[str],
     safety_rules: list[str],
+    memory_summary: AiHandoffProjectMemorySummary | None = None,
 ) -> str:
     lines = [
         "You are taking over this project as the next AI coding agent.",
@@ -355,7 +487,52 @@ def _next_ai_prompt(
     ]
     if safety_rules:
         lines.append("Safety rules: " + "; ".join(safety_rules))
+    lines.extend(project_memory_prompt_lines(memory_summary))
     return _redact("\n".join(lines))
+
+
+def project_memory_prompt_lines(memory_summary: AiHandoffProjectMemorySummary | None) -> list[str]:
+    if not memory_summary or not memory_summary.included:
+        return []
+    lines = ["Project Memory context:", *MEMORY_HANDOFF_BOUNDARIES]
+    lines.append(f"Included memory types: {', '.join(memory_summary.memory_types) or 'none'}.")
+    lines.append(f"Project Memory summary: {memory_summary.summary}")
+    if memory_summary.redaction_status.truncated:
+        lines.append(f"Project Memory was truncated to memory_budget={memory_summary.redaction_status.max_chars}.")
+    for item in memory_summary.items:
+        lines.append(
+            f"- {item.memory_type} ({item.confidence}, stale={item.stale}) "
+            f"{item.title}: {item.summary}"
+        )
+    return [_redact(line) for line in lines]
+
+
+def _empty_project_memory_summary(memory_budget: int) -> AiHandoffProjectMemorySummary:
+    return AiHandoffProjectMemorySummary(
+        included=False,
+        memory_count=0,
+        memory_types=[],
+        summary="",
+        items=[],
+        redaction_status=AiHandoffMemoryRedactionStatus(
+            redaction_applied=True,
+            truncated=False,
+            max_chars=memory_budget,
+        ),
+    )
+
+
+def _memory_priority(memory_type: str) -> tuple[int, str]:
+    try:
+        return (MEMORY_TYPE_PRIORITY.index(memory_type), memory_type)
+    except ValueError:
+        return (len(MEMORY_TYPE_PRIORITY), memory_type)
+
+
+def _selected_memory_summary(full_summary: str, selected_types: list[str], allowlist_applied: bool) -> str:
+    if allowlist_applied:
+        return "Project Memory selected records for this handoff: " + ", ".join(selected_types) + "."
+    return full_summary
 
 
 def _truncate_response(response: AiHandoffPreviewResponse, max_chars: int) -> AiHandoffPreviewResponse:

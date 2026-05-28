@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 
+from app.schemas.ai_handoff import AiHandoffProjectMemorySummary
 from app.schemas.multi_ai_evidence_run import MultiAiEvidenceRoleRequest
 
 
@@ -106,6 +107,9 @@ class RepairHandoffPreviewRequest(BaseModel):
     task_id: int
     repair_packet_artifact_id: int
     target: str = "codex"
+    include_memory: bool = False
+    memory_budget: int = Field(default=3000, ge=200, le=12000)
+    memory_types: list[str] = Field(default_factory=list)
 
 
 class RepairHandoffPreviewResponse(BaseModel):
@@ -113,6 +117,7 @@ class RepairHandoffPreviewResponse(BaseModel):
     project_id: int
     target: str
     handoff_prompt: str
+    project_memory_summary: AiHandoffProjectMemorySummary = Field(default_factory=AiHandoffProjectMemorySummary)
     safety_notes: list[str] = Field(default_factory=list)
     source_repair_packet_artifact_id: int
     requires_master_verification: bool = True

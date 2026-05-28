@@ -30,6 +30,7 @@ from app.schemas.repair_loop import (
     RepairVerificationResultRequest,
 )
 from app.services import answer_synthesis_service, multi_ai_evidence_run_service
+from app.services.ai_handoff_service import build_project_memory_handoff_summary, project_memory_prompt_lines
 from app.services.ai_output_governance_service import redact_secrets
 
 
@@ -293,12 +294,20 @@ async def preview_repair_handoff(db: AsyncSession, body: RepairHandoffPreviewReq
         raise HTTPException(status_code=400, detail="artifact_is_not_repair_packet")
 
     packet = _load_repair_packet(artifact)
-    prompt = _repair_handoff_prompt(task, packet, body.target)
+    memory_summary = await build_project_memory_handoff_summary(
+        db,
+        task.project_id,
+        include_memory=body.include_memory,
+        memory_budget=body.memory_budget,
+        memory_types=body.memory_types,
+    )
+    prompt = _repair_handoff_prompt(task, packet, body.target, memory_summary)
     return RepairHandoffPreviewResponse(
         task_id=task.id,
         project_id=task.project_id,
         target=body.target,
         handoff_prompt=_redact(prompt),
+        project_memory_summary=memory_summary,
         safety_notes=HANDOFF_SAFETY_NOTES.copy(),
         source_repair_packet_artifact_id=artifact.id,
         requires_master_verification=True,
@@ -840,7 +849,7 @@ def _load_repair_packet(artifact: TaskArtifact) -> RepairPacketResponse:
         raise HTTPException(status_code=400, detail="repair_packet_content_invalid") from exc
 
 
-def _repair_handoff_prompt(task: Task, packet: RepairPacketResponse, target: str) -> str:
+def _repair_handoff_prompt(task: Task, packet: RepairPacketResponse, target: str, memory_summary=None) -> str:
     repair_packet_lines = _repair_packet_handoff_lines(packet)
 
     if target == "generic_ai":
@@ -856,6 +865,7 @@ def _repair_handoff_prompt(task: Task, packet: RepairPacketResponse, target: str
             DO_NOT_BYPASS_TESTS,
             "Verify current master before acting if you are later asked to execute.",
             f"Task #{task.id}: {task.title}",
+            *project_memory_prompt_lines(memory_summary),
             *repair_packet_lines,
         ])
 
@@ -879,6 +889,7 @@ def _repair_handoff_prompt(task: Task, packet: RepairPacketResponse, target: str
             "Each worker must stay within the repair packet scope.",
             "Stop after one attempt unless user explicitly approves another round.",
         ])
+    lines.extend(project_memory_prompt_lines(memory_summary))
     lines.extend(repair_packet_lines)
     return "\n".join(lines)
 

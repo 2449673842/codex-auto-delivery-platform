@@ -250,6 +250,8 @@ class TestAiHandoffPreview:
         assert data["current_task_summary"]["scope"] == "project_level"
         assert data["recent_dispatch_summary"]["batch_count"] == 0
         assert "Pick or create a task" in data["next_recommended_steps"][0]
+        assert data["project_memory_summary"]["included"] is False
+        assert data["project_memory_summary"]["memory_count"] == 0
 
     async def test_project_not_found_returns_404(self, client):
         response = await client.post(f"{BASE}/preview", json={"project_id": 999999})
@@ -299,6 +301,76 @@ class TestAiHandoffPreview:
         assert "do not read .env" in prompt.lower()
         assert "do not auto approve or merge" in prompt.lower()
         assert "Current master commit hint: 32dcd5a8e11eeef48e0844cf21601561938c2112" not in prompt
+        assert "Project Memory context:" not in prompt
+
+    async def test_include_memory_adds_read_only_project_memory_summary(self, client, project, task):
+        await _seed_full_handoff(task)
+
+        data = await _preview(client, {
+            "project_id": project["id"],
+            "task_id": task["id"],
+            "include_memory": True,
+        })
+
+        memory = data["project_memory_summary"]
+        assert memory["included"] is True
+        assert memory["memory_count"] == 8
+        assert memory["memory_types"][:3] == ["safety_policy", "delivery_policy", "verification_policy"]
+        assert {"project_profile", "known_failure", "user_preference"}.issubset(set(memory["memory_types"]))
+        assert memory["redaction_status"]["redaction_applied"] is True
+        assert memory["redaction_status"]["max_chars"] == 3000
+        assert "Project Memory context:" in data["next_ai_prompt"]
+        assert "Project Memory is read-only context." in data["next_ai_prompt"]
+        assert "Memory may be stale; verify before acting." in data["next_ai_prompt"]
+        assert "Do not read `.env` or `secret_ref`." in data["next_ai_prompt"]
+        assert "Do not auto approve / merge / deploy." in data["next_ai_prompt"]
+
+    async def test_memory_types_allowlist_limits_handoff_memory(self, client, project, task):
+        data = await _preview(client, {
+            "project_id": project["id"],
+            "task_id": task["id"],
+            "include_memory": True,
+            "memory_types": ["verification_policy", "safety_policy"],
+        })
+
+        memory = data["project_memory_summary"]
+        assert memory["memory_types"] == ["safety_policy", "verification_policy"]
+        assert all(item["memory_type"] in {"safety_policy", "verification_policy"} for item in memory["items"])
+        assert "delivery_policy" not in data["next_ai_prompt"]
+
+    async def test_memory_budget_truncates_and_preserves_priority(self, client, project, task):
+        data = await _preview(client, {
+            "project_id": project["id"],
+            "task_id": task["id"],
+            "include_memory": True,
+            "memory_budget": 220,
+        })
+
+        memory = data["project_memory_summary"]
+        assert memory["redaction_status"]["truncated"] is True
+        assert memory["redaction_status"]["max_chars"] == 220
+        assert memory["memory_types"][0] == "safety_policy"
+        assert "Project Memory was truncated to memory_budget=220." in data["next_ai_prompt"]
+
+    async def test_memory_backed_handoff_redacts_secret_like_project_values(self, client):
+        secret = "api_" + "key=secret-value " + "token=hidden-value"
+        response = await client.post("/api/projects", json={
+            "name": "memory-handoff-redaction",
+            "display_name": f"Memory {secret}",
+            "root_path": "/must-not-read",
+            "repo_url": f"https://example.invalid/repo?{secret}",
+            "build_command": f"build --{secret}",
+            "test_command": f"test --{secret}",
+        })
+        redaction_project = response.json()["data"]
+
+        data = await _preview(client, {"project_id": redaction_project["id"], "include_memory": True})
+        payload = json.dumps(data)
+
+        assert "secret-value" not in payload
+        assert "hidden-value" not in payload
+        assert "/must-not-read" not in payload
+        assert "***REDACTED***" in payload
 
 
     async def test_output_is_redacted_and_omits_project_root_path(self, client, project, task):
@@ -325,9 +397,10 @@ class TestAiHandoffPreview:
     async def test_no_root_env_secret_subprocess_or_provider_calls(self, client, project, task, monkeypatch):
         await _seed_full_handoff(task, blocked_error=f"blocked {FAKE_KEY}")
         install_forbidden_call_guards(monkeypatch)
-        data = await _preview(client, {"project_id": project["id"], "task_id": task["id"]})
+        data = await _preview(client, {"project_id": project["id"], "task_id": task["id"], "include_memory": True})
         assert_secret_redacted(data)
         assert data["redaction_applied"] is True
+        assert data["project_memory_summary"]["included"] is True
         assert any("secret_ref" in item for item in data["safety_rules"])
         assert any("verify" in note.lower() and "master" in note.lower() for note in data["safety_notes"])
         assert any("no ai provider" in note.lower() for note in data["safety_notes"])
