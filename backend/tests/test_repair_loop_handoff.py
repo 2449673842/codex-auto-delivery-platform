@@ -146,6 +146,12 @@ def _body(task: dict, artifact_id: int, target: str = "codex") -> dict:
     return {"task_id": task["id"], "repair_packet_artifact_id": artifact_id, "target": target}
 
 
+def _memory_body(task: dict, artifact_id: int, target: str = "codex", **extra) -> dict:
+    body = _body(task, artifact_id, target)
+    body.update(extra)
+    return body
+
+
 TARGET_EXPECTATIONS = {
     "codex": [
         "Read AGENTS.md before acting.",
@@ -197,11 +203,54 @@ async def test_handoff_preview_targets_read_repair_packet_without_persisting(cli
     assert data["requires_master_verification"] is True
     assert data["read_only"] is True
     assert data["persisted"] is False
+    assert data["project_memory_summary"]["included"] is False
     prompt = data["handoff_prompt"]
     for expected in TARGET_EXPECTATIONS[target]:
         assert expected in prompt
     assert SECRET_VALUE not in json.dumps(data)
     assert await _counts() == before
+
+
+@pytest.mark.asyncio
+async def test_handoff_preview_can_include_project_memory_summary(client, task):
+    artifact_id = await _seed_repair_packet(task)
+    before = await _counts()
+
+    response = await client.post(HANDOFF_BASE, json=_memory_body(task, artifact_id, include_memory=True))
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    memory = data["project_memory_summary"]
+    assert memory["included"] is True
+    assert memory["memory_count"] == 8
+    assert memory["memory_types"][:3] == ["safety_policy", "delivery_policy", "verification_policy"]
+    assert memory["redaction_status"]["redaction_applied"] is True
+    assert "Project Memory context:" in data["handoff_prompt"]
+    assert "Project Memory is read-only context." in data["handoff_prompt"]
+    assert "Memory may be stale; verify before acting." in data["handoff_prompt"]
+    assert "Do not read `.env` or `secret_ref`." in data["handoff_prompt"]
+    assert "Follow current task scope and PR boundary." in data["handoff_prompt"]
+    assert await _counts() == before
+
+
+@pytest.mark.asyncio
+async def test_handoff_preview_memory_allowlist_and_budget(client, task):
+    artifact_id = await _seed_repair_packet(task)
+
+    response = await client.post(HANDOFF_BASE, json=_memory_body(
+        task,
+        artifact_id,
+        include_memory=True,
+        memory_budget=220,
+        memory_types=["delivery_policy", "safety_policy", "project_profile"],
+    ))
+
+    assert response.status_code == 200
+    memory = response.json()["data"]["project_memory_summary"]
+    assert memory["redaction_status"]["truncated"] is True
+    assert memory["redaction_status"]["max_chars"] == 220
+    assert memory["memory_types"][0] == "safety_policy"
+    assert set(memory["memory_types"]).issubset({"delivery_policy", "safety_policy", "project_profile"})
 
 
 @pytest.mark.asyncio
@@ -255,10 +304,11 @@ async def test_handoff_does_not_use_forbidden_surfaces(client, task, monkeypatch
     monkeypatch.setattr(subprocess, "run", fail)
     monkeypatch.setattr(subprocess, "Popen", fail)
 
-    response = await client.post(HANDOFF_BASE, json=_body(task, artifact_id, "codex"))
+    response = await client.post(HANDOFF_BASE, json=_memory_body(task, artifact_id, "codex", include_memory=True))
 
     assert response.status_code == 200
     data = response.json()["data"]
+    assert data["project_memory_summary"]["included"] is True
     assert any("No provider call" in note for note in data["safety_notes"])
     assert any("No repository writes" in note for note in data["safety_notes"])
     assert any("Project.root_path" in note for note in data["safety_notes"])
