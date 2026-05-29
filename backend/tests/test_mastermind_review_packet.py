@@ -1,6 +1,4 @@
 import json
-import os
-import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -29,8 +27,8 @@ PACKET_URL = "/api/tasks/{task_id}/mastermind-review/packet-preview"
 async def _reset_db():
     engine = get_engine()
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
+        for metadata_op in (Base.metadata.drop_all, Base.metadata.create_all):
+            await conn.run_sync(metadata_op)
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -67,27 +65,32 @@ async def task(client) -> dict:
 
 
 async def _counts() -> dict[str, int]:
+    models = {
+        "projects": Project,
+        "tasks": Task,
+        "runs": AgentRun,
+        "artifacts": TaskArtifact,
+        "events": TaskEvent,
+        "batches": DispatchBatch,
+        "jobs": DispatchJob,
+    }
     async with get_session_factory()() as session:
         return {
-            "projects": len((await session.execute(select(Project))).scalars().all()),
-            "tasks": len((await session.execute(select(Task))).scalars().all()),
-            "runs": len((await session.execute(select(AgentRun))).scalars().all()),
-            "artifacts": len((await session.execute(select(TaskArtifact))).scalars().all()),
-            "events": len((await session.execute(select(TaskEvent))).scalars().all()),
-            "batches": len((await session.execute(select(DispatchBatch))).scalars().all()),
-            "jobs": len((await session.execute(select(DispatchJob))).scalars().all()),
+            name: len((await session.execute(select(model))).scalars().all())
+            for name, model in models.items()
         }
 
 
 def _secret_fixture() -> str:
-    return (
-        ("api_" + "key") + "=secret-value "
-        + ("pass" + "word") + "=private-value "
-        + ("to" + "ken") + "=hidden-value "
-        + ("cook" + "ie") + "=browser-value "
-        + ("ses" + "sion") + "=session-value "
-        + ("secret" + "_ref") + "=vault-value"
-    )
+    names_and_values = [
+        ("api_" + "key", "secret-value"),
+        ("pass" + "word", "private-value"),
+        ("to" + "ken", "hidden-value"),
+        ("cook" + "ie", "browser-value"),
+        ("ses" + "sion", "session-value"),
+        ("secret" + "_ref", "vault-value"),
+    ]
+    return " ".join(f"{name}={value}" for name, value in names_and_values)
 
 
 def _request(**overrides) -> dict:
@@ -376,7 +379,7 @@ async def test_mastermind_packet_preview_avoids_forbidden_surfaces(client, task,
     def fail(*args, **kwargs):
         raise AssertionError("forbidden surface")
 
-    blocked_surfaces = (
+    for surface in [
         "pathlib.Path.glob",
         "pathlib.Path.rglob",
         "os.system",
@@ -384,8 +387,7 @@ async def test_mastermind_packet_preview_avoids_forbidden_surfaces(client, task,
         "subprocess.Popen",
         "app.services.browser_ai_service.execute",
         "app.services.ai_provider_service.dispatch_agent_run",
-    )
-    for surface in blocked_surfaces:
+    ]:
         monkeypatch.setattr(surface, fail)
 
     response = await client.post(PACKET_URL.format(task_id=task["id"]), json=_request())
