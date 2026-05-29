@@ -1018,6 +1018,251 @@
         </div>
       </section>
 
+      <section class="card mastermind-review-panel">
+        <div class="section-header">
+          <h2>Mastermind Review</h2>
+          <span class="workspace-readonly">Browser AI advisory review trial</span>
+        </div>
+        <div class="workspace-safety">
+          <span class="label-badge label-ai">Mastermind review is advisory only</span>
+          <span class="label-badge label-ai">Human confirmation required</span>
+          <span class="label-badge label-merged">No auto approve</span>
+          <span class="label-badge label-merged">No auto merge</span>
+          <span class="label-badge label-exec">No auto deploy</span>
+          <span class="label-badge label-exec">No auto rework</span>
+          <span class="label-badge label-provider">Browser AI uses visible user-authorized UI only</span>
+          <span class="label-badge label-redacted">No account/password/cookie/session storage</span>
+          <span class="label-badge label-redacted">No captcha/login bypass</span>
+          <span class="label-badge label-applied">No repository writes</span>
+          <span class="label-badge label-redacted">No GitHub / Sonar platform query</span>
+        </div>
+        <p class="section-note">
+          S24.1.3 previews the review packet and calls the existing Browser AI review API. PR metadata, verification, and Sonar values are pasted by the user or an external flow.
+        </p>
+
+        <div class="mastermind-review-grid">
+          <div class="mastermind-review-form">
+            <div class="section-header compact">
+              <strong>Packet metadata</strong>
+              <span class="workspace-readonly">manual input only</span>
+            </div>
+            <label class="wide">
+              PR URL
+              <input v-model="mastermindPacketForm.pr_url" placeholder="https://github.com/org/repo/pull/64" />
+            </label>
+            <label>
+              PR number
+              <input v-model.number="mastermindPacketForm.pr_number" type="number" min="1" placeholder="64" />
+            </label>
+            <label>
+              packet_budget
+              <input v-model.number="mastermindPacketForm.packet_budget" type="number" min="1000" max="30000" />
+            </label>
+            <label>
+              head commit
+              <input v-model="mastermindPacketForm.head_commit" placeholder="full head sha" />
+            </label>
+            <label>
+              base commit
+              <input v-model="mastermindPacketForm.base_commit" placeholder="full base sha" />
+            </label>
+            <label class="wide">
+              changed files
+              <textarea v-model="mastermindChangedFilesText" rows="3" placeholder="one file per line, or comma separated"></textarea>
+            </label>
+            <label class="wide">
+              PR body
+              <textarea v-model="mastermindPacketForm.pr_body" rows="4" placeholder="PR body text or excerpt"></textarea>
+            </label>
+
+            <div class="mastermind-review-subgrid wide">
+              <label>
+                targeted_backend_pytest
+                <input v-model="mastermindPacketForm.verification_results.targeted_backend_pytest" />
+              </label>
+              <label>
+                full_backend_pytest
+                <input v-model="mastermindPacketForm.verification_results.full_backend_pytest" />
+              </label>
+              <label>
+                compileall
+                <input v-model="mastermindPacketForm.verification_results.compileall" />
+              </label>
+              <label>
+                npm_build
+                <input v-model="mastermindPacketForm.verification_results.npm_build" />
+              </label>
+              <label>
+                frontend_smoke
+                <input v-model="mastermindPacketForm.verification_results.frontend_smoke" />
+              </label>
+              <label>
+                git_diff_check
+                <input v-model="mastermindPacketForm.verification_results.git_diff_check" />
+              </label>
+            </div>
+
+            <div class="mastermind-review-subgrid wide">
+              <label>
+                quality_gate
+                <input v-model="mastermindPacketForm.sonarcloud.quality_gate" />
+              </label>
+              <label>
+                security_hotspots
+                <input v-model.number="mastermindPacketForm.sonarcloud.security_hotspots" type="number" min="0" />
+              </label>
+              <label>
+                duplication_on_new_code
+                <input v-model="mastermindPacketForm.sonarcloud.duplication_on_new_code" />
+              </label>
+              <label>
+                new_issues
+                <input v-model.number="mastermindPacketForm.sonarcloud.new_issues" type="number" min="0" />
+              </label>
+            </div>
+
+            <div class="mastermind-checkboxes wide">
+              <label class="checkbox-row"><input v-model="mastermindPacketForm.include_evidence_board" type="checkbox" /> include_evidence_board</label>
+              <label class="checkbox-row"><input v-model="mastermindPacketForm.include_timeline" type="checkbox" /> include_timeline</label>
+              <label class="checkbox-row"><input v-model="mastermindPacketForm.include_project_memory" type="checkbox" /> include_project_memory</label>
+              <label class="checkbox-row"><input v-model="mastermindPacketForm.include_handoff_context" type="checkbox" /> include_handoff_context</label>
+            </div>
+
+            <div class="section-header compact wide">
+              <strong>Browser AI options</strong>
+              <span class="workspace-readonly">visible UI only</span>
+            </div>
+            <label>
+              provider_profile
+              <select v-model="mastermindBrowserAiForm.provider_profile" @change="applyMastermindBrowserProfile">
+                <option v-for="profile in browserAiProfiles" :key="`mastermind-${profile.provider}`" :value="profile.provider">
+                  {{ profile.display_name }}
+                </option>
+              </select>
+            </label>
+            <label class="wide">
+              target_url
+              <input v-model="mastermindBrowserAiForm.target_url" placeholder="https://chatgpt.com/" />
+            </label>
+            <label>
+              prompt_selector
+              <input v-model="mastermindBrowserAiForm.prompt_selector" placeholder="textarea[name='prompt']" />
+            </label>
+            <label>
+              submit_selector
+              <input v-model="mastermindBrowserAiForm.submit_selector" placeholder="button[data-send]" />
+            </label>
+            <label>
+              response_selector
+              <input v-model="mastermindBrowserAiForm.response_selector" placeholder="[data-answer]" />
+            </label>
+            <label>
+              stable_response_timeout_seconds
+              <input v-model.number="mastermindBrowserAiForm.stable_response_timeout_seconds" type="number" min="1" max="600" />
+            </label>
+            <label>
+              stable_polls
+              <input v-model.number="mastermindBrowserAiForm.stable_polls" type="number" min="1" max="50" />
+            </label>
+            <label>
+              stable_interval_ms
+              <input v-model.number="mastermindBrowserAiForm.stable_interval_ms" type="number" min="100" max="10000" />
+            </label>
+            <label class="checkbox-row wide"><input v-model="mastermindSaveArtifact" type="checkbox" /> save_artifact</label>
+
+            <div class="form-actions wide">
+              <button class="btn btn-sm" @click="previewMastermindReview" :disabled="mastermindLoading">
+                Preview Mastermind Review Packet
+              </button>
+              <button class="btn btn-primary btn-sm" @click="runMastermindReview" :disabled="mastermindExecuting">
+                Run Browser AI Mastermind Review
+              </button>
+            </div>
+          </div>
+
+          <div class="mastermind-review-results">
+            <p v-if="mastermindError" class="run-error">{{ mastermindError }}</p>
+            <p v-if="mastermindManualLoginRequired()" class="run-error">manual login required: complete login in the visible browser, then retry.</p>
+            <p v-if="mastermindRefreshMessage" class="copy-message">{{ mastermindRefreshMessage }}</p>
+
+            <div v-if="mastermindPreview" class="mastermind-result-card">
+              <div class="section-header compact">
+                <strong>Packet Preview</strong>
+                <span class="workspace-readonly">{{ mastermindPreview.packet_type }}</span>
+              </div>
+              <div class="dispatch-job-meta">
+                <span>packet_type: {{ mastermindPreview.packet_type }}</span>
+                <span>PR URL: {{ mastermindPreview.packet.pr?.url || '-' }}</span>
+                <span>PR number: {{ mastermindPreview.packet.pr?.number ?? '-' }}</span>
+                <span>head commit: {{ mastermindPreview.packet.pr?.head_commit || '-' }}</span>
+                <span>base commit: {{ mastermindPreview.packet.pr?.base_commit || '-' }}</span>
+                <span>changed files: {{ formatMastermindList(mastermindPreview.packet.pr?.changed_files || []) }}</span>
+                <span>targeted_backend_pytest: {{ mastermindPreview.packet.verification?.targeted_backend_pytest || '-' }}</span>
+                <span>quality_gate: {{ mastermindPreview.packet.sonarcloud?.quality_gate || '-' }}</span>
+                <span>verification summary: {{ formatMastermindJson(mastermindPreview.packet.verification) }}</span>
+                <span>SonarCloud summary: {{ formatMastermindJson(mastermindPreview.packet.sonarcloud) }}</span>
+                <span>read_only={{ mastermindPreview.read_only }}</span>
+                <span>persisted={{ mastermindPreview.persisted }}</span>
+                <span>redaction_status: redaction_applied={{ mastermindPreview.redaction_status.redaction_applied }}, truncated={{ mastermindPreview.redaction_status.truncated }}, max_chars={{ mastermindPreview.redaction_status.max_chars }}</span>
+              </div>
+              <details open class="mastermind-detail">
+                <summary>PR / verification / Sonar</summary>
+                <pre>{{ formatMastermindJson({ pr: mastermindPreview.packet.pr, verification: mastermindPreview.packet.verification, sonarcloud: mastermindPreview.packet.sonarcloud, safety_boundary_checklist: mastermindPreview.packet.safety_boundary_checklist }) }}</pre>
+              </details>
+              <details open class="mastermind-detail">
+                <summary>Task / Evidence / Timeline / Project Memory / handoff context</summary>
+                <div class="dispatch-job-meta">
+                  <span>task_summary: {{ formatMastermindPacketField('task_summary') }}</span>
+                  <span>evidence_board_summary: {{ formatMastermindPacketField('evidence_board_summary') }}</span>
+                  <span>run_timeline_summary: {{ formatMastermindPacketField('run_timeline_summary') }}</span>
+                  <span>project_memory_summary: {{ formatMastermindPacketField('project_memory_summary') }}</span>
+                  <span>handoff_context: {{ formatMastermindPacketField('handoff_context') }}</span>
+                </div>
+              </details>
+              <details class="mastermind-detail">
+                <summary>review_instruction</summary>
+                <pre>{{ formatMastermindPacketField('review_instruction') }}</pre>
+              </details>
+              <details class="mastermind-detail">
+                <summary>required_output_contract</summary>
+                <pre>{{ formatMastermindPacketField('required_output_contract') }}</pre>
+              </details>
+              <div class="safety-notes">
+                <span v-for="note in mastermindPreview.safety_notes" :key="`preview-${note}`" class="label-badge label-provider">{{ note }}</span>
+              </div>
+            </div>
+
+            <div v-if="mastermindResult" class="mastermind-result-card">
+              <div class="section-header compact">
+                <strong>Review Result</strong>
+                <span class="run-status-badge" :class="mastermindResult.status">{{ mastermindResult.status }}</span>
+              </div>
+              <div class="dispatch-job-meta">
+                <span>status: {{ mastermindResult.status }}</span>
+                <span>verdict: {{ mastermindResult.verdict }}</span>
+                <span>summary: {{ mastermindResult.summary || '-' }}</span>
+                <span>agent_run_id: {{ mastermindResult.agent_run_id ?? '-' }}</span>
+                <span>artifact_id: {{ mastermindResult.artifact_id ?? '-' }}</span>
+                <span>read_only={{ mastermindResult.read_only }}</span>
+                <span>persisted={{ mastermindResult.persisted }}</span>
+                <span>advisory_only={{ mastermindResult.advisory_only }}</span>
+                <span>human_confirmation_required={{ mastermindResult.human_confirmation_required }}</span>
+                <span>no_auto_merge={{ mastermindResult.no_auto_merge }}</span>
+                <span v-if="mastermindResult.failure_reason">failure_reason: {{ mastermindResult.failure_reason }}</span>
+                <span>blocking_items: {{ formatMastermindList(mastermindResult.blocking_items) }}</span>
+                <span>recommended_actions: {{ formatMastermindList(mastermindResult.recommended_actions) }}</span>
+                <span>safety_notes: {{ formatMastermindList(mastermindResult.safety_notes) }}</span>
+                <span>parse_errors: {{ formatMastermindList(mastermindResult.parse_errors) }}</span>
+              </div>
+              <details class="mastermind-detail">
+                <summary>raw_excerpt</summary>
+                <pre>{{ mastermindResult.raw_excerpt || '-' }}</pre>
+              </details>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Agent Runs -->
       <section class="card">
         <div class="section-header">
@@ -1659,8 +1904,9 @@ import {
   fetchMcpTools, callMcpTool,
   fetchTaskTimeline, fetchTaskEvidenceBoard,
   fetchProjectMemory, fetchProjectMemorySummary,
+  previewMastermindReviewPacket, executeMastermindReview,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse, RepairPacketGenerateRequest, RepairHandoffPreviewRequest, RepairHandoffPreviewResponse, RepairPacketResponse, RepairAttemptCreateRequest, RepairAttemptResponse, RepairVerificationResultRequest, TimelineResponse, TimelineItem, EvidenceBoardResponse, EvidenceBoardItem, EvidenceLinkedIds, ProjectMemoryResponse, ProjectMemorySummaryResponse, ProjectMemoryItem, ProjectMemorySourceRef } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse, RepairPacketGenerateRequest, RepairHandoffPreviewRequest, RepairHandoffPreviewResponse, RepairPacketResponse, RepairAttemptCreateRequest, RepairAttemptResponse, RepairVerificationResultRequest, TimelineResponse, TimelineItem, EvidenceBoardResponse, EvidenceBoardItem, EvidenceLinkedIds, ProjectMemoryResponse, ProjectMemorySummaryResponse, ProjectMemoryItem, ProjectMemorySourceRef, MastermindReviewPacketPreviewRequest, MastermindReviewPacketPreviewResponse, MastermindReviewBrowserAiOptions, MastermindReviewExecuteRequest, MastermindReviewExecuteResponse } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -1858,6 +2104,54 @@ const projectMemoryFilter = ref<Record<ProjectMemoryFilterField, string>>({
   confidence: '',
   stale: '',
 })
+const mastermindChangedFilesText = ref('')
+const mastermindPacketForm = ref<MastermindReviewPacketPreviewRequest>({
+  pr_url: '',
+  pr_number: null,
+  head_commit: '',
+  base_commit: '',
+  changed_files: [],
+  pr_body: '',
+  verification_results: {
+    targeted_backend_pytest: 'not_provided',
+    full_backend_pytest: 'not_provided',
+    compileall: 'not_provided',
+    npm_build: 'not_provided',
+    frontend_smoke: 'not_provided',
+    git_diff_check: 'not_provided',
+  },
+  sonarcloud: {
+    quality_gate: 'not_provided',
+    security_hotspots: 0,
+    duplication_on_new_code: 'not_provided',
+    new_issues: 0,
+  },
+  include_evidence_board: true,
+  include_timeline: true,
+  include_project_memory: true,
+  include_handoff_context: true,
+  packet_budget: 12000,
+})
+const mastermindBrowserAiForm = ref<MastermindReviewBrowserAiOptions>({
+  provider_profile: 'chatgpt_web',
+  target_url: '',
+  prompt_selector: '',
+  submit_selector: '',
+  response_selector: '',
+  scroll_container_selector: '',
+  copy_button_selector: '',
+  login_hint_selector: '',
+  stable_response_timeout_seconds: 120,
+  stable_polls: 3,
+  stable_interval_ms: 1000,
+})
+const mastermindSaveArtifact = ref(true)
+const mastermindPreview = ref<MastermindReviewPacketPreviewResponse | null>(null)
+const mastermindResult = ref<MastermindReviewExecuteResponse | null>(null)
+const mastermindLoading = ref(false)
+const mastermindExecuting = ref(false)
+const mastermindError = ref('')
+const mastermindRefreshMessage = ref('')
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -2145,6 +2439,64 @@ function buildRepairAttemptRequest(): RepairAttemptCreateRequest | null {
   }
 }
 
+function parseMastermindChangedFiles() {
+  return mastermindChangedFilesText.value
+    .split(/[\n,]/)
+    .map(file => file.trim())
+    .filter(Boolean)
+}
+
+function buildMastermindPacketRequest(): MastermindReviewPacketPreviewRequest {
+  return {
+    ...mastermindPacketForm.value,
+    changed_files: parseMastermindChangedFiles(),
+    pr_number: mastermindPacketForm.value.pr_number ? Number(mastermindPacketForm.value.pr_number) : null,
+    packet_budget: Number(mastermindPacketForm.value.packet_budget) || 12000,
+    sonarcloud: {
+      quality_gate: mastermindPacketForm.value.sonarcloud.quality_gate,
+      security_hotspots: Number(mastermindPacketForm.value.sonarcloud.security_hotspots) || 0,
+      duplication_on_new_code: mastermindPacketForm.value.sonarcloud.duplication_on_new_code,
+      new_issues: Number(mastermindPacketForm.value.sonarcloud.new_issues) || 0,
+    },
+  }
+}
+
+function buildMastermindExecuteRequest(): MastermindReviewExecuteRequest {
+  return {
+    packet: buildMastermindPacketRequest(),
+    browser_ai: {
+      ...mastermindBrowserAiForm.value,
+      stable_response_timeout_seconds: mastermindBrowserAiForm.value.stable_response_timeout_seconds
+        ? Number(mastermindBrowserAiForm.value.stable_response_timeout_seconds)
+        : null,
+      stable_polls: Number(mastermindBrowserAiForm.value.stable_polls) || 3,
+      stable_interval_ms: Number(mastermindBrowserAiForm.value.stable_interval_ms) || 1000,
+    },
+    save_artifact: mastermindSaveArtifact.value,
+  }
+}
+
+function formatMastermindJson(value: unknown) {
+  if (value === null || value === undefined || value === '') return '-'
+  if (typeof value === 'string') return value
+  return JSON.stringify(value, null, 2)
+}
+
+function formatMastermindList(value: unknown) {
+  if (!Array.isArray(value) || value.length === 0) return '-'
+  return value.map(item => (typeof item === 'string' ? item : JSON.stringify(item))).join('; ')
+}
+
+function formatMastermindPacketField(key: string) {
+  const packet = mastermindPreview.value?.packet as Record<string, any> | undefined
+  return formatMastermindJson(packet?.[key])
+}
+
+function mastermindManualLoginRequired() {
+  const text = `${mastermindError.value} ${mastermindResult.value?.failure_reason || ''} ${mastermindResult.value?.summary || ''}`
+  return /manual login|login required|detect_login|login/i.test(text)
+}
+
 function buildRepairVerificationRequest(): RepairVerificationResultRequest {
   return {
     status: repairVerificationForm.value.status,
@@ -2207,6 +2559,18 @@ function applyBrowserAiProfile() {
   browserAiForm.value.scroll_container_selector = profile.scroll_container_selector || ''
   browserAiForm.value.copy_button_selector = profile.copy_button_selector || ''
   browserAiForm.value.login_hint_selector = profile.login_hint_selector || ''
+}
+
+function applyMastermindBrowserProfile() {
+  const profile = browserAiProfiles.value.find(item => item.provider === mastermindBrowserAiForm.value.provider_profile)
+  if (!profile || profile.provider === 'custom') return
+  mastermindBrowserAiForm.value.target_url = profile.target_url || mastermindBrowserAiForm.value.target_url
+  mastermindBrowserAiForm.value.prompt_selector = profile.input_selector || mastermindBrowserAiForm.value.prompt_selector
+  mastermindBrowserAiForm.value.submit_selector = profile.send_selector || mastermindBrowserAiForm.value.submit_selector
+  mastermindBrowserAiForm.value.response_selector = profile.response_selector || mastermindBrowserAiForm.value.response_selector
+  mastermindBrowserAiForm.value.scroll_container_selector = profile.scroll_container_selector || ''
+  mastermindBrowserAiForm.value.copy_button_selector = profile.copy_button_selector || ''
+  mastermindBrowserAiForm.value.login_hint_selector = profile.login_hint_selector || ''
 }
 
 async function refresh() {
@@ -2316,6 +2680,39 @@ async function executeBrowserAiRun() {
     browserAiError.value = e.message || 'Browser AI execute failed'
   } finally {
     browserAiLoading.value = false
+  }
+}
+
+async function previewMastermindReview() {
+  if (!task.value) return
+  mastermindLoading.value = true
+  mastermindError.value = ''
+  mastermindRefreshMessage.value = ''
+  try {
+    mastermindPreview.value = await previewMastermindReviewPacket(task.value.id, buildMastermindPacketRequest())
+  } catch (e: any) {
+    mastermindPreview.value = null
+    mastermindError.value = e.message || 'Mastermind Review packet preview failed'
+  } finally {
+    mastermindLoading.value = false
+  }
+}
+
+async function runMastermindReview() {
+  if (!task.value) return
+  mastermindExecuting.value = true
+  mastermindError.value = ''
+  mastermindRefreshMessage.value = ''
+  try {
+    mastermindResult.value = await executeMastermindReview(task.value.id, buildMastermindExecuteRequest())
+    if (mastermindResult.value.status === 'succeeded' && mastermindResult.value.persisted) {
+      await refreshAfterMastermindReview()
+    }
+  } catch (e: any) {
+    mastermindResult.value = null
+    mastermindError.value = e.message || 'Browser AI Mastermind Review failed'
+  } finally {
+    mastermindExecuting.value = false
   }
 }
 
@@ -2707,6 +3104,15 @@ async function refreshAfterBrowserAiRun() {
   browserAiRefreshMessages.value = messages
 }
 
+async function refreshAfterMastermindReview() {
+  if (!task.value) return
+  const id = task.value.id
+  agentRuns.value = await fetchAgentRuns(id)
+  artifactRefreshKey.value += 1
+  await loadEvidenceSummary(id)
+  mastermindRefreshMessage.value = 'Mastermind Review saved; AgentRun, artifacts, Timeline, and Evidence Board refreshed'
+}
+
 async function refreshAfterEvidenceRun() {
   if (!task.value) return
   const id = task.value.id
@@ -3064,6 +3470,20 @@ async function handleCreateAgentReview() {
 .project-memory-content { margin-top: 8px; }
 .project-memory-content summary { cursor: pointer; color: var(--color-text-secondary); font-size: 12px; }
 .project-memory-content pre { margin-top: 6px; max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--color-text-secondary); padding: 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fff; }
+.mastermind-review-panel { border-left: 3px solid #7b4e12; }
+.mastermind-review-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr); gap: 12px; align-items: start; }
+.mastermind-review-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
+.mastermind-review-form label,
+.mastermind-review-subgrid label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
+.mastermind-review-form .wide { grid-column: 1 / -1; }
+.mastermind-review-form textarea { min-height: 86px; resize: vertical; }
+.mastermind-review-subgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.mastermind-checkboxes { display: flex; flex-wrap: wrap; gap: 8px; }
+.mastermind-review-results { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.mastermind-result-card { padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
+.mastermind-detail { margin-top: 8px; }
+.mastermind-detail summary { cursor: pointer; color: var(--color-text-secondary); font-size: 12px; }
+.mastermind-detail pre { margin-top: 6px; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--color-text-secondary); padding: 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fff; }
 .repair-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .repair-list span { padding: 3px 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; font-size: 12px; color: var(--color-text-secondary); }
 .provider-picker { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
@@ -3270,7 +3690,10 @@ async function handleCreateAgentReview() {
 @media (max-width: 900px) {
   .evidence-summary-grid,
   .evidence-board-controls,
-  .project-memory-controls { grid-template-columns: 1fr; }
+  .project-memory-controls,
+  .mastermind-review-grid,
+  .mastermind-review-form,
+  .mastermind-review-subgrid { grid-template-columns: 1fr; }
 }
 
 .btn-primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }

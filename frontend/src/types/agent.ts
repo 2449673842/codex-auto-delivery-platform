@@ -886,3 +886,114 @@ export interface ProjectMemorySummaryResponse {
   persisted: boolean
   safety_notes: string[]
 }
+
+// ── Mastermind Review / Browser AI advisory review ──
+export interface MastermindReviewVerificationResults {
+  targeted_backend_pytest?: string
+  full_backend_pytest?: string
+  compileall?: string
+  npm_build?: string
+  frontend_smoke?: string
+  git_diff_check?: string
+  [key: string]: string | undefined
+}
+
+export interface MastermindReviewSonarCloudSummary {
+  quality_gate: string
+  security_hotspots: number
+  duplication_on_new_code: string
+  new_issues: number
+}
+
+export interface MastermindReviewPacketPreviewRequest {
+  pr_url: string
+  pr_number: number | null
+  head_commit: string
+  base_commit: string
+  changed_files: string[]
+  pr_body: string
+  verification_results: MastermindReviewVerificationResults
+  sonarcloud: MastermindReviewSonarCloudSummary
+  include_evidence_board: boolean
+  include_timeline: boolean
+  include_project_memory: boolean
+  include_handoff_context: boolean
+  packet_budget: number
+}
+
+export interface MastermindReviewSourceRef {
+  source_type: string
+  id: number | null
+  path: string | null
+  note: string | null
+}
+
+export interface MastermindReviewRedactionStatus {
+  redaction_applied: boolean
+  truncated: boolean
+  max_chars: number
+}
+
+export interface MastermindReviewPacketPreviewResponse {
+  task_id: number
+  project_id: number
+  packet_type: string
+  packet: Record<string, any>
+  source_refs: MastermindReviewSourceRef[]
+  redaction_status: MastermindReviewRedactionStatus
+  read_only: boolean
+  persisted: boolean
+  safety_notes: string[]
+}
+
+export interface MastermindReviewBrowserAiOptions {
+  provider_profile: string
+  target_url: string
+  prompt_selector: string
+  submit_selector: string
+  response_selector: string
+  scroll_container_selector?: string
+  copy_button_selector?: string
+  login_hint_selector?: string
+  stable_response_timeout_seconds: number | null
+  stable_polls: number
+  stable_interval_ms: number
+}
+
+export interface MastermindReviewExecuteRequest {
+  packet: MastermindReviewPacketPreviewRequest
+  browser_ai: MastermindReviewBrowserAiOptions
+  save_artifact: boolean
+}
+
+export interface MastermindReviewParsedVerdict {
+  verdict: string
+  summary: string
+  blocking_items: Record<string, any>[]
+  recommended_actions: any[]
+  safety_notes: any[]
+  confidence: string
+  review_scope_confirmed: boolean
+  parse_errors: string[]
+}
+
+export interface MastermindReviewExecuteResponse {
+  task_id: number
+  project_id: number
+  status: string
+  agent_run_id: number | null
+  artifact_id: number | null
+  verdict: string
+  summary: string
+  blocking_items: Record<string, any>[]
+  recommended_actions: any[]
+  safety_notes: any[]
+  raw_excerpt: string
+  failure_reason: string
+  read_only: boolean
+  persisted: boolean
+  advisory_only: boolean
+  human_confirmation_required: boolean
+  no_auto_merge: boolean
+  parse_errors: string[]
+}
