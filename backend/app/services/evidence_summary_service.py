@@ -43,6 +43,7 @@ ARTIFACT_EVIDENCE_TYPES = {
     "repair_handoff": "repair_handoff",
     "verification_result": "verification_result",
     "skill_review_report": "skill_review_report",
+    "mastermind_review_report": "mastermind_review_report",
     "sandbox_result": "sandbox_result",
     "patch_artifact": "patch_artifact",
     "patch_apply_report": "sandbox_result",
@@ -58,6 +59,7 @@ ARTIFACT_TIMELINE_TYPES = {
     "repair_handoff": "repair_handoff_previewed",
     "verification_result": "verification_result_imported",
     "skill_review_report": "skill_review_report_imported",
+    "mastermind_review_report": "mastermind_review_report_imported",
 }
 
 
@@ -440,6 +442,8 @@ def _artifact_source(artifact: TaskArtifact, metadata: dict[str, Any]) -> str:
         return "answer_synthesis"
     if evidence_type == "skill_review_report":
         return "skill_review"
+    if evidence_type == "mastermind_review_report":
+        return "mastermind_review"
     if evidence_type == "sandbox_result":
         return "sandbox"
     if evidence_type == "patch_artifact":

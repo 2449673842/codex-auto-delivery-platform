@@ -13,7 +13,7 @@ class TaskEvent(Base):
     task_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("tasks.id"), nullable=False
     )
-    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     actor: Mapped[str | None] = mapped_column(String(64), nullable=True)
     from_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     to_status: Mapped[str | None] = mapped_column(String(32), nullable=True)

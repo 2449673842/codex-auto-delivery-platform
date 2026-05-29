@@ -34,6 +34,8 @@ class BrowserAiRequest(BaseModel):
     copy_button_selector: str = ""
     login_hint_selector: str = ""
     timeout_seconds: int | None = None
+    stable_polls: int | None = None
+    stable_interval_ms: int | None = None
 
 
 class BrowserAiProviderProfile(BaseModel):
