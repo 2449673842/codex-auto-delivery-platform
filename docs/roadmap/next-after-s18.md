@@ -283,20 +283,39 @@ S23.4 继续保持设计优先：
 - 不读取 `.env` / `secret_ref`
 - 不扫描 `Project.root_path`
 
-### S24 — MCP Transport / Skill Adapter
+### S24 — Browser AI Mastermind Review Trial / MCP Transport
 
-目标：把平台已经沉淀的 memory、evidence、timeline、handoff packet 通过真正外部 AI 可接入的方式导出。
+目标：先验证 Browser AI 主脑复审闭环，再把平台已经沉淀的 memory、evidence、timeline、handoff packet 通过真正外部 AI 可接入的方式导出。
+
+顺序调整原因：
+
+```text
+Browser AI Mastermind Review Trial 更贴近“自动审核闭环”：
+平台生成 review packet
+-> 浏览器 GPT 主脑复审
+-> 读取主脑回复
+-> 解析 verdict
+-> 保存为 evidence
+-> 人类决定是否合入
+
+MCP 仍然保留，但它主要解决“外部 AI 读取上下文”，不是直接验证复审闭环。
+```
 
 拆分路线：
 
 - S24.0：MCP Transport / Skill Adapter design
-- S24.1：Read-only MCP resources/tools
-- S24.2：Codex skill adapter docs/example
-- S24.3：Claude Desktop / Cursor local integration example
-- S24.4：Optional authenticated HTTP/SSE transport
+- S24.1.0：Browser AI Mastermind Review Trial Design
+- S24.1.1：Mastermind Review Packet Preview API
+- S24.1.2：Browser AI Mastermind Review Execute
+- S24.1.3：TaskDetail Mastermind Review UI + Evidence Board integration
+- S24.2：Read-only MCP resources/tools
+- S24.3：Codex skill adapter docs/example
+- S24.4：Claude Desktop / Cursor local integration example
+- S24.5：Optional authenticated HTTP/SSE transport
 
 候选形式：
 
+- Browser AI GPT 主脑复审试跑
 - stdio MCP server
 - streamable HTTP / SSE MCP transport
 - Codex skill adapter
@@ -308,7 +327,57 @@ S23.4 继续保持设计优先：
 S19 / S22 / S23 已证明平台有足够的 evidence 和 memory 价值。
 ```
 
-不要在平台证据价值未证明前优先做复杂 transport。
+不要在主脑复审闭环未验证前优先做复杂 transport。
+
+S24.1.0 只做设计文档，不新增 Browser AI 主脑复审执行、review execute API、artifact 写入、UI、数据库或业务代码。
+
+S24.1.0 Mastermind Review Packet 必须覆盖：
+
+- PR URL
+- PR number
+- head commit
+- base commit
+- changed files
+- PR body
+- verification results
+- SonarCloud summary
+- security hotspots
+- duplication on new code
+- new issues
+- safety boundary checklist
+- relevant Task summary
+- relevant Evidence Board summary
+- relevant Run Timeline summary
+- relevant Project Memory summary
+- prior repair / handoff context if available
+
+S24.1.0 verdict taxonomy：
+
+- `approved`
+- `request_changes`
+- `needs_human`
+- `invalid_review`
+
+S24.1.0 明确不做：
+
+- 不实现 Browser AI 主脑复审执行
+- 不新增 review execute API
+- 不新增 artifact 写入
+- 不新增 UI
+- 不自动 approve
+- 不自动 merge
+- 不自动 deploy
+- 不自动返工
+- 不创建 PR
+- 不运行 CI / Sonar
+- 不调用 provider
+- 不执行 shell / subprocess
+- 不写真实仓库
+- 不读取 `.env`
+- 不读取 `secret_ref`
+- 不保存账号 / 密码 / cookie / session
+- 不绕过登录 / 验证码
+- 不把网页 AI 回复当作不可质疑事实
 
 S24.0 只做设计文档，不新增 MCP server、stdio transport、HTTP / SSE transport、Codex skill adapter、后端 API、前端 UI、数据库或业务代码。
 
