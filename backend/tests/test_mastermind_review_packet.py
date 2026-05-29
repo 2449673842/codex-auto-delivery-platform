@@ -1,4 +1,5 @@
 import json
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -240,6 +241,7 @@ async def test_mastermind_packet_preview_task_not_found(client):
 async def test_mastermind_packet_preview_project_not_found():
     class FakeSession:
         async def get(self, model, key):
+            await asyncio.sleep(0)
             if model is Task:
                 return SimpleNamespace(id=123, project_id=999001)
             if model is Project:
