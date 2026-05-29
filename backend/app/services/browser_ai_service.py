@@ -296,12 +296,18 @@ def _response_timeout_seconds(request: BrowserAiRequest) -> int:
     return max(1, min(raw, MAX_TIMEOUT_SECONDS))
 
 
-def _stable_poll_count() -> int:
-    return max(1, min(settings.browser_ai_stable_polls, 50))
+def _stable_poll_count(request: BrowserAiRequest | None = None) -> int:
+    raw = request.stable_polls if request and request.stable_polls is not None else settings.browser_ai_stable_polls
+    return max(1, min(raw, 50))
 
 
-def _stable_interval_ms() -> int:
-    return max(100, min(settings.browser_ai_stable_interval_ms, 10_000))
+def _stable_interval_ms(request: BrowserAiRequest | None = None) -> int:
+    raw = (
+        request.stable_interval_ms
+        if request and request.stable_interval_ms is not None
+        else settings.browser_ai_stable_interval_ms
+    )
+    return max(100, min(raw, 10_000))
 
 
 def _safety_gate(request: BrowserAiRequest, *, for_execute: bool) -> BrowserAiSafetyGate:
@@ -743,11 +749,11 @@ def _prefer_related_clipboard_answer(answer: str, copied: str) -> str:
 async def _wait_for_stable_answer(page, request: BrowserAiRequest, previous_answer: str, timeout_ms: int) -> str:
     await page.wait_for_selector(request.response_selector, timeout=timeout_ms)
     response_box = page.locator(request.response_selector).first
-    await _wait_for_answer_change(response_box, page, previous_answer, timeout_ms)
-    return await _wait_until_answer_stable(response_box, page, timeout_ms)
+    await _wait_for_answer_change(response_box, page, request, previous_answer, timeout_ms)
+    return await _wait_until_answer_stable(response_box, page, request, timeout_ms)
 
 
-async def _wait_for_answer_change(response_box, page, previous_answer: str, timeout_ms: int) -> str:
+async def _wait_for_answer_change(response_box, page, request: BrowserAiRequest, previous_answer: str, timeout_ms: int) -> str:
     deadline = await _deadline_ms(page, timeout_ms)
     while True:
         current = (await response_box.inner_text(timeout=timeout_ms)).strip()
@@ -755,19 +761,19 @@ async def _wait_for_answer_change(response_box, page, previous_answer: str, time
             return current
         if await _timed_out(page, deadline):
             raise TimeoutError("timeout waiting for answer text to start changing")
-        await page.wait_for_timeout(_stable_interval_ms())
+        await page.wait_for_timeout(_stable_interval_ms(request))
 
 
-async def _wait_until_answer_stable(response_box, page, timeout_ms: int) -> str:
+async def _wait_until_answer_stable(response_box, page, request: BrowserAiRequest, timeout_ms: int) -> str:
     deadline = await _deadline_ms(page, timeout_ms)
     last_text = (await response_box.inner_text(timeout=timeout_ms)).strip()
     stable_count = 0
     while True:
-        await page.wait_for_timeout(_stable_interval_ms())
+        await page.wait_for_timeout(_stable_interval_ms(request))
         current = (await response_box.inner_text(timeout=timeout_ms)).strip()
         if current and current == last_text:
             stable_count += 1
-            if stable_count >= _stable_poll_count():
+            if stable_count >= _stable_poll_count(request):
                 return current
         else:
             stable_count = 0

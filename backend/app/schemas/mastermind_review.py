@@ -60,3 +60,55 @@ class MastermindReviewPacketPreviewResponse(BaseModel):
     read_only: bool = True
     persisted: bool = False
     safety_notes: list[str] = Field(default_factory=list)
+
+
+class MastermindReviewBrowserAiOptions(BaseModel):
+    provider_profile: str = "chatgpt_web"
+    target_url: str = ""
+    prompt_selector: str = ""
+    submit_selector: str = ""
+    response_selector: str = ""
+    scroll_container_selector: str = ""
+    copy_button_selector: str = ""
+    login_hint_selector: str = ""
+    stable_response_timeout_seconds: int | None = Field(default=120, ge=1, le=600)
+    stable_polls: int = Field(default=3, ge=1, le=50)
+    stable_interval_ms: int = Field(default=1000, ge=100, le=10000)
+
+
+class MastermindReviewExecuteRequest(BaseModel):
+    packet: MastermindReviewPacketPreviewRequest = Field(default_factory=MastermindReviewPacketPreviewRequest)
+    browser_ai: MastermindReviewBrowserAiOptions = Field(default_factory=MastermindReviewBrowserAiOptions)
+    save_artifact: bool = True
+
+
+class MastermindReviewParsedVerdict(BaseModel):
+    verdict: str = "invalid_review"
+    summary: str = ""
+    blocking_items: list[dict[str, Any]] = Field(default_factory=list)
+    recommended_actions: list[Any] = Field(default_factory=list)
+    safety_notes: list[Any] = Field(default_factory=list)
+    confidence: str = "low"
+    review_scope_confirmed: bool = False
+    parse_errors: list[str] = Field(default_factory=list)
+
+
+class MastermindReviewExecuteResponse(BaseModel):
+    task_id: int
+    project_id: int
+    status: str
+    agent_run_id: int | None = None
+    artifact_id: int | None = None
+    verdict: str = "invalid_review"
+    summary: str = ""
+    blocking_items: list[dict[str, Any]] = Field(default_factory=list)
+    recommended_actions: list[Any] = Field(default_factory=list)
+    safety_notes: list[Any] = Field(default_factory=list)
+    raw_excerpt: str = ""
+    failure_reason: str = ""
+    read_only: bool = True
+    persisted: bool = False
+    advisory_only: bool = True
+    human_confirmation_required: bool = True
+    no_auto_merge: bool = True
+    parse_errors: list[str] = Field(default_factory=list)

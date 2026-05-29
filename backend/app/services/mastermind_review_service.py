@@ -1,23 +1,33 @@
 import json
 import re
+import hashlib
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.enums import AgentRunStatus
+from app.models.agent_profile import AgentProfile
+from app.models.agent_run import AgentRun
 from app.models.project import Project
 from app.models.task import Task
 from app.models.task_artifact import TaskArtifact
 from app.models.task_event import TaskEvent
+from app.schemas.browser_ai import BrowserAiRequest
 from app.schemas.mastermind_review import (
+    MastermindReviewExecuteRequest,
+    MastermindReviewExecuteResponse,
     MastermindReviewPacketPreviewRequest,
     MastermindReviewPacketPreviewResponse,
+    MastermindReviewParsedVerdict,
     MastermindReviewRedactionStatus,
     MastermindReviewSourceRef,
 )
-from app.services import evidence_summary_service, project_memory_service
+from app.services import browser_ai_service, evidence_summary_service, project_memory_service
 from app.services.ai_output_governance_service import redact_secrets
+from app.services.event_service import create_event
 
 
 PACKET_TYPE = "mastermind_review_packet"
@@ -29,7 +39,163 @@ SAFETY_NOTES = [
     "No AgentRun, TaskArtifact, TaskEvent, DispatchBatch, DispatchJob, Project, or Task record is created or modified.",
     "No .env, secret_ref, Project.root_path, account, password, cookie, or session value is read or returned.",
 ]
+EXECUTE_SAFETY_NOTES = [
+    "Browser AI Mastermind Review execute is an advisory trial only.",
+    "Only user-authorized visible Browser AI UI is used; no hidden web API or provider API is called.",
+    "The platform writes only review evidence records: AgentRun, TaskArtifact mastermind_review_report, and TaskEvent.",
+    "Approved verdicts do not authorize auto approve, merge, deploy, or rework.",
+    "No .env, secret_ref, Project.root_path, account, password, cookie, or session value is read or stored.",
+]
 VERDICTS = ["approved", "request_changes", "needs_human", "invalid_review"]
+CONFIDENCES = {"high", "medium", "low"}
+REPORT_ARTIFACT_TYPE = "mastermind_review_report"
+RAW_EXCERPT_MAX_CHARS = 4000
+INVALID_REVIEW_SAFETY_NOTE = "Invalid review output; human review is required."
+AUTHORITY_CONFUSED_PATTERN = re.compile(
+    r"\b(i\s+(already\s+)?(approved|merged|deployed|reworked)|"
+    r"(i|we|the\s+platform)\s+(will\s+|can\s+|should\s+)?auto[-\s]?(approve|merge|deploy|rework)|"
+    r"platform\s+(approved|merged|deployed|reworked))\b",
+    re.IGNORECASE,
+)
+
+
+async def execute_review(
+    db: AsyncSession,
+    task_id: int,
+    body: MastermindReviewExecuteRequest,
+) -> MastermindReviewExecuteResponse:
+    task = await db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    project = await db.get(Project, task.project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="project_not_found")
+
+    try:
+        preview = await preview_packet(db, task_id, body.packet)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return MastermindReviewExecuteResponse(
+            task_id=task.id,
+            project_id=project.id,
+            status="failed",
+            failure_reason=_redact(str(exc) or "packet preview failed"),
+            persisted=False,
+        )
+
+    prompt = _review_prompt(preview)
+    prompt_hash = _hash_text(prompt)
+    browser_request = _browser_request(task, project, body, prompt)
+    browser_request = browser_ai_service._with_profile_defaults(browser_request)
+    gate = browser_ai_service._safety_gate(browser_request, for_execute=True)
+    agent = await _find_or_create_mastermind_agent(db, browser_request.provider)
+    run = await _create_mastermind_run(db, task, agent, browser_request, prompt_hash)
+    if not gate.gate_passed:
+        reason = _redact("; ".join(gate.blocked_reasons) or "browser_ai_gate_blocked")
+        await _fail_run(db, task, run, browser_request.provider, "mastermind_review_failed", reason)
+        return _failed_response(task, run.id, reason)
+
+    await create_event(
+        db,
+        task_id=task.id,
+        event_type="mastermind_review_submitted",
+        actor=f"browser_ai:{browser_request.provider}",
+        message=f"Mastermind review packet submitted by Browser AI AgentRun #{run.id}",
+        payload_json=_redact(json.dumps({
+            "agent_run_id": run.id,
+            "prompt_hash": prompt_hash,
+            "advisory_only": True,
+            "no_auto_merge": True,
+        }, ensure_ascii=False)),
+    )
+    try:
+        answer = await browser_ai_service._get_driver().run(
+            browser_request,
+            prompt,
+            browser_ai_service._timeout_seconds(browser_request),
+        )
+        redacted_answer = _redact(answer).strip()
+        if not redacted_answer:
+            raise browser_ai_service.BrowserAiStepError("capture_answer", "empty response from browser AI")
+    except Exception as exc:
+        reason = _redact(str(exc) or "browser AI mastermind review failed")
+        await _fail_run(db, task, run, browser_request.provider, "mastermind_review_failed", reason)
+        return _failed_response(task, run.id, reason)
+
+    await create_event(
+        db,
+        task_id=task.id,
+        event_type="mastermind_review_response_received",
+        actor=f"browser_ai:{browser_request.provider}",
+        message=f"Mastermind review response received for AgentRun #{run.id}",
+        payload_json=_redact(json.dumps({
+            "agent_run_id": run.id,
+            "raw_answer_chars": len(redacted_answer),
+            "advisory_only": True,
+        }, ensure_ascii=False)),
+    )
+    parsed = parse_verdict(redacted_answer)
+    excerpt, truncated = _raw_excerpt(redacted_answer, RAW_EXCERPT_MAX_CHARS)
+    if not body.save_artifact:
+        await _fail_run(db, task, run, browser_request.provider, "mastermind_review_failed", "save_artifact must be true")
+        return _failed_response(task, run.id, "save_artifact must be true")
+    artifact = _review_artifact(
+        task=task,
+        run=run,
+        request=body,
+        parsed=parsed,
+        raw_excerpt=excerpt,
+        raw_truncated=truncated,
+        preview=preview,
+    )
+    db.add(artifact)
+    run.status = AgentRunStatus.SUCCEEDED.value
+    run.output_summary = _short(parsed.summary or parsed.verdict, 1000)
+    run.output_log = "Browser AI mastermind review response captured and parsed as advisory evidence."
+    run.raw_result_json = _redact(json.dumps({
+        "provider": browser_request.provider,
+        "prompt_hash": prompt_hash,
+        "artifact_type": REPORT_ARTIFACT_TYPE,
+        "verdict": parsed.verdict,
+        "advisory_only": True,
+        "human_confirmation_required": True,
+        "no_auto_merge": True,
+        "safety_notes": parsed.safety_notes,
+    }, ensure_ascii=False, default=str))
+    run.finished_at = datetime.now(timezone.utc)
+    await db.flush()
+    await db.refresh(artifact)
+    await create_event(
+        db,
+        task_id=task.id,
+        event_type="mastermind_review_report_imported",
+        actor=f"browser_ai:{browser_request.provider}",
+        message=f"Mastermind review report artifact #{artifact.id} imported with verdict {parsed.verdict}",
+        payload_json=_redact(json.dumps({
+            "agent_run_id": run.id,
+            "artifact_id": artifact.id,
+            "verdict": parsed.verdict,
+            "advisory_only": True,
+            "human_confirmation_required": True,
+            "no_auto_merge": True,
+        }, ensure_ascii=False)),
+    )
+    return MastermindReviewExecuteResponse(
+        task_id=task.id,
+        project_id=task.project_id,
+        status="succeeded",
+        agent_run_id=run.id,
+        artifact_id=artifact.id,
+        verdict=parsed.verdict,
+        summary=parsed.summary,
+        blocking_items=parsed.blocking_items,
+        recommended_actions=parsed.recommended_actions,
+        safety_notes=_execute_safety_notes(parsed),
+        raw_excerpt=excerpt,
+        persisted=True,
+        parse_errors=parsed.parse_errors,
+    )
 
 
 async def preview_packet(
@@ -286,6 +452,366 @@ def _required_output_contract() -> dict[str, Any]:
         "confidence": "high | medium | low",
         "review_scope_confirmed": True,
     }
+
+
+def parse_verdict(raw_answer: str) -> MastermindReviewParsedVerdict:
+    text = _redact(raw_answer)
+    data, parse_errors = _extract_structured_json(text)
+    if not isinstance(data, dict):
+        return MastermindReviewParsedVerdict(
+            verdict="invalid_review",
+            summary="Mastermind response did not contain structured JSON.",
+            safety_notes=[INVALID_REVIEW_SAFETY_NOTE],
+            parse_errors=parse_errors or ["structured_json_not_found"],
+        )
+    required = ["verdict", "summary", "blocking_items", "recommended_actions", "safety_notes", "confidence", "review_scope_confirmed"]
+    missing = [key for key in required if key not in data]
+    if missing:
+        return MastermindReviewParsedVerdict(
+            verdict="invalid_review",
+            summary=_redact(str(data.get("summary") or "Mastermind response is missing required fields.")),
+            safety_notes=[INVALID_REVIEW_SAFETY_NOTE],
+            parse_errors=[f"missing_required_fields:{','.join(missing)}"],
+        )
+    verdict = str(data.get("verdict") or "").strip()
+    parse_errors.extend(_validate_contract_types(data))
+    if verdict not in VERDICTS:
+        parse_errors.append(f"unknown_verdict:{verdict}")
+    if parse_errors:
+        return MastermindReviewParsedVerdict(
+            verdict="invalid_review",
+            summary=_redact(str(data.get("summary") or "Mastermind response failed schema validation.")),
+            blocking_items=_list_of_dicts(data.get("blocking_items")),
+            recommended_actions=_list_value(data.get("recommended_actions")),
+            safety_notes=_list_value(data.get("safety_notes")) + [INVALID_REVIEW_SAFETY_NOTE],
+            confidence=_confidence(data.get("confidence")),
+            review_scope_confirmed=bool(data.get("review_scope_confirmed")),
+            parse_errors=parse_errors,
+        )
+    safety_notes = [_redact(str(note)) for note in _list_value(data.get("safety_notes"))]
+    if _authority_confused(text):
+        return MastermindReviewParsedVerdict(
+            verdict="needs_human",
+            summary=_redact(str(data.get("summary") or "Mastermind response confused advisory review authority.")),
+            blocking_items=_list_of_dicts(data.get("blocking_items")),
+            recommended_actions=_list_value(data.get("recommended_actions")),
+            safety_notes=safety_notes + [
+                "Mastermind response mentioned approve, merge, deploy, or rework authority; human confirmation is required.",
+            ],
+            confidence=_confidence(data.get("confidence")),
+            review_scope_confirmed=bool(data.get("review_scope_confirmed")),
+        )
+    return MastermindReviewParsedVerdict(
+        verdict=verdict,
+        summary=_redact(str(data.get("summary") or "")),
+        blocking_items=_list_of_dicts(data.get("blocking_items")),
+        recommended_actions=[_redact(str(item)) for item in _list_value(data.get("recommended_actions"))],
+        safety_notes=safety_notes,
+        confidence=_confidence(data.get("confidence")),
+        review_scope_confirmed=bool(data.get("review_scope_confirmed")),
+    )
+
+
+def _review_prompt(preview: MastermindReviewPacketPreviewResponse) -> str:
+    body = {
+        "packet_type": preview.packet_type,
+        "task_id": preview.task_id,
+        "project_id": preview.project_id,
+        "packet": preview.packet,
+        "source_refs": [ref.model_dump() for ref in preview.source_refs],
+        "redaction_status": preview.redaction_status.model_dump(),
+        "read_only": True,
+        "persisted": False,
+        "advisory_only": True,
+        "human_confirmation_required": True,
+        "no_auto_merge": True,
+    }
+    return _redact("\n".join([
+        "You are the Browser AI GPT mastermind reviewer.",
+        "Review the supplied Mastermind Review Packet.",
+        "Return structured JSON only. Do not wrap the JSON in prose.",
+        _review_instruction(),
+        "Required output contract:",
+        json.dumps(_required_output_contract(), ensure_ascii=False, indent=2),
+        "Mastermind Review Packet:",
+        json.dumps(body, ensure_ascii=False, indent=2, default=str),
+    ]))
+
+
+def _browser_request(
+    task: Task,
+    project: Project,
+    body: MastermindReviewExecuteRequest,
+    prompt: str,
+) -> BrowserAiRequest:
+    options = body.browser_ai
+    return BrowserAiRequest(
+        project_id=project.id,
+        task_id=task.id,
+        provider=options.provider_profile,
+        target_url=options.target_url,
+        prompt_source="custom_prompt",
+        custom_prompt=prompt,
+        input_selector=options.prompt_selector,
+        send_selector=options.submit_selector,
+        response_selector=options.response_selector,
+        scroll_container_selector=options.scroll_container_selector,
+        copy_button_selector=options.copy_button_selector,
+        login_hint_selector=options.login_hint_selector,
+        timeout_seconds=options.stable_response_timeout_seconds,
+        stable_polls=options.stable_polls,
+        stable_interval_ms=options.stable_interval_ms,
+    )
+
+
+async def _find_or_create_mastermind_agent(db: AsyncSession, provider: str) -> AgentProfile:
+    result = await db.execute(
+        select(AgentProfile).where(
+            AgentProfile.provider == "browser_ai",
+            AgentProfile.agent_type == "mastermind_review",
+            AgentProfile.name == f"browser-ai-mastermind-{provider}",
+        )
+    )
+    agent = result.scalar_one_or_none()
+    if agent:
+        return agent
+    agent = AgentProfile(
+        name=f"browser-ai-mastermind-{provider}",
+        agent_type="mastermind_review",
+        provider="browser_ai",
+        model_name=provider,
+    )
+    db.add(agent)
+    await db.flush()
+    await db.refresh(agent)
+    return agent
+
+
+async def _create_mastermind_run(
+    db: AsyncSession,
+    task: Task,
+    agent: AgentProfile,
+    request: BrowserAiRequest,
+    prompt_hash: str,
+) -> AgentRun:
+    run = AgentRun(
+        task_id=task.id,
+        project_id=task.project_id,
+        agent_id=agent.id,
+        run_type="mastermind_review",
+        status=AgentRunStatus.RUNNING.value,
+        input_prompt=f"Mastermind Review prompt redacted; prompt_hash={prompt_hash}; advisory_only=true",
+        started_at=datetime.now(timezone.utc),
+        raw_result_json=_redact(json.dumps({
+            "provider": request.provider,
+            "prompt_source": "mastermind_review_packet",
+            "prompt_hash": prompt_hash,
+            "browser_opened": True,
+            "advisory_only": True,
+            "no_auto_merge": True,
+        }, ensure_ascii=False)),
+    )
+    db.add(run)
+    await db.flush()
+    await db.refresh(run)
+    return run
+
+
+async def _fail_run(
+    db: AsyncSession,
+    task: Task,
+    run: AgentRun,
+    provider: str,
+    event_type: str,
+    reason: str,
+) -> None:
+    run.status = AgentRunStatus.FAILED.value
+    run.error_message = _redact(reason)
+    run.output_summary = _short(reason, 1000)
+    run.finished_at = datetime.now(timezone.utc)
+    run.raw_result_json = _redact(json.dumps({
+        "status": "failed",
+        "failure_reason": reason,
+        "advisory_only": True,
+        "human_confirmation_required": True,
+        "no_auto_merge": True,
+    }, ensure_ascii=False))
+    await db.flush()
+    await create_event(
+        db,
+        task_id=task.id,
+        event_type=event_type,
+        actor=f"browser_ai:{provider}",
+        message=f"Mastermind review failed for AgentRun #{run.id}: {_short(reason, 500)}",
+        payload_json=_redact(json.dumps({
+            "agent_run_id": run.id,
+            "failure_reason": reason,
+            "advisory_only": True,
+            "no_auto_merge": True,
+        }, ensure_ascii=False)),
+    )
+
+
+def _failed_response(task: Task, run_id: int, reason: str) -> MastermindReviewExecuteResponse:
+    return MastermindReviewExecuteResponse(
+        task_id=task.id,
+        project_id=task.project_id,
+        status="failed",
+        agent_run_id=run_id,
+        artifact_id=None,
+        failure_reason=_redact(reason),
+        persisted=False,
+    )
+
+
+def _review_artifact(
+    *,
+    task: Task,
+    run: AgentRun,
+    request: MastermindReviewExecuteRequest,
+    parsed: MastermindReviewParsedVerdict,
+    raw_excerpt: str,
+    raw_truncated: bool,
+    preview: MastermindReviewPacketPreviewResponse,
+) -> TaskArtifact:
+    payload = _redact_jsonable({
+        "artifact_type": REPORT_ARTIFACT_TYPE,
+        "task_id": task.id,
+        "project_id": task.project_id,
+        "pr_url": request.packet.pr_url,
+        "pr_number": request.packet.pr_number,
+        "head_commit": request.packet.head_commit,
+        "base_commit": request.packet.base_commit,
+        "verdict": parsed.verdict,
+        "summary": parsed.summary,
+        "blocking_items": parsed.blocking_items,
+        "recommended_actions": parsed.recommended_actions,
+        "safety_notes": _execute_safety_notes(parsed),
+        "raw_excerpt": raw_excerpt,
+        "redaction_status": {
+            "redaction_applied": True,
+            "truncated": raw_truncated,
+            "max_chars": RAW_EXCERPT_MAX_CHARS,
+        },
+        "source_agent_run_ids": [run.id],
+        "source_artifact_ids": [],
+        "source_timeline_event_ids": [],
+        "source_evidence_ids": [ref.id for ref in preview.source_refs if ref.id is not None],
+        "read_only": True,
+        "persisted": True,
+        "advisory_only": True,
+        "human_confirmation_required": True,
+        "no_auto_merge": True,
+        "parse_errors": parsed.parse_errors,
+    })
+    content = json.dumps(payload, ensure_ascii=False, default=str)
+    data = content.encode("utf-8")
+    return TaskArtifact(
+        task_id=task.id,
+        artifact_type=REPORT_ARTIFACT_TYPE,
+        content=content,
+        filename=f"mastermind_review_run_{run.id}_report.json",
+        size_bytes=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        is_truncated=raw_truncated,
+        metadata_json=json.dumps({
+            "type": REPORT_ARTIFACT_TYPE,
+            "source": "mastermind_review",
+            "provider": "browser_ai",
+            "role": "mastermind_review",
+            "agent_run_id": run.id,
+            "status": parsed.verdict,
+            "summary": parsed.summary,
+            "safety_notes": parsed.safety_notes,
+            "advisory_only": True,
+            "human_confirmation_required": True,
+            "no_auto_merge": True,
+            "read_only": True,
+            "persisted": True,
+            "truncated": raw_truncated,
+        }, ensure_ascii=False, default=str),
+    )
+
+
+def _execute_safety_notes(parsed: MastermindReviewParsedVerdict) -> list[str]:
+    combined = [_redact(str(note)) for note in parsed.safety_notes]
+    for note in EXECUTE_SAFETY_NOTES:
+        redacted = _redact(note)
+        if redacted not in combined:
+            combined.append(redacted)
+    return combined
+
+
+def _extract_structured_json(text: str) -> tuple[dict[str, Any] | None, list[str]]:
+    errors: list[str] = []
+    for candidate in _json_candidates(text):
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            errors.append(f"json_decode_error:{exc.msg}")
+            continue
+        if isinstance(data, dict):
+            return data, []
+        errors.append("json_root_not_object")
+    return None, errors
+
+
+def _json_candidates(text: str) -> list[str]:
+    candidates: list[str] = []
+    for match in re.finditer(r"```(?:json)?\s*", text, flags=re.IGNORECASE):
+        start = match.end()
+        end = text.find("```", start)
+        if end >= 0:
+            candidates.append(text[start:end].strip())
+    stripped = text.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        candidates.append(stripped)
+    return candidates
+
+
+def _validate_contract_types(data: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(data.get("blocking_items"), list):
+        errors.append("blocking_items_not_array")
+    if not isinstance(data.get("recommended_actions"), list):
+        errors.append("recommended_actions_not_array")
+    if not isinstance(data.get("safety_notes"), list):
+        errors.append("safety_notes_not_array")
+    if _confidence(data.get("confidence")) not in CONFIDENCES:
+        errors.append("invalid_confidence")
+    if not isinstance(data.get("review_scope_confirmed"), bool):
+        errors.append("review_scope_confirmed_not_boolean")
+    return errors
+
+
+def _list_value(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [_redact_jsonable(item) for item in value if isinstance(item, dict)]
+
+
+def _confidence(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in CONFIDENCES else "low"
+
+
+def _authority_confused(text: str) -> bool:
+    return bool(AUTHORITY_CONFUSED_PATTERN.search(text or ""))
+
+
+def _raw_excerpt(text: str, limit: int) -> tuple[str, bool]:
+    clean = _redact(text)
+    if len(clean) <= limit:
+        return clean, False
+    return clean[:limit].rstrip() + "\n...[truncated]", True
+
+
+def _hash_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 def _apply_packet_budget(packet: dict[str, Any], budget: int) -> tuple[dict[str, Any], bool]:
