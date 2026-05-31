@@ -5,7 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
 from app.schemas.common import ApiEnvelope
-from app.schemas.mastermind_review import MastermindReviewExecuteRequest, MastermindReviewPacketPreviewRequest
+from app.schemas.mastermind_review import (
+    MastermindReviewExecuteRequest,
+    MastermindReviewGatePreviewRequest,
+    MastermindReviewPacketPreviewRequest,
+)
 from app.services import mastermind_review_service
 
 
@@ -31,3 +35,13 @@ async def execute_mastermind_review(
 ) -> ApiEnvelope:
     result = await mastermind_review_service.execute_review(db, task_id, body)
     return ApiEnvelope(data=result.model_dump(), message="Mastermind Review execute trial finished")
+
+
+@router.post("/api/tasks/{task_id}/mastermind-review/gate-preview")
+async def preview_mastermind_review_gate(
+    task_id: int,
+    body: MastermindReviewGatePreviewRequest,
+    db: SessionDep,
+) -> ApiEnvelope:
+    result = await mastermind_review_service.preview_gate(db, task_id, body)
+    return ApiEnvelope(data=result.model_dump(), message="Controlled Mastermind Gate preview generated")
