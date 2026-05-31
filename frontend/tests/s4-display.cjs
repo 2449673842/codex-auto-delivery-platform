@@ -1337,6 +1337,7 @@ async function testMastermindReviewPanel(page, task) {
   log('\n========== S24.1.3 Mastermind Review UI ==========')
   const previewCounter = { count: 0 }
   const executeCounter = { count: 0 }
+  const gateCounter = { count: 0 }
   const timelineCounter = { count: 0 }
   const evidenceCounter = { count: 0 }
   await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
@@ -1357,6 +1358,7 @@ async function testMastermindReviewPanel(page, task) {
     200,
     previewCounter,
     executeCounter,
+    gateCounter,
   )
   await page.goto(`${FE}/tasks/${task.id}`, { waitUntil: 'networkidle', timeout: 15000 })
   await page.waitForTimeout(500)
@@ -1375,6 +1377,26 @@ async function testMastermindReviewPanel(page, task) {
     ['No GitHub / Sonar platform query', 'S24.1.3-12 no GitHub Sonar query label shown'],
     ['Preview Mastermind Review Packet', 'S24.1.3-13 preview button shown'],
     ['Run Browser AI Mastermind Review', 'S24.1.3-14 execute button shown'],
+    ['Controlled Mastermind Gate', 'S24.1.6-1 gate panel shown'],
+    ['Controlled Gate is read-only', 'S24.1.6-2 read-only safety shown'],
+    ['Advisory only', 'S24.1.6-3 advisory safety shown'],
+    ['Human confirmation required', 'S24.1.6-4 human confirmation safety shown'],
+    ['No auto approve', 'S24.1.6-5 no approve safety shown'],
+    ['No auto merge', 'S24.1.6-6 no merge safety shown'],
+    ['No auto deploy', 'S24.1.6-7 no deploy safety shown'],
+    ['No auto rework', 'S24.1.6-8 no rework safety shown'],
+    ['No GitHub / Sonar platform query', 'S24.1.6-9 no GitHub Sonar query safety shown'],
+    ['No Browser AI execution', 'S24.1.6-10 no Browser AI execution safety shown'],
+    ['No provider call', 'S24.1.6-11 no provider call safety shown'],
+    ['No repository writes', 'S24.1.6-12 no repository writes safety shown'],
+    ['Preview Controlled Gate', 'S24.1.6-13 gate preview button shown'],
+    ['gate_not_ready', 'S24.1.6-14 gate_not_ready taxonomy shown'],
+    ['gate_needs_human', 'S24.1.6-15 gate_needs_human taxonomy shown'],
+    ['gate_request_changes', 'S24.1.6-16 gate_request_changes taxonomy shown'],
+    ['gate_advisory_approved', 'S24.1.6-17 gate_advisory_approved taxonomy shown'],
+    ['gate_invalid_review', 'S24.1.6-18 gate_invalid_review taxonomy shown'],
+    ['gate_blocked_by_safety', 'S24.1.6-19 gate_blocked_by_safety taxonomy shown'],
+    ['gate_stale_review', 'S24.1.6-20 gate_stale_review taxonomy shown'],
   ])
   await page.locator('.mastermind-review-panel input[placeholder="https://github.com/org/repo/pull/64"]').fill('https://github.com/2449673842/codex-auto-delivery-platform/pull/64')
   await page.locator('.mastermind-review-panel input[placeholder="64"]').fill('64')
@@ -1429,6 +1451,31 @@ async function testMastermindReviewPanel(page, task) {
   ])
   if (timelineCounter.count >= 2 && evidenceCounter.count >= 2) pass('S24.1.3-46 execute refreshes Timeline and Evidence Board')
   else fail('S24.1.3-46 execute refresh counts', `timeline=${timelineCounter.count}, evidence=${evidenceCounter.count}`)
+  await page.locator('.mastermind-review-panel input[placeholder="current PR head sha"]').fill('f193b7f3d36c31ce90f733e1a3ed5a61cec345f4')
+  await page.locator('.mastermind-review-panel').getByRole('button', { name: 'Preview Controlled Gate' }).click()
+  await page.waitForTimeout(300)
+  if (gateCounter.count === 1) pass('S24.1.6-21 gate-preview API called')
+  else fail('S24.1.6-21 gate-preview API call count', gateCounter.count)
+  await checkTexts(page, [
+    ['gate_status: gate_advisory_approved', 'S24.1.6-22 gate status shown'],
+    ['summary: Controlled gate ready for human confirmation.', 'S24.1.6-23 gate summary shown'],
+    ['blocking_reasons: -', 'S24.1.6-24 blocking reasons shown'],
+    ['recommended_actions: Human confirms before merge.', 'S24.1.6-25 recommended actions shown'],
+    ['safety_notes: Gate preview is read-only; no automatic merge.', 'S24.1.6-26 safety notes shown'],
+    ['source_artifact_id: 6402', 'S24.1.6-27 source artifact shown'],
+    ['source_agent_run_id: 6401', 'S24.1.6-28 source run shown'],
+    ['head_commit: f193b7f3d36c31ce90f733e1a3ed5a61cec345f4', 'S24.1.6-29 head commit shown'],
+    ['reviewed_head_commit: f193b7f3d36c31ce90f733e1a3ed5a61cec345f4', 'S24.1.6-30 reviewed head shown'],
+    ['human_confirmation_required=true', 'S24.1.6-31 human confirmation true shown'],
+    ['advisory_only=true', 'S24.1.6-32 advisory true shown'],
+    ['no_auto_merge=true', 'S24.1.6-33 no auto merge true shown'],
+    ['read_only=true', 'S24.1.6-34 read only true shown'],
+    ['persisted=false', 'S24.1.6-35 persisted false shown'],
+    ['gate_advisory_approved = ready for human confirmation', 'S24.1.6-36 advisory approved wording shown'],
+  ])
+  await checkBodyIncludes(page, 'gate_request_changes: request changes before continuing.', 'S24.1.6-37 request changes wording present')
+  await checkBodyIncludes(page, 'gate_blocked_by_safety: safety boundary blocked.', 'S24.1.6-38 safety blocked wording present')
+  await checkBodyIncludes(page, 'gate_stale_review: reviewed head commit does not match current head commit.', 'S24.1.6-39 stale review wording present')
   await checkUnsafeDeliveryAbsent(page, 'S24.1.3-47')
   await checkBodyExcludes(page, 'Auto rework', 'S24.1.3-48 no unsafe rework action text')
   await clearMastermindReviewRoutes(page)
@@ -1443,6 +1490,8 @@ async function testMastermindReviewApiFailure(page, task) {
   await setProjectMemoryRoutes(page, projectMemoryPayload(task.project_id), projectMemorySummaryPayload(task.project_id), 200)
   await setEvidenceSummaryRoutes(page, timelinePayload(task.id), evidenceBoardPayload(task.id), 200)
   await setMastermindReviewRoutes(page, { detail: 'mastermind preview unavailable' }, mastermindExecutePayload(task.id, task.project_id), 500)
+  await page.unroute('**/api/tasks/*/mastermind-review/gate-preview').catch(() => {})
+  await page.route('**/api/tasks/*/mastermind-review/gate-preview', route => fulfillJson(route, { detail: 'gate preview unavailable' }, 500))
   await page.goto(`${FE}/tasks/${task.id}`, { waitUntil: 'networkidle', timeout: 15000 })
   await page.waitForTimeout(500)
   await page.locator('.mastermind-review-panel').getByRole('button', { name: 'Preview Mastermind Review Packet' }).click()
@@ -1450,6 +1499,10 @@ async function testMastermindReviewApiFailure(page, task) {
   await checkT(page, 'Mastermind Review', 'S24.1.3-51 panel remains visible on API failure')
   await checkBodyIncludes(page, 'unavailable', 'S24.1.3-52 API failure error shown')
   await checkT(page, 'Agent 运行', 'S24.1.3-53 existing TaskDetail modules remain visible')
+  await page.locator('.mastermind-review-panel').getByRole('button', { name: 'Preview Controlled Gate' }).click()
+  await page.waitForTimeout(300)
+  await checkBodyIncludes(page, 'gate preview unavailable', 'S24.1.6-40 gate API failure error shown')
+  await checkT(page, 'Agent 运行', 'S24.1.6-41 existing TaskDetail modules remain visible after gate failure')
   await clearMastermindReviewRoutes(page)
 }
 
@@ -1670,10 +1723,14 @@ async function setMastermindReviewRoutes(
   status = 200,
   previewCounter = null,
   executeCounter = null,
+  gateCounter = null,
+  gateData = null,
+  gateStatus = 200,
 ) {
   await clearMastermindReviewRoutes(page)
   await page.route('**/api/tasks/*/mastermind-review/packet-preview', route => fulfillJson(route, previewData, status, previewCounter))
   await page.route('**/api/tasks/*/mastermind-review/execute', route => fulfillJson(route, executeData, status, executeCounter))
+  await page.route('**/api/tasks/*/mastermind-review/gate-preview', route => fulfillJson(route, gateData || mastermindGatePayload(), gateStatus, gateCounter))
 }
 
 async function setBrowserAiProfilesRoute(page) {
@@ -1742,6 +1799,7 @@ async function clearProjectMemoryRoutes(page) {
 async function clearMastermindReviewRoutes(page) {
   await page.unroute('**/api/tasks/*/mastermind-review/packet-preview').catch(() => {})
   await page.unroute('**/api/tasks/*/mastermind-review/execute').catch(() => {})
+  await page.unroute('**/api/tasks/*/mastermind-review/gate-preview').catch(() => {})
 }
 
 async function clearTaskDetailMockRoutes(page) {
@@ -2276,6 +2334,30 @@ function mastermindExecutePayload(taskId, projectId, overrides = {}) {
     human_confirmation_required: true,
     no_auto_merge: true,
     parse_errors: [],
+    ...overrides,
+  }, message: 'ok' }
+}
+
+function mastermindGatePayload(taskId = 1, projectId = 1, overrides = {}) {
+  return { success: true, data: {
+    task_id: taskId,
+    project_id: projectId,
+    gate_status: 'gate_advisory_approved',
+    source_artifact_id: 6402,
+    source_agent_run_id: 6401,
+    pr_url: 'https://github.com/2449673842/codex-auto-delivery-platform/pull/64',
+    pr_number: 64,
+    head_commit: 'f193b7f3d36c31ce90f733e1a3ed5a61cec345f4',
+    reviewed_head_commit: 'f193b7f3d36c31ce90f733e1a3ed5a61cec345f4',
+    summary: 'Controlled gate ready for human confirmation.',
+    blocking_reasons: [],
+    recommended_actions: ['Human confirms before merge.'],
+    human_confirmation_required: true,
+    advisory_only: true,
+    no_auto_merge: true,
+    read_only: true,
+    persisted: false,
+    safety_notes: ['Gate preview is read-only; no automatic merge.'],
     ...overrides,
   }, message: 'ok' }
 }
