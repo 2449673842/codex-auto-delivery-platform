@@ -308,6 +308,10 @@ MCP 仍然保留，但它主要解决“外部 AI 读取上下文”，不是直
 - S24.1.1：Mastermind Review Packet Preview API
 - S24.1.2：Browser AI Mastermind Review Execute
 - S24.1.3：TaskDetail Mastermind Review UI + Evidence Board integration
+- S24.1.4：Controlled Mastermind Gate Design
+- S24.1.5：Controlled Mastermind Gate Preview API
+- S24.1.6：TaskDetail Gate UI
+- S24.1.7：Browser AI Provider Pool / Multi-window Queue Design
 - S24.2：Read-only MCP resources/tools
 - S24.3：Codex skill adapter docs/example
 - S24.4：Claude Desktop / Cursor local integration example
@@ -378,6 +382,38 @@ S24.1.0 明确不做：
 - 不保存账号 / 密码 / cookie / session
 - 不绕过登录 / 验证码
 - 不把网页 AI 回复当作不可质疑事实
+
+S24.1.4 Controlled Mastermind Gate 继续保持设计优先：
+
+- 只设计如何读取已有 `mastermind_review_report`
+- 只设计 gate status taxonomy 和 decision rules
+- 只设计 human confirmation 前的只读门禁状态
+- 不实现 gate evaluator
+- 不新增 gate API
+- 不新增 UI
+- 不新增数据库
+- 不读取 GitHub / Sonar
+- 不打开 Browser AI
+- 不调用 provider
+- 不写真实仓库
+- 不创建 PR
+- 不 approve PR
+- 不 merge PR
+- 不 deploy
+- 不自动返工
+- 不把 Browser AI verdict 当作最终授权
+
+S24.1.4 gate status 草案：
+
+- `gate_not_ready`
+- `gate_needs_human`
+- `gate_request_changes`
+- `gate_advisory_approved`
+- `gate_invalid_review`
+- `gate_blocked_by_safety`
+- `gate_stale_review`
+
+其中 `gate_advisory_approved` 只能表示主脑建议可以继续，仍然需要人工确认，不能表示平台允许自动 merge。
 
 S24.0 只做设计文档，不新增 MCP server、stdio transport、HTTP / SSE transport、Codex skill adapter、后端 API、前端 UI、数据库或业务代码。
 
