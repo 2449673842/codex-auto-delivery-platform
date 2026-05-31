@@ -17,6 +17,8 @@ import type {
   RepairVerificationResultRequest,
   TimelineResponse, EvidenceBoardResponse,
   ProjectMemoryResponse, ProjectMemorySummaryResponse,
+  MastermindReviewPacketPreviewRequest, MastermindReviewPacketPreviewResponse,
+  MastermindReviewExecuteRequest, MastermindReviewExecuteResponse,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -265,6 +267,23 @@ export async function fetchProjectMemory(projectId: number): Promise<ProjectMemo
 
 export async function fetchProjectMemorySummary(projectId: number): Promise<ProjectMemorySummaryResponse> {
   const { data } = await client.get(`/projects/${projectId}/memory/summary`)
+  return data.data
+}
+
+// ── Mastermind Review / advisory Browser AI review trial ──
+export async function previewMastermindReviewPacket(
+  taskId: number,
+  body: MastermindReviewPacketPreviewRequest,
+): Promise<MastermindReviewPacketPreviewResponse> {
+  const { data } = await client.post(`/tasks/${taskId}/mastermind-review/packet-preview`, body)
+  return data.data
+}
+
+export async function executeMastermindReview(
+  taskId: number,
+  body: MastermindReviewExecuteRequest,
+): Promise<MastermindReviewExecuteResponse> {
+  const { data } = await client.post(`/tasks/${taskId}/mastermind-review/execute`, body)
   return data.data
 }
 

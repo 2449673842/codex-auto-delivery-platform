@@ -1333,6 +1333,126 @@ async function testProjectMemoryApiFailure(page, task) {
   await clearProjectMemoryRoutes(page)
 }
 
+async function testMastermindReviewPanel(page, task) {
+  log('\n========== S24.1.3 Mastermind Review UI ==========')
+  const previewCounter = { count: 0 }
+  const executeCounter = { count: 0 }
+  const timelineCounter = { count: 0 }
+  const evidenceCounter = { count: 0 }
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(task.id, task.project_id), 200)
+  await setProjectMemoryRoutes(page, projectMemoryPayload(task.project_id), projectMemorySummaryPayload(task.project_id), 200)
+  await setEvidenceSummaryRoutes(
+    page,
+    timelinePayload(task.id),
+    evidenceBoardPayload(task.id),
+    200,
+    timelineCounter,
+    evidenceCounter,
+  )
+  await setMastermindReviewRoutes(
+    page,
+    mastermindPreviewPayload(task.id, task.project_id),
+    mastermindExecutePayload(task.id, task.project_id),
+    200,
+    previewCounter,
+    executeCounter,
+  )
+  await page.goto(`${FE}/tasks/${task.id}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await checkTexts(page, [
+    ['Mastermind Review', 'S24.1.3-1 panel shown'],
+    ['Mastermind review is advisory only', 'S24.1.3-2 advisory label shown'],
+    ['Human confirmation required', 'S24.1.3-3 human confirmation label shown'],
+    ['No auto approve', 'S24.1.3-4 no approve label shown'],
+    ['No auto merge', 'S24.1.3-5 no merge label shown'],
+    ['No auto deploy', 'S24.1.3-6 no deploy label shown'],
+    ['No auto rework', 'S24.1.3-7 no rework label shown'],
+    ['Browser AI uses visible user-authorized UI only', 'S24.1.3-8 visible UI label shown'],
+    ['No account/password/cookie/session storage', 'S24.1.3-9 no credential storage label shown'],
+    ['No captcha/login bypass', 'S24.1.3-10 no bypass label shown'],
+    ['No repository writes', 'S24.1.3-11 no repository writes label shown'],
+    ['No GitHub / Sonar platform query', 'S24.1.3-12 no GitHub Sonar query label shown'],
+    ['Preview Mastermind Review Packet', 'S24.1.3-13 preview button shown'],
+    ['Run Browser AI Mastermind Review', 'S24.1.3-14 execute button shown'],
+  ])
+  await page.locator('.mastermind-review-panel input[placeholder="https://github.com/org/repo/pull/64"]').fill('https://github.com/2449673842/codex-auto-delivery-platform/pull/64')
+  await page.locator('.mastermind-review-panel input[placeholder="64"]').fill('64')
+  await page.locator('.mastermind-review-panel input[placeholder="full head sha"]').fill('f193b7f3d36c31ce90f733e1a3ed5a61cec345f4')
+  await page.locator('.mastermind-review-panel input[placeholder="full base sha"]').fill('17464b6b2cbafd7e15870a04b924c6cd945b239c')
+  await page.locator('.mastermind-review-panel textarea[placeholder="one file per line, or comma separated"]').fill('frontend/src/pages/TaskDetailPage.vue\nfrontend/tests/s4-display.cjs')
+  await page.locator('.mastermind-review-panel textarea[placeholder="PR body text or excerpt"]').fill('S24.1.3 UI PR body with verification and safety boundary.')
+  await page.locator('.mastermind-review-panel input[placeholder="https://chatgpt.com/"]').fill('http://127.0.0.1:9999/mock-browser-ai')
+  await page.locator('.mastermind-review-panel input[placeholder="textarea[name=\'prompt\']"]').fill("textarea[name='prompt']")
+  await page.locator('.mastermind-review-panel input[placeholder="button[data-send]"]').fill('button[data-send]')
+  await page.locator('.mastermind-review-panel input[placeholder="[data-answer]"]').fill('[data-answer]')
+  await page.locator('.mastermind-review-panel').getByRole('button', { name: 'Preview Mastermind Review Packet' }).click()
+  await page.waitForTimeout(300)
+  if (previewCounter.count === 1) pass('S24.1.3-15 packet-preview API called')
+  else fail('S24.1.3-15 packet-preview API call count', previewCounter.count)
+  await checkTexts(page, [
+    ['packet_type: mastermind_review_packet', 'S24.1.3-16 packet type shown'],
+    ['PR number: 64', 'S24.1.3-17 PR number shown'],
+    ['targeted_backend_pytest: 9 passed', 'S24.1.3-18 verification shown'],
+    ['quality_gate: Passed', 'S24.1.3-19 Sonar shown'],
+    ['review_instruction', 'S24.1.3-25 review instruction detail shown'],
+    ['required_output_contract', 'S24.1.3-26 output contract detail shown'],
+    ['read_only=true', 'S24.1.3-27 preview read_only shown'],
+    ['persisted=false', 'S24.1.3-28 preview persisted shown'],
+    ['redaction_status: redaction_applied=true, truncated=false, max_chars=12000', 'S24.1.3-29 redaction status shown'],
+    ['Packet preview is read-only.', 'S24.1.3-30 safety note shown'],
+  ])
+  await checkBodyIncludes(page, 'task_summary: Task #', 'S24.1.3-20 task summary shown')
+  await checkBodyIncludes(page, 'evidence_board_summary: Evidence Board items:', 'S24.1.3-21 evidence summary shown')
+  await checkBodyIncludes(page, 'run_timeline_summary: Run Timeline items:', 'S24.1.3-22 timeline summary shown')
+  await checkBodyIncludes(page, 'project_memory_summary: memory_count=8', 'S24.1.3-23 project memory summary shown')
+  await checkBodyIncludes(page, 'handoff_context: Repair handoff summary', 'S24.1.3-24 handoff context shown')
+  await page.locator('.mastermind-review-panel').getByRole('button', { name: 'Run Browser AI Mastermind Review' }).click()
+  await page.waitForTimeout(500)
+  if (executeCounter.count === 1) pass('S24.1.3-31 execute API called')
+  else fail('S24.1.3-31 execute API call count', executeCounter.count)
+  await checkTexts(page, [
+    ['status: succeeded', 'S24.1.3-32 status shown'],
+    ['verdict: approved', 'S24.1.3-33 verdict shown'],
+    ['summary: Mastermind review approved as advisory only.', 'S24.1.3-34 summary shown'],
+    ['blocking_items: -', 'S24.1.3-35 blocking items shown'],
+    ['recommended_actions: Keep human confirmation before merge.', 'S24.1.3-36 recommended actions shown'],
+    ['safety_notes: Advisory only; no automatic merge.', 'S24.1.3-37 safety notes shown'],
+    ['raw_excerpt', 'S24.1.3-38 raw excerpt detail exists'],
+    ['agent_run_id: 6401', 'S24.1.3-39 agent run id shown'],
+    ['artifact_id: 6402', 'S24.1.3-40 artifact id shown'],
+    ['parse_errors: -', 'S24.1.3-41 parse errors shown'],
+    ['advisory_only=true', 'S24.1.3-42 advisory true shown'],
+    ['human_confirmation_required=true', 'S24.1.3-43 human confirmation true shown'],
+    ['no_auto_merge=true', 'S24.1.3-44 no auto merge true shown'],
+    ['Mastermind Review saved; AgentRun, artifacts, Timeline, and Evidence Board refreshed', 'S24.1.3-45 refresh status shown'],
+  ])
+  if (timelineCounter.count >= 2 && evidenceCounter.count >= 2) pass('S24.1.3-46 execute refreshes Timeline and Evidence Board')
+  else fail('S24.1.3-46 execute refresh counts', `timeline=${timelineCounter.count}, evidence=${evidenceCounter.count}`)
+  await checkUnsafeDeliveryAbsent(page, 'S24.1.3-47')
+  await checkBodyExcludes(page, 'Auto rework', 'S24.1.3-48 no unsafe rework action text')
+  await clearMastermindReviewRoutes(page)
+  await clearProjectMemoryRoutes(page)
+  await clearEvidenceSummaryRoutes(page)
+}
+
+async function testMastermindReviewApiFailure(page, task) {
+  log('\n========== S24.1.3 Mastermind Review API Failure ==========')
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(task.id, task.project_id), 200)
+  await setProjectMemoryRoutes(page, projectMemoryPayload(task.project_id), projectMemorySummaryPayload(task.project_id), 200)
+  await setEvidenceSummaryRoutes(page, timelinePayload(task.id), evidenceBoardPayload(task.id), 200)
+  await setMastermindReviewRoutes(page, { detail: 'mastermind preview unavailable' }, mastermindExecutePayload(task.id, task.project_id), 500)
+  await page.goto(`${FE}/tasks/${task.id}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await page.locator('.mastermind-review-panel').getByRole('button', { name: 'Preview Mastermind Review Packet' }).click()
+  await page.waitForTimeout(300)
+  await checkT(page, 'Mastermind Review', 'S24.1.3-51 panel remains visible on API failure')
+  await checkBodyIncludes(page, 'unavailable', 'S24.1.3-52 API failure error shown')
+  await checkT(page, 'Agent 运行', 'S24.1.3-53 existing TaskDetail modules remain visible')
+  await clearMastermindReviewRoutes(page)
+}
+
 async function openEvidenceSummaryPage(page, taskId, timelineCounter, evidenceCounter, boardPayload = evidenceBoardPayload(taskId)) {
   await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
   await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
@@ -1539,8 +1659,21 @@ async function setProjectMemoryRoutes(
   summaryCounter = null,
 ) {
   await clearProjectMemoryRoutes(page)
-  await page.route('**/api/projects/*/memory', route => fulfillJson(route, memoryData, status, memoryCounter))
   await page.route('**/api/projects/*/memory/summary', route => fulfillJson(route, summaryData, status, summaryCounter))
+  await page.route('**/api/projects/*/memory', route => fulfillJson(route, memoryData, status, memoryCounter))
+}
+
+async function setMastermindReviewRoutes(
+  page,
+  previewData,
+  executeData,
+  status = 200,
+  previewCounter = null,
+  executeCounter = null,
+) {
+  await clearMastermindReviewRoutes(page)
+  await page.route('**/api/tasks/*/mastermind-review/packet-preview', route => fulfillJson(route, previewData, status, previewCounter))
+  await page.route('**/api/tasks/*/mastermind-review/execute', route => fulfillJson(route, executeData, status, executeCounter))
 }
 
 async function setBrowserAiProfilesRoute(page) {
@@ -1606,6 +1739,11 @@ async function clearProjectMemoryRoutes(page) {
   await page.unroute('**/api/projects/*/memory/summary').catch(() => {})
 }
 
+async function clearMastermindReviewRoutes(page) {
+  await page.unroute('**/api/tasks/*/mastermind-review/packet-preview').catch(() => {})
+  await page.unroute('**/api/tasks/*/mastermind-review/execute').catch(() => {})
+}
+
 async function clearTaskDetailMockRoutes(page) {
   await clearDashboardRoutes(page)
   for (const routePattern of [
@@ -1630,6 +1768,7 @@ async function clearTaskDetailMockRoutes(page) {
   await clearRepairAttemptsRoutes(page)
   await clearEvidenceSummaryRoutes(page)
   await clearProjectMemoryRoutes(page)
+  await clearMastermindReviewRoutes(page)
 }
 
 async function fulfillJson(route, payload, status, counter) {
@@ -2050,6 +2189,95 @@ function projectMemoryItem(fields) {
     },
     ...fields,
   }
+}
+
+function mastermindPreviewPayload(taskId, projectId, overrides = {}) {
+  return { success: true, data: {
+    task_id: taskId,
+    project_id: projectId,
+    packet_type: 'mastermind_review_packet',
+    packet: {
+      pr: {
+        url: 'https://github.com/2449673842/codex-auto-delivery-platform/pull/64',
+        number: 64,
+        head_commit: 'f193b7f3d36c31ce90f733e1a3ed5a61cec345f4',
+        base_commit: '17464b6b2cbafd7e15870a04b924c6cd945b239c',
+        changed_files: ['frontend/src/pages/TaskDetailPage.vue', 'frontend/tests/s4-display.cjs'],
+        body: 'S24.1.3 UI PR body with verification and safety boundary.',
+      },
+      verification: {
+        targeted_backend_pytest: '9 passed',
+        full_backend_pytest: 'not_run_frontend_only',
+        compileall: 'not_run_frontend_only',
+        npm_build: 'passed',
+        frontend_smoke: 'passed',
+        git_diff_check: 'passed',
+      },
+      sonarcloud: {
+        quality_gate: 'Passed',
+        security_hotspots: 0,
+        duplication_on_new_code: '0.0%',
+        new_issues: 0,
+      },
+      safety_boundary_checklist: {
+        read_only_preview: true,
+        browser_ai_execution: false,
+        auto_merge: false,
+      },
+      task_summary: `Task #${taskId}: S24.1.3 TaskDetail Mastermind Review UI.`,
+      evidence_board_summary: 'Evidence Board items: mastermind_review_report can be surfaced after execute.',
+      run_timeline_summary: 'Run Timeline items: mastermind_review_submitted, response_received, report_imported.',
+      project_memory_summary: 'memory_count=8; memory_types=safety_policy, delivery_policy, verification_policy.',
+      handoff_context: 'Repair handoff summary and AI handoff context are available.',
+      review_instruction: 'Do not invent files, checks, or Sonar results. Advisory only.',
+      required_output_contract: {
+        verdict: 'approved | request_changes | needs_human | invalid_review',
+        summary: 'Short review summary.',
+        blocking_items: [],
+        recommended_actions: [],
+        safety_notes: [],
+        confidence: 'high | medium | low',
+        review_scope_confirmed: true,
+      },
+    },
+    source_refs: [
+      { source_type: 'task', id: taskId, path: null, note: 'task summary' },
+      { source_type: 'evidence_board', id: null, path: null, note: 'read-only evidence summary' },
+    ],
+    redaction_status: {
+      redaction_applied: true,
+      truncated: false,
+      max_chars: 12000,
+    },
+    read_only: true,
+    persisted: false,
+    safety_notes: ['Packet preview is read-only.', 'No GitHub / Sonar platform query.'],
+    ...overrides,
+  }, message: 'ok' }
+}
+
+function mastermindExecutePayload(taskId, projectId, overrides = {}) {
+  return { success: true, data: {
+    task_id: taskId,
+    project_id: projectId,
+    status: 'succeeded',
+    agent_run_id: 6401,
+    artifact_id: 6402,
+    verdict: 'approved',
+    summary: 'Mastermind review approved as advisory only.',
+    blocking_items: [],
+    recommended_actions: ['Keep human confirmation before merge.'],
+    safety_notes: ['Advisory only; no automatic merge.'],
+    raw_excerpt: '{"verdict":"approved","summary":"Mastermind review approved as advisory only."}',
+    failure_reason: '',
+    read_only: true,
+    persisted: true,
+    advisory_only: true,
+    human_confirmation_required: true,
+    no_auto_merge: true,
+    parse_errors: [],
+    ...overrides,
+  }, message: 'ok' }
 }
 
 function mcpToolsPayload() {
@@ -2522,6 +2750,8 @@ async function main() {
   await testEvidenceBoardFiltersDetails(page, task.id)
   await testProjectMemoryPanel(page, task)
   await testProjectMemoryApiFailure(page, task)
+  await testMastermindReviewPanel(page, task)
+  await testMastermindReviewApiFailure(page, task)
   await testMcpBridgePanel(page, task.id)
   await testApprovals(page)
   await testHumanRequired(page)
