@@ -112,3 +112,35 @@ class MastermindReviewExecuteResponse(BaseModel):
     human_confirmation_required: bool = True
     no_auto_merge: bool = True
     parse_errors: list[str] = Field(default_factory=list)
+
+
+class MastermindReviewGatePreviewRequest(BaseModel):
+    source_artifact_id: int | None = None
+    current_head_commit: str = ""
+    pr_url: str = ""
+    pr_number: int | None = None
+    verification_results: MastermindReviewVerificationResults = Field(
+        default_factory=MastermindReviewVerificationResults
+    )
+    sonarcloud: MastermindReviewSonarCloudSummary = Field(default_factory=MastermindReviewSonarCloudSummary)
+
+
+class MastermindReviewGatePreviewResponse(BaseModel):
+    task_id: int
+    project_id: int
+    gate_status: str
+    source_artifact_id: int | None = None
+    source_agent_run_id: int | None = None
+    pr_url: str = ""
+    pr_number: int | None = None
+    head_commit: str = ""
+    reviewed_head_commit: str = ""
+    summary: str = ""
+    blocking_reasons: list[str] = Field(default_factory=list)
+    recommended_actions: list[Any] = Field(default_factory=list)
+    human_confirmation_required: bool = True
+    advisory_only: bool = True
+    no_auto_merge: bool = True
+    read_only: bool = True
+    persisted: bool = False
+    safety_notes: list[str] = Field(default_factory=list)

@@ -19,6 +19,8 @@ from app.schemas.browser_ai import BrowserAiRequest
 from app.schemas.mastermind_review import (
     MastermindReviewExecuteRequest,
     MastermindReviewExecuteResponse,
+    MastermindReviewGatePreviewRequest,
+    MastermindReviewGatePreviewResponse,
     MastermindReviewPacketPreviewRequest,
     MastermindReviewPacketPreviewResponse,
     MastermindReviewParsedVerdict,
@@ -46,9 +48,24 @@ EXECUTE_SAFETY_NOTES = [
     "Approved verdicts do not authorize auto approve, merge, deploy, or rework.",
     "No .env, secret_ref, Project.root_path, account, password, cookie, or session value is read or stored.",
 ]
+GATE_PREVIEW_SAFETY_NOTES = [
+    "Controlled Mastermind Gate Preview API is read-only.",
+    "Gate status is advisory and requires human confirmation.",
+    "Request PR metadata, verification results, and SonarCloud summary are used as supplied; the platform does not query GitHub or Sonar.",
+    "No Browser AI execution, provider call, artifact write, PR, CI, Sonar, Deploy, approve, merge, or rework is performed.",
+    "No AgentRun, TaskArtifact, TaskEvent, DispatchBatch, DispatchJob, Project, or Task record is created or modified.",
+    "No .env, secret_ref, Project.root_path, account, password, cookie, or session value is read or returned.",
+]
 VERDICTS = ["approved", "request_changes", "needs_human", "invalid_review"]
 CONFIDENCES = {"high", "medium", "low"}
 REPORT_ARTIFACT_TYPE = "mastermind_review_report"
+GATE_STATUS_NOT_READY = "gate_not_ready"
+GATE_STATUS_NEEDS_HUMAN = "gate_needs_human"
+GATE_STATUS_REQUEST_CHANGES = "gate_request_changes"
+GATE_STATUS_ADVISORY_APPROVED = "gate_advisory_approved"
+GATE_STATUS_INVALID_REVIEW = "gate_invalid_review"
+GATE_STATUS_BLOCKED_BY_SAFETY = "gate_blocked_by_safety"
+GATE_STATUS_STALE_REVIEW = "gate_stale_review"
 RAW_EXCERPT_MAX_CHARS = 4000
 INVALID_REVIEW_SAFETY_NOTE = "Invalid review output; human review is required."
 AUTHORITY_CONFUSED_PATTERN = re.compile(
@@ -57,6 +74,113 @@ AUTHORITY_CONFUSED_PATTERN = re.compile(
     r"platform\s+(approved|merged|deployed|reworked))\b",
     re.IGNORECASE,
 )
+
+
+async def preview_gate(
+    db: AsyncSession,
+    task_id: int,
+    body: MastermindReviewGatePreviewRequest,
+) -> MastermindReviewGatePreviewResponse:
+    task = await db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    project = await db.get(Project, task.project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="project_not_found")
+
+    artifact = await _gate_source_artifact(db, task.id, body.source_artifact_id)
+    if not artifact:
+        return _gate_response(
+            task=task,
+            artifact=None,
+            report={},
+            body=body,
+            gate_status=GATE_STATUS_NOT_READY,
+            summary="No mastermind_review_report artifact is available for this task.",
+            blocking_reasons=["No mastermind_review_report artifact is available."],
+        )
+
+    report = _loads_dict(artifact.content)
+    safety_blockers = _gate_safety_blockers(report)
+    if safety_blockers:
+        return _gate_response(
+            task=task,
+            artifact=artifact,
+            report=report,
+            body=body,
+            gate_status=GATE_STATUS_BLOCKED_BY_SAFETY,
+            summary=_gate_summary(report, "Mastermind review report crossed a safety boundary."),
+            blocking_reasons=safety_blockers,
+        )
+
+    stale_reasons = _gate_stale_reasons(report, body)
+    if stale_reasons:
+        return _gate_response(
+            task=task,
+            artifact=artifact,
+            report=report,
+            body=body,
+            gate_status=GATE_STATUS_STALE_REVIEW,
+            summary=_gate_summary(report, "Mastermind review report is stale."),
+            blocking_reasons=stale_reasons,
+        )
+
+    invalid_reasons = _gate_invalid_reasons(report)
+    if invalid_reasons:
+        return _gate_response(
+            task=task,
+            artifact=artifact,
+            report=report,
+            body=body,
+            gate_status=GATE_STATUS_INVALID_REVIEW,
+            summary=_gate_summary(report, "Mastermind review report is invalid."),
+            blocking_reasons=invalid_reasons,
+        )
+
+    blocker_reasons = _gate_blocker_reasons(report)
+    if blocker_reasons:
+        return _gate_response(
+            task=task,
+            artifact=artifact,
+            report=report,
+            body=body,
+            gate_status=GATE_STATUS_REQUEST_CHANGES,
+            summary=_gate_summary(report, "Mastermind review requested changes."),
+            blocking_reasons=blocker_reasons,
+        )
+
+    human_reasons = _gate_human_reasons(report, body)
+    if human_reasons:
+        return _gate_response(
+            task=task,
+            artifact=artifact,
+            report=report,
+            body=body,
+            gate_status=GATE_STATUS_NEEDS_HUMAN,
+            summary=_gate_summary(report, "Human judgment is required before continuing."),
+            blocking_reasons=human_reasons,
+        )
+
+    if str(report.get("verdict") or "").strip() == "approved":
+        return _gate_response(
+            task=task,
+            artifact=artifact,
+            report=report,
+            body=body,
+            gate_status=GATE_STATUS_ADVISORY_APPROVED,
+            summary=_gate_summary(report, "Mastermind review is advisory approved; human confirmation is required."),
+            blocking_reasons=[],
+        )
+
+    return _gate_response(
+        task=task,
+        artifact=artifact,
+        report=report,
+        body=body,
+        gate_status=GATE_STATUS_NEEDS_HUMAN,
+        summary=_gate_summary(report, "Mastermind review did not produce a clean advisory approval."),
+        blocking_reasons=[f"verdict {report.get('verdict') or 'missing'} requires human judgment."],
+    )
 
 
 async def execute_review(
@@ -740,6 +864,172 @@ def _execute_safety_notes(parsed: MastermindReviewParsedVerdict) -> list[str]:
         if redacted not in combined:
             combined.append(redacted)
     return combined
+
+
+async def _gate_source_artifact(
+    db: AsyncSession,
+    task_id: int,
+    source_artifact_id: int | None,
+) -> TaskArtifact | None:
+    if source_artifact_id is not None:
+        artifact = await db.get(TaskArtifact, source_artifact_id)
+        if not artifact:
+            raise HTTPException(status_code=404, detail="source_artifact_not_found")
+        if artifact.task_id != task_id:
+            raise HTTPException(status_code=400, detail="source_artifact_task_mismatch")
+        if artifact.artifact_type != REPORT_ARTIFACT_TYPE:
+            raise HTTPException(status_code=400, detail="source_artifact_type_not_mastermind_review_report")
+        return artifact
+    result = await db.execute(
+        select(TaskArtifact)
+        .where(TaskArtifact.task_id == task_id, TaskArtifact.artifact_type == REPORT_ARTIFACT_TYPE)
+        .order_by(TaskArtifact.created_at.desc(), TaskArtifact.id.desc())
+    )
+    return result.scalars().first()
+
+
+def _gate_response(
+    *,
+    task: Task,
+    artifact: TaskArtifact | None,
+    report: dict[str, Any],
+    body: MastermindReviewGatePreviewRequest,
+    gate_status: str,
+    summary: str,
+    blocking_reasons: list[str],
+) -> MastermindReviewGatePreviewResponse:
+    source_run_ids = _int_list(report.get("source_agent_run_ids"))
+    reviewed_head = str(report.get("head_commit") or "").strip()
+    return MastermindReviewGatePreviewResponse(
+        task_id=task.id,
+        project_id=task.project_id,
+        gate_status=gate_status,
+        source_artifact_id=artifact.id if artifact else None,
+        source_agent_run_id=source_run_ids[0] if source_run_ids else None,
+        pr_url=_redact(str(body.pr_url or report.get("pr_url") or "")),
+        pr_number=body.pr_number if body.pr_number is not None else _optional_int(report.get("pr_number")),
+        head_commit=_redact(str(body.current_head_commit or reviewed_head)),
+        reviewed_head_commit=_redact(reviewed_head),
+        summary=_redact(summary),
+        blocking_reasons=[_redact(str(reason)) for reason in blocking_reasons],
+        recommended_actions=_redact_jsonable(_list_value(report.get("recommended_actions"))),
+        human_confirmation_required=True,
+        advisory_only=True,
+        no_auto_merge=True,
+        read_only=True,
+        persisted=False,
+        safety_notes=_gate_safety_notes(report, gate_status),
+    )
+
+
+def _gate_safety_blockers(report: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    if report.get("advisory_only") is False:
+        reasons.append("Report advisory_only=false violates the gate safety boundary.")
+    if report.get("human_confirmation_required") is False:
+        reasons.append("Report human_confirmation_required=false violates the gate safety boundary.")
+    if report.get("no_auto_merge") is False:
+        reasons.append("Report no_auto_merge=false violates the gate safety boundary.")
+    authority_text = "\n".join([
+        str(report.get("raw_excerpt") or ""),
+        " ".join(str(note) for note in _list_value(report.get("safety_notes"))),
+        str(report.get("summary") or ""),
+    ])
+    if _authority_confused(authority_text):
+        reasons.append("Report claims approve, merge, deploy, or rework authority.")
+    return reasons
+
+
+def _gate_stale_reasons(report: dict[str, Any], body: MastermindReviewGatePreviewRequest) -> list[str]:
+    current = str(body.current_head_commit or "").strip()
+    reviewed = str(report.get("head_commit") or "").strip()
+    if current and reviewed and current != reviewed:
+        return [f"Reviewed head commit {reviewed} does not match current head commit {current}."]
+    return []
+
+
+def _gate_invalid_reasons(report: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    verdict = str(report.get("verdict") or "").strip()
+    if verdict == "invalid_review":
+        reasons.append("Report verdict is invalid_review.")
+    elif verdict not in VERDICTS:
+        reasons.append(f"Report verdict {verdict or 'missing'} is outside the supported taxonomy.")
+    parse_errors = _list_value(report.get("parse_errors"))
+    if parse_errors:
+        reasons.append("Report contains parse_errors: " + ", ".join(_short(error, 120) for error in parse_errors))
+    return reasons
+
+
+def _gate_blocker_reasons(report: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    if str(report.get("verdict") or "").strip() == "request_changes":
+        reasons.append("Report verdict is request_changes.")
+    for item in _list_of_dicts(report.get("blocking_items")):
+        severity = str(item.get("severity") or "").strip().lower()
+        if severity in {"blocker", "major"}:
+            title = _short(item.get("title") or "blocking item", 160)
+            reasons.append(f"Blocking item severity={severity}: {title}.")
+    return reasons
+
+
+def _gate_human_reasons(report: dict[str, Any], body: MastermindReviewGatePreviewRequest) -> list[str]:
+    reasons: list[str] = []
+    if report.get("review_scope_confirmed") is False:
+        reasons.append("Report review_scope_confirmed=false.")
+    if str(report.get("confidence") or "").strip().lower() == "low":
+        reasons.append("Report confidence=low.")
+    if _missing_verification(body.verification_results):
+        reasons.append("Verification evidence is missing or incomplete.")
+    if _missing_sonar(body.sonarcloud):
+        reasons.append("SonarCloud evidence is missing or incomplete.")
+    return reasons
+
+
+def _missing_verification(verification: Any) -> bool:
+    data = verification.model_dump() if hasattr(verification, "model_dump") else dict(verification or {})
+    if not data:
+        return True
+    return any(not str(value or "").strip() for value in data.values())
+
+
+def _missing_sonar(sonar: Any) -> bool:
+    data = sonar.model_dump() if hasattr(sonar, "model_dump") else dict(sonar or {})
+    required = ["quality_gate", "security_hotspots", "duplication_on_new_code", "new_issues"]
+    return any(data.get(key) is None or str(data.get(key)).strip() == "" for key in required)
+
+
+def _gate_summary(report: dict[str, Any], fallback: str) -> str:
+    return _short(report.get("summary") or fallback, 1000)
+
+
+def _gate_safety_notes(report: dict[str, Any], gate_status: str) -> list[str]:
+    combined = [_redact(str(note)) for note in _list_value(report.get("safety_notes"))]
+    combined.append(f"Controlled Mastermind Gate status: {gate_status}.")
+    for note in GATE_PREVIEW_SAFETY_NOTES:
+        redacted = _redact(note)
+        if redacted not in combined:
+            combined.append(redacted)
+    return combined
+
+
+def _int_list(value: Any) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    result: list[int] = []
+    for item in value:
+        try:
+            result.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _extract_structured_json(text: str) -> tuple[dict[str, Any] | None, list[str]]:
