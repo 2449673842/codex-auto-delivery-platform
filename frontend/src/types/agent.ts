@@ -997,3 +997,33 @@ export interface MastermindReviewExecuteResponse {
   no_auto_merge: boolean
   parse_errors: string[]
 }
+
+export interface MastermindReviewGatePreviewRequest {
+  source_artifact_id?: number | null
+  current_head_commit: string
+  pr_url: string
+  pr_number: number | null
+  verification_results: MastermindReviewVerificationResults
+  sonarcloud: MastermindReviewSonarCloudSummary
+}
+
+export interface MastermindReviewGatePreviewResponse {
+  task_id: number
+  project_id: number
+  gate_status: string
+  source_artifact_id: number | null
+  source_agent_run_id: number | null
+  pr_url: string
+  pr_number: number | null
+  head_commit: string
+  reviewed_head_commit: string
+  summary: string
+  blocking_reasons: string[]
+  recommended_actions: any[]
+  human_confirmation_required: boolean
+  advisory_only: boolean
+  no_auto_merge: boolean
+  read_only: boolean
+  persisted: boolean
+  safety_notes: string[]
+}

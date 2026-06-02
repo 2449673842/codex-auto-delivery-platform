@@ -1184,6 +1184,7 @@
             <p v-if="mastermindError" class="run-error">{{ mastermindError }}</p>
             <p v-if="mastermindManualLoginRequired()" class="run-error">manual login required: complete login in the visible browser, then retry.</p>
             <p v-if="mastermindRefreshMessage" class="copy-message">{{ mastermindRefreshMessage }}</p>
+            <p v-if="mastermindGateHint" class="section-note">{{ mastermindGateHint }}</p>
 
             <div v-if="mastermindPreview" class="mastermind-result-card">
               <div class="section-header compact">
@@ -1258,6 +1259,97 @@
                 <summary>raw_excerpt</summary>
                 <pre>{{ mastermindResult.raw_excerpt || '-' }}</pre>
               </details>
+            </div>
+
+            <div class="controlled-gate-panel">
+              <div class="section-header compact">
+                <strong>Controlled Mastermind Gate</strong>
+                <span class="workspace-readonly">read-only gate preview</span>
+              </div>
+              <div class="workspace-safety">
+                <span class="label-badge label-ai">Controlled Gate is read-only</span>
+                <span class="label-badge label-ai">Human confirmation required</span>
+                <span class="label-badge label-ai">Advisory only</span>
+                <span class="label-badge label-merged">No auto approve</span>
+                <span class="label-badge label-merged">No auto merge</span>
+                <span class="label-badge label-exec">No auto deploy</span>
+                <span class="label-badge label-exec">No auto rework</span>
+                <span class="label-badge label-redacted">No GitHub / Sonar platform query</span>
+                <span class="label-badge label-provider">No Browser AI execution</span>
+                <span class="label-badge label-provider">No provider call</span>
+                <span class="label-badge label-applied">No repository writes</span>
+              </div>
+              <p class="section-note">
+                gate_advisory_approved means ready for human confirmation only. It is not auto approve, not auto merge, not deploy permission, and not rework permission.
+              </p>
+              <div class="mastermind-review-subgrid">
+                <label>
+                  source_artifact_id
+                  <input v-model.number="mastermindGateForm.source_artifact_id" type="number" min="1" placeholder="optional" />
+                </label>
+                <label>
+                  current_head_commit
+                  <input v-model="mastermindGateForm.current_head_commit" placeholder="current PR head sha" />
+                </label>
+              </div>
+              <p class="section-note">
+                Reuses the PR URL, PR number, verification results, and SonarCloud values from the Mastermind Review packet form. The UI does not query GitHub or Sonar.
+              </p>
+              <div class="form-actions">
+                <button class="btn btn-sm" @click="previewControlledGate" :disabled="mastermindGateLoading">
+                  Preview Controlled Gate
+                </button>
+              </div>
+              <p v-if="mastermindGateError" class="run-error">{{ mastermindGateError }}</p>
+              <div v-if="mastermindGateResult" class="mastermind-result-card">
+                <div class="section-header compact">
+                  <strong>Gate Preview</strong>
+                  <span class="gate-status-badge" :class="mastermindGateResult.gate_status">{{ mastermindGateResult.gate_status }}</span>
+                </div>
+                <div v-if="mastermindGateResult.gate_status === 'gate_advisory_approved'" class="gate-advisory-message">
+                  <p class="copy-message">gate_advisory_approved = ready for human confirmation</p>
+                  <p class="section-note">No automatic approve, merge, deploy, or rework is authorized.</p>
+                </div>
+                <p v-if="mastermindGateResult.gate_status === 'gate_request_changes'" class="run-error">
+                  gate_request_changes: request changes before continuing.
+                </p>
+                <p v-if="mastermindGateResult.gate_status === 'gate_blocked_by_safety'" class="run-error">
+                  gate_blocked_by_safety: safety boundary blocked.
+                </p>
+                <p v-if="mastermindGateResult.gate_status === 'gate_stale_review'" class="run-error">
+                  gate_stale_review: reviewed head commit does not match current head commit.
+                </p>
+                <div class="dispatch-job-meta">
+                  <span>gate_status: {{ mastermindGateResult.gate_status }}</span>
+                  <span>summary: {{ mastermindGateResult.summary || '-' }}</span>
+                  <span>source_artifact_id: {{ mastermindGateResult.source_artifact_id ?? '-' }}</span>
+                  <span>source_agent_run_id: {{ mastermindGateResult.source_agent_run_id ?? '-' }}</span>
+                  <span>PR URL: {{ mastermindGateResult.pr_url || '-' }}</span>
+                  <span>PR number: {{ mastermindGateResult.pr_number ?? '-' }}</span>
+                  <span>head_commit: {{ mastermindGateResult.head_commit || '-' }}</span>
+                  <span>reviewed_head_commit: {{ mastermindGateResult.reviewed_head_commit || '-' }}</span>
+                  <span>human_confirmation_required={{ mastermindGateResult.human_confirmation_required }}</span>
+                  <span>advisory_only={{ mastermindGateResult.advisory_only }}</span>
+                  <span>no_auto_merge={{ mastermindGateResult.no_auto_merge }}</span>
+                  <span>read_only={{ mastermindGateResult.read_only }}</span>
+                  <span>persisted={{ mastermindGateResult.persisted }}</span>
+                  <span>blocking_reasons: {{ formatMastermindList(mastermindGateResult.blocking_reasons) }}</span>
+                  <span>recommended_actions: {{ formatMastermindList(mastermindGateResult.recommended_actions) }}</span>
+                  <span>safety_notes: {{ formatMastermindList(mastermindGateResult.safety_notes) }}</span>
+                </div>
+              </div>
+              <div class="gate-status-taxonomy">
+                <span class="gate-status-badge gate_not_ready">gate_not_ready</span>
+                <span class="gate-status-badge gate_needs_human">gate_needs_human</span>
+                <span class="gate-status-badge gate_request_changes">gate_request_changes</span>
+                <span class="gate-status-badge gate_advisory_approved">gate_advisory_approved</span>
+                <span class="gate-status-badge gate_invalid_review">gate_invalid_review</span>
+                <span class="gate-status-badge gate_blocked_by_safety">gate_blocked_by_safety</span>
+                <span class="gate-status-badge gate_stale_review">gate_stale_review</span>
+                <span>gate_request_changes: request changes before continuing.</span>
+                <span>gate_blocked_by_safety: safety boundary blocked.</span>
+                <span>gate_stale_review: reviewed head commit does not match current head commit.</span>
+              </div>
             </div>
           </div>
         </div>
@@ -1904,9 +1996,9 @@ import {
   fetchMcpTools, callMcpTool,
   fetchTaskTimeline, fetchTaskEvidenceBoard,
   fetchProjectMemory, fetchProjectMemorySummary,
-  previewMastermindReviewPacket, executeMastermindReview,
+  previewMastermindReviewPacket, executeMastermindReview, previewMastermindReviewGate,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse, RepairPacketGenerateRequest, RepairHandoffPreviewRequest, RepairHandoffPreviewResponse, RepairPacketResponse, RepairAttemptCreateRequest, RepairAttemptResponse, RepairVerificationResultRequest, TimelineResponse, TimelineItem, EvidenceBoardResponse, EvidenceBoardItem, EvidenceLinkedIds, ProjectMemoryResponse, ProjectMemorySummaryResponse, ProjectMemoryItem, ProjectMemorySourceRef, MastermindReviewPacketPreviewRequest, MastermindReviewPacketPreviewResponse, MastermindReviewBrowserAiOptions, MastermindReviewExecuteRequest, MastermindReviewExecuteResponse } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse, RepairPacketGenerateRequest, RepairHandoffPreviewRequest, RepairHandoffPreviewResponse, RepairPacketResponse, RepairAttemptCreateRequest, RepairAttemptResponse, RepairVerificationResultRequest, TimelineResponse, TimelineItem, EvidenceBoardResponse, EvidenceBoardItem, EvidenceLinkedIds, ProjectMemoryResponse, ProjectMemorySummaryResponse, ProjectMemoryItem, ProjectMemorySourceRef, MastermindReviewPacketPreviewRequest, MastermindReviewPacketPreviewResponse, MastermindReviewBrowserAiOptions, MastermindReviewExecuteRequest, MastermindReviewExecuteResponse, MastermindReviewGatePreviewRequest, MastermindReviewGatePreviewResponse } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -2152,6 +2244,14 @@ const mastermindLoading = ref(false)
 const mastermindExecuting = ref(false)
 const mastermindError = ref('')
 const mastermindRefreshMessage = ref('')
+const mastermindGateHint = ref('')
+const mastermindGateForm = ref({
+  source_artifact_id: null as number | null,
+  current_head_commit: '',
+})
+const mastermindGateResult = ref<MastermindReviewGatePreviewResponse | null>(null)
+const mastermindGateLoading = ref(false)
+const mastermindGateError = ref('')
 const codeContext = ref<CodeContextResponse | null>(null)
 const sandboxResults = ref<SandboxArtifactEntry[]>([])
 const applyResult = ref<PatchApplyResult | null>(null)
@@ -2476,6 +2576,22 @@ function buildMastermindExecuteRequest(): MastermindReviewExecuteRequest {
   }
 }
 
+function buildMastermindGateRequest(): MastermindReviewGatePreviewRequest {
+  return {
+    source_artifact_id: mastermindGateForm.value.source_artifact_id ? Number(mastermindGateForm.value.source_artifact_id) : null,
+    current_head_commit: mastermindGateForm.value.current_head_commit || mastermindPacketForm.value.head_commit,
+    pr_url: mastermindPacketForm.value.pr_url,
+    pr_number: mastermindPacketForm.value.pr_number ? Number(mastermindPacketForm.value.pr_number) : null,
+    verification_results: { ...mastermindPacketForm.value.verification_results },
+    sonarcloud: {
+      quality_gate: mastermindPacketForm.value.sonarcloud.quality_gate,
+      security_hotspots: Number(mastermindPacketForm.value.sonarcloud.security_hotspots) || 0,
+      duplication_on_new_code: mastermindPacketForm.value.sonarcloud.duplication_on_new_code,
+      new_issues: Number(mastermindPacketForm.value.sonarcloud.new_issues) || 0,
+    },
+  }
+}
+
 function formatMastermindJson(value: unknown) {
   if (value === null || value === undefined || value === '') return '-'
   if (typeof value === 'string') return value
@@ -2688,6 +2804,7 @@ async function previewMastermindReview() {
   mastermindLoading.value = true
   mastermindError.value = ''
   mastermindRefreshMessage.value = ''
+  mastermindGateHint.value = ''
   try {
     mastermindPreview.value = await previewMastermindReviewPacket(task.value.id, buildMastermindPacketRequest())
   } catch (e: any) {
@@ -2703,6 +2820,7 @@ async function runMastermindReview() {
   mastermindExecuting.value = true
   mastermindError.value = ''
   mastermindRefreshMessage.value = ''
+  mastermindGateHint.value = ''
   try {
     mastermindResult.value = await executeMastermindReview(task.value.id, buildMastermindExecuteRequest())
     if (mastermindResult.value.status === 'succeeded' && mastermindResult.value.persisted) {
@@ -2713,6 +2831,20 @@ async function runMastermindReview() {
     mastermindError.value = e.message || 'Browser AI Mastermind Review failed'
   } finally {
     mastermindExecuting.value = false
+  }
+}
+
+async function previewControlledGate() {
+  if (!task.value) return
+  mastermindGateLoading.value = true
+  mastermindGateError.value = ''
+  try {
+    mastermindGateResult.value = await previewMastermindReviewGate(task.value.id, buildMastermindGateRequest())
+  } catch (e: any) {
+    mastermindGateResult.value = null
+    mastermindGateError.value = e.message || 'Controlled Mastermind Gate preview failed'
+  } finally {
+    mastermindGateLoading.value = false
   }
 }
 
@@ -3110,7 +3242,12 @@ async function refreshAfterMastermindReview() {
   agentRuns.value = await fetchAgentRuns(id)
   artifactRefreshKey.value += 1
   await loadEvidenceSummary(id)
+  if (mastermindResult.value?.artifact_id) {
+    mastermindGateForm.value.source_artifact_id = mastermindResult.value.artifact_id
+  }
+  mastermindGateForm.value.current_head_commit = mastermindPacketForm.value.head_commit
   mastermindRefreshMessage.value = 'Mastermind Review saved; AgentRun, artifacts, Timeline, and Evidence Board refreshed'
+  mastermindGateHint.value = 'Click Preview Controlled Gate to classify the review before human confirmation.'
 }
 
 async function refreshAfterEvidenceRun() {
@@ -3484,6 +3621,17 @@ async function handleCreateAgentReview() {
 .mastermind-detail { margin-top: 8px; }
 .mastermind-detail summary { cursor: pointer; color: var(--color-text-secondary); font-size: 12px; }
 .mastermind-detail pre { margin-top: 6px; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--color-text-secondary); padding: 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fff; }
+.controlled-gate-panel { display: flex; flex-direction: column; gap: 10px; padding: 10px; border: 1px solid #d6c18f; border-radius: var(--radius); background: #fffdf7; }
+.gate-status-badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; font-family: monospace; }
+.gate-status-badge.gate_advisory_approved { background: #e8f5e9; color: #2e7d32; }
+.gate-status-badge.gate_request_changes,
+.gate-status-badge.gate_blocked_by_safety { background: #ffebee; color: #c62828; }
+.gate-status-badge.gate_stale_review,
+.gate-status-badge.gate_invalid_review,
+.gate-status-badge.gate_needs_human { background: #fff3e0; color: #9a5b00; }
+.gate-status-badge.gate_not_ready { background: #f5f5f5; color: #616161; }
+.gate-advisory-message { display: block; }
+.gate-status-taxonomy { display: flex; flex-wrap: wrap; gap: 6px; border-top: 1px solid var(--color-border); padding-top: 8px; font-size: 12px; color: var(--color-text-secondary); }
 .repair-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .repair-list span { padding: 3px 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; font-size: 12px; color: var(--color-text-secondary); }
 .provider-picker { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }

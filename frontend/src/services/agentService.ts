@@ -19,6 +19,7 @@ import type {
   ProjectMemoryResponse, ProjectMemorySummaryResponse,
   MastermindReviewPacketPreviewRequest, MastermindReviewPacketPreviewResponse,
   MastermindReviewExecuteRequest, MastermindReviewExecuteResponse,
+  MastermindReviewGatePreviewRequest, MastermindReviewGatePreviewResponse,
 } from '../types/agent'
 
 // ── AgentProfile ──
@@ -284,6 +285,14 @@ export async function executeMastermindReview(
   body: MastermindReviewExecuteRequest,
 ): Promise<MastermindReviewExecuteResponse> {
   const { data } = await client.post(`/tasks/${taskId}/mastermind-review/execute`, body)
+  return data.data
+}
+
+export async function previewMastermindReviewGate(
+  taskId: number,
+  body: MastermindReviewGatePreviewRequest,
+): Promise<MastermindReviewGatePreviewResponse> {
+  const { data } = await client.post(`/tasks/${taskId}/mastermind-review/gate-preview`, body)
   return data.data
 }
 
