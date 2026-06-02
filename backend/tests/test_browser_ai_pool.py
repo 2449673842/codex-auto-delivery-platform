@@ -195,11 +195,13 @@ async def test_browser_ai_pool_project_not_found(monkeypatch):
 
     class MissingProjectSession:
         async def get(self, model, item_id):
+            await asyncio.sleep(0)
             if model is Task:
                 return Task(id=1, project_id=987654, title="orphan task")
             return None
 
         async def execute(self, statement):
+            await asyncio.sleep(0)
             class Result:
                 def one_or_none(self):
                     return None
