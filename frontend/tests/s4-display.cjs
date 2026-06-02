@@ -1358,7 +1358,7 @@ async function testMastermindReviewPanel(page, task) {
     200,
     previewCounter,
     executeCounter,
-    gateCounter,
+    { gateCounter },
   )
   await page.goto(`${FE}/tasks/${task.id}`, { waitUntil: 'networkidle', timeout: 15000 })
   await page.waitForTimeout(500)
@@ -1723,10 +1723,13 @@ async function setMastermindReviewRoutes(
   status = 200,
   previewCounter = null,
   executeCounter = null,
-  gateCounter = null,
-  gateData = null,
-  gateStatus = 200,
+  gateOptions = {},
 ) {
+  const {
+    gateCounter = null,
+    gateData = null,
+    gateStatus = 200,
+  } = gateOptions
   await clearMastermindReviewRoutes(page)
   await page.route('**/api/tasks/*/mastermind-review/packet-preview', route => fulfillJson(route, previewData, status, previewCounter))
   await page.route('**/api/tasks/*/mastermind-review/execute', route => fulfillJson(route, executeData, status, executeCounter))
