@@ -37,6 +37,7 @@ SAFETY_NOTES = [
 
 ARTIFACT_EVIDENCE_TYPES = {
     "browser_ai_answer": "browser_ai_answer",
+    "browser_ai_pool_answer": "browser_ai_pool_answer",
     "answer_synthesis": "answer_synthesis",
     "failure_evidence": "failure_evidence",
     "repair_packet": "repair_packet",
@@ -53,6 +54,7 @@ ARTIFACT_EVIDENCE_TYPES = {
 
 ARTIFACT_TIMELINE_TYPES = {
     "browser_ai_answer": "browser_ai_answer_saved",
+    "browser_ai_pool_answer": "browser_ai_pool_answer_saved",
     "answer_synthesis": "synthesis_refreshed",
     "failure_evidence": "failure_evidence_previewed",
     "repair_packet": "repair_packet_generated",
@@ -438,6 +440,8 @@ def _artifact_source(artifact: TaskArtifact, metadata: dict[str, Any]) -> str:
         return "repair_loop"
     if evidence_type == "browser_ai_answer":
         return "browser_ai"
+    if evidence_type == "browser_ai_pool_answer":
+        return "browser_ai_pool"
     if evidence_type == "answer_synthesis":
         return "answer_synthesis"
     if evidence_type == "skill_review_report":

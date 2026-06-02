@@ -50,6 +50,7 @@ from app.routers import repair_loop as repair_loop_router
 from app.routers import evidence_summary as evidence_summary_router
 from app.routers import project_memory as project_memory_router
 from app.routers import mastermind_review as mastermind_review_router
+from app.routers import browser_ai_pool as browser_ai_pool_router
 
 app.include_router(health.router)
 app.include_router(projects.router)
@@ -82,3 +83,4 @@ app.include_router(repair_loop_router.router)
 app.include_router(evidence_summary_router.router)
 app.include_router(project_memory_router.router)
 app.include_router(mastermind_review_router.router)
+app.include_router(browser_ai_pool_router.router)
