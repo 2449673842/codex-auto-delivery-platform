@@ -2716,7 +2716,7 @@ const workflowSteps = computed(() => [
     title: '多网页 AI 收集',
     state: browserAiPoolResult.value
       ? (browserAiPoolResult.value.overall_status === 'failed' ? 'failed' : 'done')
-      : (browserAiPoolPreview.value ? 'available' : 'available'),
+      : (task.value ? 'available' : 'not_started'),
     description: browserAiPoolResult.value
       ? `网页 AI Pool ${statusLabel(browserAiPoolResult.value.overall_status)}，回答会保存为 evidence artifact。`
       : '可先预览 provider，再执行网页 AI 收集。',
