@@ -9,6 +9,7 @@ import type {
   AiHandoffPreviewRequest, AiHandoffPreviewResponse,
   AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse,
   BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse,
+  BrowserAiPoolRequest, BrowserAiPoolPreviewResponse, BrowserAiPoolExecuteResponse,
   McpToolDescriptor, McpCallRequest, McpCallResponse,
   MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse,
   FailureEvidencePreviewRequest, FailureEvidencePacketResponse,
@@ -186,6 +187,23 @@ export async function dryRunBrowserAi(body: BrowserAiRequest): Promise<BrowserAi
 
 export async function executeBrowserAi(body: BrowserAiRequest): Promise<BrowserAiResponse> {
   const { data } = await client.post('/browser-ai/execute', body)
+  return data.data
+}
+
+// ── Browser AI Provider Pool / advisory multi-provider evidence ──
+export async function previewBrowserAiPool(
+  taskId: number,
+  body: BrowserAiPoolRequest,
+): Promise<BrowserAiPoolPreviewResponse> {
+  const { data } = await client.post(`/tasks/${taskId}/browser-ai-pool/preview`, body)
+  return data.data
+}
+
+export async function executeBrowserAiPool(
+  taskId: number,
+  body: BrowserAiPoolRequest,
+): Promise<BrowserAiPoolExecuteResponse> {
+  const { data } = await client.post(`/tasks/${taskId}/browser-ai-pool/execute`, body)
   return data.data
 }
 
