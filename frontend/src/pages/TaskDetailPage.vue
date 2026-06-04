@@ -39,6 +39,51 @@
     </div>
 
     <div class="detail-body">
+      <section class="card task-cockpit-panel">
+        <div class="section-header">
+          <h2>任务概览</h2>
+          <span class="workspace-readonly">个人 AI 自动化工作台</span>
+        </div>
+        <div class="task-overview-grid">
+          <div class="task-overview-main">
+            <p class="overview-title">{{ task.title }}</p>
+            <div class="dispatch-job-meta">
+              <span>任务状态: {{ taskStatusLabel(task.status) }}</span>
+              <span>项目: {{ task.project_name || '-' }}</span>
+              <span>优先级: {{ priorityLabel(task.priority) }}</span>
+              <span>当前阶段: {{ currentWorkflowStage }}</span>
+              <span>最近关键事件: {{ latestKeyEvent }}</span>
+            </div>
+          </div>
+          <div class="next-action-card">
+            <strong>下一步建议</strong>
+            <p>{{ nextActionSuggestion }}</p>
+            <div class="safety-mini-list">
+              <span class="label-badge label-ai">所有 AI 输出仅作为建议证据</span>
+              <span class="label-badge label-ai">需要人工确认</span>
+              <span class="label-badge label-merged">不会自动 approve / merge</span>
+              <span class="label-badge label-merged">不会自动 approve</span>
+              <span class="label-badge label-merged">不会自动 merge</span>
+              <span class="label-badge label-exec">不会自动 deploy / rework</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card workflow-nav-panel">
+        <div class="section-header">
+          <h2>自动化流程导航</h2>
+          <span class="workspace-readonly">按任务步骤组织，不按 API 堆叠</span>
+        </div>
+        <div class="workflow-steps">
+          <div v-for="step in workflowSteps" :key="step.key" class="workflow-step" :class="step.state">
+            <span class="workflow-step-title">{{ step.title }}</span>
+            <span class="workflow-step-state">{{ workflowStateLabel(step.state) }}</span>
+            <p>{{ step.description }}</p>
+          </div>
+        </div>
+      </section>
+
       <section class="card">
         <h2>需求描述</h2>
         <pre class="description-text">{{ task.description || '（无描述）' }}</pre>
@@ -298,6 +343,268 @@
             <p v-if="browserAiFailedStep" class="run-error">
               Failed at {{ browserAiFailedStep.name }}: {{ browserAiFailedStep.message || stepHint(browserAiFailedStep.name, browserAiFailedStep.status) }}
             </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Browser AI Pool -->
+      <section class="card browser-ai-pool-panel">
+        <div class="section-header">
+          <h2>多网页 AI 协作</h2>
+          <span class="workspace-readonly">多 provider 建议证据</span>
+        </div>
+        <div class="compatibility-strip">
+          <span>Browser AI Pool</span>
+          <span>provider rows</span>
+          <span>Current backend MVP executes provider jobs sequentially</span>
+        </div>
+        <div class="workspace-safety">
+          <span class="label-badge label-ai">Browser AI Pool output is advisory evidence only</span>
+          <span class="label-badge label-ai">输出仅作为建议证据</span>
+          <span class="label-badge label-provider">Uses visible user-authorized browser UI only</span>
+          <span class="label-badge label-provider">使用用户授权的可见浏览器 UI</span>
+          <span class="label-badge label-provider">No provider API token call</span>
+          <span class="label-badge label-provider">不调用 provider API token</span>
+          <span class="label-badge label-redacted">No account/password/cookie/session/localStorage storage</span>
+          <span class="label-badge label-redacted">不保存账号/密码/cookie/session/localStorage</span>
+          <span class="label-badge label-redacted">No login/captcha/2FA/paywall/rate-limit bypass</span>
+          <span class="label-badge label-redacted">不绕过登录/验证码/2FA/pay墙/限流</span>
+          <span class="label-badge label-provider">No hidden web API as main path</span>
+          <span class="label-badge label-provider">不把隐藏网页 API 作为主路径</span>
+          <span class="label-badge label-applied">No repository writes · 不写真实仓库</span>
+          <span class="label-badge label-redacted">No GitHub / Sonar platform query</span>
+          <span class="label-badge label-redacted">不主动查询 GitHub / Sonar</span>
+          <span class="label-badge label-merged">No auto approve · 不会自动 approve</span>
+          <span class="label-badge label-merged">No auto merge · 不会自动 merge</span>
+          <span class="label-badge label-exec">No auto deploy</span>
+          <span class="label-badge label-exec">不会自动部署</span>
+          <span class="label-badge label-exec">No auto rework</span>
+          <span class="label-badge label-exec">不会自动返工</span>
+        </div>
+        <div class="browser-window-help">
+          <strong>浏览器窗口可见性说明</strong>
+          <p><span>Preview 不会打开浏览器窗口</span><span>Execute 才会调用 Browser AI</span></p>
+          <p><span>浏览器窗口打开在后端运行的机器上</span><span>如果后端运行在 Docker、远程服务器或 headless 环境，本机可能看不到窗口。</span></p>
+          <p><span>如果 BROWSER_AI_HEADLESS=true</span><span>不会显示窗口。</span><span>执行完成或失败后，当前实现会关闭浏览器上下文</span></p>
+          <p><span>后续会做常驻窗口池 / 窗口状态 UI</span></p>
+          <div class="compatibility-strip compact-strip">
+            <span>后端运行的机器</span>
+            <span>BROWSER_AI_HEADLESS=true</span>
+            <span>当前实现会关闭浏览器上下文</span>
+            <span>常驻窗口池 / 窗口状态 UI</span>
+          </div>
+        </div>
+        <p class="section-note">
+          Current backend MVP executes provider jobs sequentially；当前后端 MVP 会顺序执行 provider job，但保留 max_total_concurrency / per_provider_concurrency 供后续多窗口管理扩展。
+        </p>
+
+        <div class="browser-ai-pool-form">
+          <label class="wide">
+            协作 prompt
+            <textarea v-model="browserAiPoolForm.prompt" rows="4"></textarea>
+          </label>
+
+          <div class="wide pool-provider-list">
+          <div class="section-header compact">
+            <strong>provider rows · 网页 AI 列表</strong>
+              <button class="btn btn-sm" type="button" @click="addBrowserAiPoolProvider">添加自定义网页 AI</button>
+            </div>
+            <div v-for="(provider, index) in browserAiPoolForm.providers" :key="`pool-provider-${index}-${provider.provider}`" class="pool-provider-row">
+              <label class="checkbox-row pool-enabled">
+                <input v-model="provider.enabled" type="checkbox" />
+                启用 enabled
+              </label>
+              <label>
+                provider
+                <select v-model="provider.provider" @change="applyBrowserAiPoolProfile(index)">
+                  <option v-for="profile in browserAiProfiles" :key="`pool-profile-${index}-${profile.provider}`" :value="profile.provider">
+                    {{ profile.display_name }}
+                  </option>
+                </select>
+              </label>
+              <label>
+                角色 role
+                <input v-model="provider.role" placeholder="reviewer" />
+              </label>
+              <label>
+                显示名称 display_name
+                <input v-model="provider.display_name" placeholder="ChatGPT Web" />
+              </label>
+              <label class="wide">
+                网页地址 target_url
+                <input v-model="provider.target_url" placeholder="https://chatgpt.com/" />
+              </label>
+              <label>
+                稳定回答超时 stable_response_timeout_seconds
+                <input v-model.number="provider.stable_response_timeout_seconds" type="number" min="1" max="600" />
+              </label>
+              <label>
+                稳定轮询 stable_polls
+                <input v-model.number="provider.stable_polls" type="number" min="1" max="50" />
+              </label>
+              <label>
+                轮询间隔 stable_interval_ms
+                <input v-model.number="provider.stable_interval_ms" type="number" min="100" max="10000" />
+              </label>
+              <button class="btn btn-sm" type="button" @click="removeBrowserAiPoolProvider(index)" :disabled="browserAiPoolForm.providers.length <= 1">移除</button>
+              <details class="wide advanced-details">
+                <summary>自定义网页选择器 / 高级设置</summary>
+                <div class="selector-grid">
+                  <label>
+                    prompt_selector
+                    <input v-model="provider.prompt_selector" placeholder="textarea[name='prompt']" />
+                  </label>
+                  <label>
+                    submit_selector
+                    <input v-model="provider.submit_selector" placeholder="button[data-send]" />
+                  </label>
+                  <label>
+                    response_selector
+                    <input v-model="provider.response_selector" placeholder="[data-answer]" />
+                  </label>
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <div class="browser-ai-pool-settings wide">
+            <label>
+              总并发上限 max_total_concurrency
+              <input v-model.number="browserAiPoolForm.max_total_concurrency" type="number" min="1" max="6" />
+            </label>
+            <label>
+              单 provider 并发 per_provider_concurrency
+              <input v-model.number="browserAiPoolForm.per_provider_concurrency" type="number" min="1" max="3" />
+            </label>
+            <label>
+              prompt 预算 prompt_budget
+              <input v-model.number="browserAiPoolForm.prompt_budget" type="number" min="1000" max="30000" />
+            </label>
+            <label class="checkbox-row"><input v-model="browserAiPoolForm.save_artifacts" type="checkbox" /> 保存证据 save_artifacts</label>
+            <label class="checkbox-row"><input v-model="browserAiPoolForm.include_task_context" type="checkbox" /> 带任务上下文 include_task_context</label>
+            <label class="checkbox-row"><input v-model="browserAiPoolForm.include_project_memory" type="checkbox" /> 带项目记忆 include_project_memory</label>
+            <label class="checkbox-row"><input v-model="browserAiPoolForm.include_evidence_board" type="checkbox" /> 带证据板 include_evidence_board</label>
+          </div>
+
+          <div class="form-actions wide">
+            <button class="btn btn-sm" aria-label="Preview Browser AI Pool" @click="previewBrowserAiPoolRun" :disabled="browserAiPoolLoading || !task">
+              预览将调用哪些网页 AI <span class="button-tech-label">Preview Browser AI Pool</span>
+            </button>
+            <button class="btn btn-primary btn-sm" aria-label="Run Browser AI Pool" @click="executeBrowserAiPoolRun" :disabled="browserAiPoolExecuting || !task">
+              开始调用网页 AI <span class="button-tech-label">Run Browser AI Pool</span>
+            </button>
+          </div>
+        </div>
+
+        <p v-if="browserAiPoolError" class="run-error">{{ browserAiPoolError }}</p>
+        <div v-if="browserAiPoolRefreshMessages.length" class="browser-ai-refresh-status">
+          <span v-for="message in browserAiPoolRefreshMessages" :key="message" class="label-badge label-ai">{{ message }}</span>
+        </div>
+
+        <div v-if="browserAiPoolPreview" class="real-ai-result browser-ai-pool-result">
+          <div class="section-header compact">
+            <strong>Pool Preview · 预览结果</strong>
+            <span class="run-status-badge" :class="browserAiPoolPreview.overall_status">{{ statusLabel(browserAiPoolPreview.overall_status) }}</span>
+          </div>
+          <div class="compatibility-strip compact-strip">
+            <span>Pool Preview</span>
+            <span>预览结果</span>
+          </div>
+          <div class="dispatch-job-meta">
+            <span>overall_status: {{ browserAiPoolPreview.overall_status }}</span>
+            <span>状态中文: {{ statusLabel(browserAiPoolPreview.overall_status) }}</span>
+            <span>max_total_concurrency: {{ browserAiPoolPreview.max_total_concurrency }}</span>
+            <span>per_provider_concurrency: {{ browserAiPoolPreview.per_provider_concurrency }}</span>
+            <span>read_only={{ browserAiPoolPreview.read_only }}</span>
+            <span>persisted={{ browserAiPoolPreview.persisted }}</span>
+            <span>advisory_only={{ browserAiPoolPreview.advisory_only }}</span>
+            <span>human_confirmation_required={{ browserAiPoolPreview.human_confirmation_required }}</span>
+            <span>no_auto_merge={{ browserAiPoolPreview.no_auto_merge }}</span>
+          </div>
+          <div class="dispatch-job-grid">
+            <div v-for="job in browserAiPoolPreview.jobs" :key="`pool-preview-${job.provider}-${job.role}`" class="dispatch-job-card">
+              <div class="dispatch-job-header">
+                <strong>{{ job.display_name || job.provider }} / {{ job.role }}</strong>
+                <span class="run-status-badge" :class="job.status">{{ statusLabel(job.status) }}</span>
+              </div>
+              <div class="dispatch-job-meta">
+                <span>provider: {{ job.provider }}</span>
+                <span>role: {{ job.role }}</span>
+                <span>display_name: {{ job.display_name || '-' }}</span>
+                <span>status: {{ job.status }}</span>
+                <span>状态中文: {{ statusLabel(job.status) }}</span>
+                <span>prompt_hash: {{ job.prompt_hash || '-' }}</span>
+                <span>target_url: {{ job.target_url || '-' }}</span>
+                <span>timeout / stable_polls / stable_interval_ms: {{ job.stable_response_timeout_seconds || '-' }} / {{ job.stable_polls }} / {{ job.stable_interval_ms }}</span>
+                <span>blocked_reasons: {{ formatMastermindList(job.blocked_reasons) }}</span>
+                <span>safety_notes: {{ formatMastermindList(job.safety_notes) }}</span>
+              </div>
+              <details class="mastermind-detail">
+                <summary>原始数据 / prompt_excerpt</summary>
+                <pre>{{ job.prompt_excerpt || '-' }}</pre>
+              </details>
+              <details class="mastermind-detail">
+                <summary>调试信息 / selector 配置</summary>
+                <div class="dispatch-job-meta">
+                  <span>prompt_selector: {{ job.prompt_selector || '-' }}</span>
+                  <span>submit_selector: {{ job.submit_selector || '-' }}</span>
+                  <span>response_selector: {{ job.response_selector || '-' }}</span>
+                </div>
+              </details>
+            </div>
+          </div>
+          <div class="safety-notes">
+            <span v-for="note in browserAiPoolPreview.safety_notes" :key="`pool-preview-note-${note}`" class="label-badge label-provider">{{ note }}</span>
+          </div>
+        </div>
+
+        <div v-if="browserAiPoolResult" class="real-ai-result browser-ai-pool-result">
+          <div class="section-header compact">
+            <strong>Pool Execute Result · 执行结果</strong>
+            <span class="run-status-badge" :class="browserAiPoolResult.overall_status">{{ statusLabel(browserAiPoolResult.overall_status) }}</span>
+          </div>
+          <p class="compatibility-inline">Pool Execute Result</p>
+          <div class="dispatch-job-meta">
+            <span>overall_status: {{ browserAiPoolResult.overall_status }}</span>
+            <span>状态中文: {{ statusLabel(browserAiPoolResult.overall_status) }}</span>
+            <span>pool_run_id: {{ browserAiPoolResult.pool_run_id || '-' }}</span>
+            <span>read_only={{ browserAiPoolResult.read_only }}</span>
+            <span>persisted={{ browserAiPoolResult.persisted }}</span>
+            <span>advisory_only={{ browserAiPoolResult.advisory_only }}</span>
+            <span>human_confirmation_required={{ browserAiPoolResult.human_confirmation_required }}</span>
+            <span>no_auto_merge={{ browserAiPoolResult.no_auto_merge }}</span>
+            <span>metadata.concurrency_note: {{ browserAiPoolResult.metadata?.concurrency_note || '-' }}</span>
+          </div>
+          <div class="dispatch-job-grid">
+            <div v-for="job in browserAiPoolResult.jobs" :key="`pool-result-${job.provider}-${job.role}`" class="dispatch-job-card">
+              <div class="dispatch-job-header">
+                <strong>{{ job.display_name || job.provider }} / {{ job.role }}</strong>
+                <span class="run-status-badge" :class="job.status">{{ statusLabel(job.status) }}</span>
+              </div>
+              <div class="dispatch-job-meta">
+                <span>provider: {{ job.provider }}</span>
+                <span>role: {{ job.role }}</span>
+                <span>display_name: {{ job.display_name || '-' }}</span>
+                <span>status: {{ job.status }}</span>
+                <span>状态中文: {{ statusLabel(job.status) }}</span>
+                <span>agent_run_id: {{ job.agent_run_id || '-' }}</span>
+                <span>artifact_id: {{ job.artifact_id || '-' }}</span>
+                <span>manual_login_required={{ job.manual_login_required }}</span>
+                <span>{{ job.manual_login_required ? '需要手动登录' : '无需手动登录信号' }}</span>
+                <span v-if="job.failure_reason">failure_reason: {{ job.failure_reason }}</span>
+                <span>redaction_status: redaction_applied={{ job.redaction_status.redaction_applied }}, truncated={{ job.redaction_status.truncated }}, max_chars={{ job.redaction_status.max_chars }}</span>
+                <span>safety_notes: {{ formatMastermindList(job.safety_notes) }}</span>
+              </div>
+              <p v-if="job.answer_excerpt" class="run-output">回答摘要: <span>{{ job.answer_excerpt }}</span></p>
+              <p v-if="job.answer_excerpt" class="compatibility-inline">回答摘要: {{ job.answer_excerpt }}</p>
+              <p v-if="job.failure_reason" class="run-error">
+                失败原因 failure_reason: {{ job.failure_reason }}
+                <template v-if="job.manual_login_required"> · <span>需要手动登录</span> manual login required</template>
+              </p>
+            </div>
+          </div>
+          <div class="safety-notes">
+            <span v-for="note in browserAiPoolResult.safety_notes" :key="`pool-result-note-${note}`" class="label-badge label-provider">{{ note }}</span>
           </div>
         </div>
       </section>
@@ -801,23 +1108,36 @@
 
       <section class="card evidence-summary-panel">
         <div class="section-header">
-          <h2>Run Timeline / Evidence Board</h2>
+          <h2>证据板 / 运行时间线（Evidence Board / Timeline）</h2>
           <div class="section-actions">
-            <button class="btn btn-sm" @click="refreshEvidenceSummary" :disabled="evidenceSummaryLoading">Refresh Timeline / Evidence Board</button>
+            <button class="btn btn-sm" aria-label="Refresh Timeline / Evidence Board" @click="refreshEvidenceSummary" :disabled="evidenceSummaryLoading">
+              刷新证据板 / 时间线 <span class="button-tech-label">Refresh Timeline / Evidence Board</span>
+            </button>
           </div>
         </div>
+        <div class="compatibility-strip">
+          <span>Run Timeline / Evidence Board</span>
+          <span>Run Timeline</span>
+          <span>Evidence Board</span>
+          <span>证据板</span>
+          <span>运行时间线</span>
+          <span>网页 AI Pool 回答</span>
+          <span>原始摘录 raw_excerpt</span>
+          <span>Timeline is read-only</span>
+          <span>Evidence Board is read-only</span>
+        </div>
         <div class="workspace-safety">
-          <span class="label-badge label-ai">Timeline is read-only</span>
-          <span class="label-badge label-ai">Evidence Board is read-only</span>
-          <span class="label-badge label-provider">No provider call</span>
-          <span class="label-badge label-provider">No Browser AI execution</span>
-          <span class="label-badge label-applied">No repository writes</span>
-          <span class="label-badge label-redacted">No GitHub / Sonar query</span>
-          <span class="label-badge label-exec">No PR / CI / Sonar / Deploy</span>
-          <span class="label-badge label-merged">No auto approve / merge</span>
+          <span class="label-badge label-ai">Timeline is read-only · 运行时间线只读</span>
+          <span class="label-badge label-ai">Evidence Board is read-only · 证据板只读</span>
+          <span class="label-badge label-provider">No provider call · 不调用 provider</span>
+          <span class="label-badge label-provider">No Browser AI execution · 不执行 Browser AI</span>
+          <span class="label-badge label-applied">No repository writes · 不写真实仓库</span>
+          <span class="label-badge label-redacted">No GitHub / Sonar query · 不查询 GitHub / Sonar</span>
+          <span class="label-badge label-exec">No PR / CI / Sonar / Deploy · 不触发外部交付动作</span>
+          <span class="label-badge label-merged">No auto approve / merge · 不自动 approve / merge</span>
         </div>
         <p class="section-note">
-          S22.2 displays read-only summaries returned by the S22.1 APIs. It does not execute repair, call providers, query GitHub/Sonar, or write business records.
+          证据板把 AI 回答、主脑复审报告、网页 AI Pool 回答、修复包和验证结果整理为可追踪证据；运行时间线展示这些证据何时产生以及来自哪个 run/artifact。
         </p>
         <p v-if="evidenceSummaryError" class="run-error">{{ evidenceSummaryError }}</p>
         <div class="evidence-summary-flags">
@@ -830,7 +1150,7 @@
         <div class="evidence-summary-grid">
           <div class="timeline-panel">
             <div class="section-header compact">
-              <strong>Run Timeline</strong>
+              <strong>运行时间线 Run Timeline</strong>
               <span class="workspace-readonly">latest {{ timelineItems.length }} items</span>
             </div>
             <div v-if="timelineItems.length" class="timeline-list">
@@ -856,7 +1176,7 @@
 
           <div class="evidence-board-panel">
             <div class="section-header compact">
-              <strong>Evidence Board</strong>
+              <strong>证据板 Evidence Board</strong>
               <span class="workspace-readonly">filtered {{ filteredEvidenceBoardItems.length }} / {{ evidenceBoardTotalCount }} summaries</span>
             </div>
             <div class="evidence-board-controls">
@@ -867,7 +1187,7 @@
                   <option v-for="value in evidenceFilterOptions[field]" :key="`${field}-${value}`" :value="value">{{ value || '-' }}</option>
                 </select>
               </label>
-              <button class="btn btn-sm" @click="clearEvidenceBoardFilters">Clear filters</button>
+              <button class="btn btn-sm" @click="clearEvidenceBoardFilters">清除筛选 <span class="button-tech-label">Clear filters</span></button>
               <span class="workspace-readonly">filtered count: {{ filteredEvidenceBoardItems.length }} / total count: {{ evidenceBoardTotalCount }}</span>
             </div>
             <p v-if="evidenceBoardCopyMessage" class="copy-message">{{ evidenceBoardCopyMessage }}</p>
@@ -881,12 +1201,14 @@
             <div v-if="filteredEvidenceBoardItems.length" class="evidence-board-list">
               <div v-for="item in filteredEvidenceBoardItems" :key="`${item.evidence_type}-${item.artifact_id}-${item.summary}`" class="evidence-board-item">
                 <div class="timeline-item-header">
-                  <strong>{{ item.evidence_type }}</strong>
-                  <span class="run-status-badge" :class="item.status">{{ item.status }}</span>
+                  <strong>{{ evidenceTypeLabel(item.evidence_type) }}</strong>
+                  <span class="run-status-badge" :class="item.status">{{ statusLabel(item.status) }}</span>
                 </div>
                 <div class="evidence-item-badges">
                   <span class="label-badge label-applied">has_artifact={{ evidenceItemHasArtifact(item) }}</span>
                   <span class="label-badge label-warn">has_risk={{ evidenceItemHasRisk(item) }}</span>
+                  <span class="label-badge label-ai">advisory={{ evidenceItemIsAdvisory(item) }}</span>
+                  <span class="label-badge label-ai">需要人工确认={{ evidenceItemNeedsHuman(item) }}</span>
                   <span class="label-badge label-ai">safety boundary: {{ evidenceSafetyBoundary(item) }}</span>
                 </div>
                 <div class="dispatch-job-meta">
@@ -894,15 +1216,16 @@
                   <span>provider: {{ item.provider || '-' }}</span>
                   <span>role: {{ item.role || '-' }}</span>
                   <span>linked ids: {{ formatEvidenceItemLinkedIds(item) }}</span>
+                  <span>类型中文名: {{ evidenceTypeLabel(item.evidence_type) }}</span>
                   <span>summary: {{ item.summary || '-' }}</span>
                   <span>redaction_status: redaction_applied={{ item.redaction_status.redaction_applied }}, truncated={{ item.redaction_status.truncated }}, max_chars={{ item.redaction_status.max_chars }}</span>
                 </div>
                 <div class="form-actions">
-                  <button class="btn btn-sm" @click="copyEvidenceSummary(item)">Copy evidence summary</button>
-                  <button class="btn btn-sm" @click="copyEvidenceLinkedIds(item)">Copy linked ids</button>
+                  <button class="btn btn-sm" @click="copyEvidenceSummary(item)">复制证据摘要 <span class="button-tech-label">Copy evidence summary</span></button>
+                  <button class="btn btn-sm" @click="copyEvidenceLinkedIds(item)">复制关联 run/artifact <span class="button-tech-label">Copy linked ids</span></button>
                 </div>
                 <details class="evidence-excerpt">
-                  <summary>Evidence detail</summary>
+                  <summary>原始数据 / Evidence detail</summary>
                   <div class="dispatch-job-meta">
                     <span v-for="row in evidenceDetailRows(item)" :key="`${item.evidence_type}-${row}`">{{ row }}</span>
                   </div>
@@ -1020,31 +1343,40 @@
 
       <section class="card mastermind-review-panel">
         <div class="section-header">
-          <h2>Mastermind Review</h2>
-          <span class="workspace-readonly">Browser AI advisory review trial</span>
+          <h2>主脑复审（Mastermind Review）</h2>
+          <span class="workspace-readonly">生成复审包 → 网页主脑复审 → 保存报告 → 受控 Gate</span>
+        </div>
+        <div class="compatibility-strip">
+          <span>Mastermind Review</span>
+          <span>主脑复审</span>
+          <span>Mastermind review is advisory only</span>
+          <span>Human confirmation required</span>
+          <span>Browser AI uses visible user-authorized UI only</span>
+          <span>No account/password/cookie/session storage</span>
+          <span>No captcha/login bypass</span>
         </div>
         <div class="workspace-safety">
-          <span class="label-badge label-ai">Mastermind review is advisory only</span>
-          <span class="label-badge label-ai">Human confirmation required</span>
-          <span class="label-badge label-merged">No auto approve</span>
-          <span class="label-badge label-merged">No auto merge</span>
-          <span class="label-badge label-exec">No auto deploy</span>
-          <span class="label-badge label-exec">No auto rework</span>
-          <span class="label-badge label-provider">Browser AI uses visible user-authorized UI only</span>
-          <span class="label-badge label-redacted">No account/password/cookie/session storage</span>
-          <span class="label-badge label-redacted">No captcha/login bypass</span>
-          <span class="label-badge label-applied">No repository writes</span>
-          <span class="label-badge label-redacted">No GitHub / Sonar platform query</span>
+          <span class="label-badge label-ai">Mastermind review is advisory only · 主脑复审仅作为建议</span>
+          <span class="label-badge label-ai">Human confirmation required · 需要人工确认</span>
+          <span class="label-badge label-merged">No auto approve · 不会自动 approve</span>
+          <span class="label-badge label-merged">No auto merge · 不会自动 merge</span>
+          <span class="label-badge label-exec">No auto deploy · 不会自动部署</span>
+          <span class="label-badge label-exec">No auto rework · 不会自动返工</span>
+          <span class="label-badge label-provider">Browser AI uses visible user-authorized UI only · 使用可见授权浏览器 UI</span>
+          <span class="label-badge label-redacted">No account/password/cookie/session storage · 不保存账号/密码/cookie/session</span>
+          <span class="label-badge label-redacted">No captcha/login bypass · 不绕过验证码/登录</span>
+          <span class="label-badge label-applied">No repository writes · 不写真实仓库</span>
+          <span class="label-badge label-redacted">No GitHub / Sonar platform query · 不主动查询 GitHub / Sonar</span>
         </div>
         <p class="section-note">
-          S24.1.3 previews the review packet and calls the existing Browser AI review API. PR metadata, verification, and Sonar values are pasted by the user or an external flow.
+          这一区域把复审拆成清晰步骤：生成主脑复审包、发送给网页 GPT 主脑、读取回复并保存 mastermind_review_report，再运行受控 Gate 判断。PR / 验证 / Sonar 信息由用户或外部流程粘贴，前端不主动查询平台。
         </p>
 
         <div class="mastermind-review-grid">
           <div class="mastermind-review-form">
             <div class="section-header compact">
-              <strong>Packet metadata</strong>
-              <span class="workspace-readonly">manual input only</span>
+              <strong>复审包信息 Packet metadata</strong>
+              <span class="workspace-readonly">手动输入 manual input only</span>
             </div>
             <label class="wide">
               PR URL
@@ -1129,8 +1461,8 @@
             </div>
 
             <div class="section-header compact wide">
-              <strong>Browser AI options</strong>
-              <span class="workspace-readonly">visible UI only</span>
+              <strong>网页主脑选项 Browser AI options</strong>
+              <span class="workspace-readonly">可见浏览器 UI only</span>
             </div>
             <label>
               provider_profile
@@ -1171,24 +1503,24 @@
             <label class="checkbox-row wide"><input v-model="mastermindSaveArtifact" type="checkbox" /> save_artifact</label>
 
             <div class="form-actions wide">
-              <button class="btn btn-sm" @click="previewMastermindReview" :disabled="mastermindLoading">
-                Preview Mastermind Review Packet
+              <button class="btn btn-sm" aria-label="Preview Mastermind Review Packet" @click="previewMastermindReview" :disabled="mastermindLoading">
+                生成主脑复审包 <span class="button-tech-label">Preview Mastermind Review Packet</span>
               </button>
-              <button class="btn btn-primary btn-sm" @click="runMastermindReview" :disabled="mastermindExecuting">
-                Run Browser AI Mastermind Review
+              <button class="btn btn-primary btn-sm" aria-label="Run Browser AI Mastermind Review" @click="runMastermindReview" :disabled="mastermindExecuting">
+                发送给网页主脑复审 <span class="button-tech-label">Run Browser AI Mastermind Review</span>
               </button>
             </div>
           </div>
 
           <div class="mastermind-review-results">
             <p v-if="mastermindError" class="run-error">{{ mastermindError }}</p>
-            <p v-if="mastermindManualLoginRequired()" class="run-error">manual login required: complete login in the visible browser, then retry.</p>
+            <p v-if="mastermindManualLoginRequired()" class="run-error">需要手动登录 manual login required：请在可见浏览器完成登录后重试。</p>
             <p v-if="mastermindRefreshMessage" class="copy-message">{{ mastermindRefreshMessage }}</p>
             <p v-if="mastermindGateHint" class="section-note">{{ mastermindGateHint }}</p>
 
             <div v-if="mastermindPreview" class="mastermind-result-card">
               <div class="section-header compact">
-                <strong>Packet Preview</strong>
+                <strong>复审包预览 Packet Preview</strong>
                 <span class="workspace-readonly">{{ mastermindPreview.packet_type }}</span>
               </div>
               <div class="dispatch-job-meta">
@@ -1207,11 +1539,11 @@
                 <span>redaction_status: redaction_applied={{ mastermindPreview.redaction_status.redaction_applied }}, truncated={{ mastermindPreview.redaction_status.truncated }}, max_chars={{ mastermindPreview.redaction_status.max_chars }}</span>
               </div>
               <details open class="mastermind-detail">
-                <summary>PR / verification / Sonar</summary>
+                <summary>PR / 验证结果 / Sonar</summary>
                 <pre>{{ formatMastermindJson({ pr: mastermindPreview.packet.pr, verification: mastermindPreview.packet.verification, sonarcloud: mastermindPreview.packet.sonarcloud, safety_boundary_checklist: mastermindPreview.packet.safety_boundary_checklist }) }}</pre>
               </details>
               <details open class="mastermind-detail">
-                <summary>Task / Evidence / Timeline / Project Memory / handoff context</summary>
+                <summary>任务 / 证据板 / 时间线 / 项目记忆 / handoff context</summary>
                 <div class="dispatch-job-meta">
                   <span>task_summary: {{ formatMastermindPacketField('task_summary') }}</span>
                   <span>evidence_board_summary: {{ formatMastermindPacketField('evidence_board_summary') }}</span>
@@ -1235,11 +1567,12 @@
 
             <div v-if="mastermindResult" class="mastermind-result-card">
               <div class="section-header compact">
-                <strong>Review Result</strong>
-                <span class="run-status-badge" :class="mastermindResult.status">{{ mastermindResult.status }}</span>
+                <strong>复审报告 Review Result</strong>
+                <span class="run-status-badge" :class="mastermindResult.status">{{ statusLabel(mastermindResult.status) }}</span>
               </div>
               <div class="dispatch-job-meta">
                 <span>status: {{ mastermindResult.status }}</span>
+                <span>状态中文: {{ statusLabel(mastermindResult.status) }}</span>
                 <span>verdict: {{ mastermindResult.verdict }}</span>
                 <span>summary: {{ mastermindResult.summary || '-' }}</span>
                 <span>agent_run_id: {{ mastermindResult.agent_run_id ?? '-' }}</span>
@@ -1256,31 +1589,38 @@
                 <span>parse_errors: {{ formatMastermindList(mastermindResult.parse_errors) }}</span>
               </div>
               <details class="mastermind-detail">
-                <summary>raw_excerpt</summary>
+                <summary>原始摘录 raw_excerpt</summary>
                 <pre>{{ mastermindResult.raw_excerpt || '-' }}</pre>
               </details>
             </div>
 
             <div class="controlled-gate-panel">
               <div class="section-header compact">
-                <strong>Controlled Mastermind Gate</strong>
-                <span class="workspace-readonly">read-only gate preview</span>
+                <strong>受控 Gate（Controlled Mastermind Gate）</strong>
+                <span class="workspace-readonly">只读 Gate 预览 read-only</span>
+              </div>
+              <div class="compatibility-strip compact-strip">
+                <span>Controlled Mastermind Gate</span>
+                <span>受控 Gate</span>
+                <span>Controlled Gate is read-only</span>
+                <span>Advisory only</span>
+                <span>Human confirmation required</span>
               </div>
               <div class="workspace-safety">
-                <span class="label-badge label-ai">Controlled Gate is read-only</span>
-                <span class="label-badge label-ai">Human confirmation required</span>
-                <span class="label-badge label-ai">Advisory only</span>
-                <span class="label-badge label-merged">No auto approve</span>
-                <span class="label-badge label-merged">No auto merge</span>
-                <span class="label-badge label-exec">No auto deploy</span>
-                <span class="label-badge label-exec">No auto rework</span>
-                <span class="label-badge label-redacted">No GitHub / Sonar platform query</span>
-                <span class="label-badge label-provider">No Browser AI execution</span>
-                <span class="label-badge label-provider">No provider call</span>
-                <span class="label-badge label-applied">No repository writes</span>
+                <span class="label-badge label-ai">Controlled Gate is read-only · Gate 只读</span>
+                <span class="label-badge label-ai">Human confirmation required · 需要人工确认</span>
+                <span class="label-badge label-ai">Advisory only · 仅作为建议</span>
+                <span class="label-badge label-merged">No auto approve · 不会自动 approve</span>
+                <span class="label-badge label-merged">No auto merge · 不会自动 merge</span>
+                <span class="label-badge label-exec">No auto deploy · 不会自动部署</span>
+                <span class="label-badge label-exec">No auto rework · 不会自动返工</span>
+                <span class="label-badge label-redacted">No GitHub / Sonar platform query · 不查询 GitHub / Sonar</span>
+                <span class="label-badge label-provider">No Browser AI execution · Gate 不执行 Browser AI</span>
+                <span class="label-badge label-provider">No provider call · 不调用 provider</span>
+                <span class="label-badge label-applied">No repository writes · 不写真实仓库</span>
               </div>
               <p class="section-note">
-                gate_advisory_approved means ready for human confirmation only. It is not auto approve, not auto merge, not deploy permission, and not rework permission.
+                gate_advisory_approved = 建议进入人工确认。它不是自动 approve，不是自动 merge，不是部署许可，也不是返工许可。
               </p>
               <div class="mastermind-review-subgrid">
                 <label>
@@ -1296,31 +1636,33 @@
                 Reuses the PR URL, PR number, verification results, and SonarCloud values from the Mastermind Review packet form. The UI does not query GitHub or Sonar.
               </p>
               <div class="form-actions">
-                <button class="btn btn-sm" @click="previewControlledGate" :disabled="mastermindGateLoading">
-                  Preview Controlled Gate
+                <button class="btn btn-sm" aria-label="Preview Controlled Gate" @click="previewControlledGate" :disabled="mastermindGateLoading">
+                  运行受控 Gate 判断 <span class="button-tech-label">Preview Controlled Gate</span>
                 </button>
               </div>
               <p v-if="mastermindGateError" class="run-error">{{ mastermindGateError }}</p>
               <div v-if="mastermindGateResult" class="mastermind-result-card">
                 <div class="section-header compact">
                   <strong>Gate Preview</strong>
-                  <span class="gate-status-badge" :class="mastermindGateResult.gate_status">{{ mastermindGateResult.gate_status }}</span>
+                  <span class="gate-status-badge" :class="mastermindGateResult.gate_status">{{ gateStatusLabel(mastermindGateResult.gate_status) }}</span>
                 </div>
                 <div v-if="mastermindGateResult.gate_status === 'gate_advisory_approved'" class="gate-advisory-message">
+                  <p class="copy-message">gate_advisory_approved = 建议进入人工确认 ready for human confirmation</p>
                   <p class="copy-message">gate_advisory_approved = ready for human confirmation</p>
-                  <p class="section-note">No automatic approve, merge, deploy, or rework is authorized.</p>
+                  <p class="section-note">不会授权自动 approve、merge、deploy 或 rework。</p>
                 </div>
                 <p v-if="mastermindGateResult.gate_status === 'gate_request_changes'" class="run-error">
-                  gate_request_changes: request changes before continuing.
+                  gate_request_changes: 建议返工 request changes before continuing.
                 </p>
                 <p v-if="mastermindGateResult.gate_status === 'gate_blocked_by_safety'" class="run-error">
-                  gate_blocked_by_safety: safety boundary blocked.
+                  gate_blocked_by_safety: 安全边界阻塞 safety boundary blocked.
                 </p>
                 <p v-if="mastermindGateResult.gate_status === 'gate_stale_review'" class="run-error">
-                  gate_stale_review: reviewed head commit does not match current head commit.
+                  gate_stale_review: 复审已过期，reviewed head commit does not match current head commit.
                 </p>
                 <div class="dispatch-job-meta">
                   <span>gate_status: {{ mastermindGateResult.gate_status }}</span>
+                  <span>状态中文: {{ gateStatusLabel(mastermindGateResult.gate_status) }}</span>
                   <span>summary: {{ mastermindGateResult.summary || '-' }}</span>
                   <span>source_artifact_id: {{ mastermindGateResult.source_artifact_id ?? '-' }}</span>
                   <span>source_agent_run_id: {{ mastermindGateResult.source_agent_run_id ?? '-' }}</span>
@@ -1989,6 +2331,7 @@ import {
   fetchDispatchBatches, previewAnswerSynthesis, previewAiHandoff,
   dryRunAiDispatch, executeAiDispatch,
   dryRunBrowserAi, executeBrowserAi, fetchBrowserAiProviderProfiles,
+  previewBrowserAiPool, executeBrowserAiPool,
   previewMultiAiEvidenceRun, executeMultiAiEvidenceRun, previewFailureEvidencePacket, generateRepairPacket, previewRepairHandoff,
   createRepairAttempt, fetchRepairAttempts, markRepairHandoffCreated, importRepairVerificationResult, stopRepairAttempt,
   fetchCodeContext,
@@ -1998,7 +2341,7 @@ import {
   fetchProjectMemory, fetchProjectMemorySummary,
   previewMastermindReviewPacket, executeMastermindReview, previewMastermindReviewGate,
 } from '../services/agentService'
-import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse, RepairPacketGenerateRequest, RepairHandoffPreviewRequest, RepairHandoffPreviewResponse, RepairPacketResponse, RepairAttemptCreateRequest, RepairAttemptResponse, RepairVerificationResultRequest, TimelineResponse, TimelineItem, EvidenceBoardResponse, EvidenceBoardItem, EvidenceLinkedIds, ProjectMemoryResponse, ProjectMemorySummaryResponse, ProjectMemoryItem, ProjectMemorySourceRef, MastermindReviewPacketPreviewRequest, MastermindReviewPacketPreviewResponse, MastermindReviewBrowserAiOptions, MastermindReviewExecuteRequest, MastermindReviewExecuteResponse, MastermindReviewGatePreviewRequest, MastermindReviewGatePreviewResponse } from '../types/agent'
+import type { AgentProfile, AgentRun, AgentReview, AgentRunSubmitResult, ApprovalDecision, CodeContextResponse, PatchApplyResult, SandboxArtifactEntry, SandboxGateDecision, DispatchBatchResponse, AnswerSynthesisPreviewResponse, AiHandoffPreviewResponse, AiDispatchMode, AiDispatchRequest, AiDispatchDryRunResponse, AiDispatchExecuteResponse, AiDispatchSafetyGate, BrowserAiProviderProfile, BrowserAiRequest, BrowserAiResponse, BrowserAiSafetyGate, BrowserAiPoolProviderRequest, BrowserAiPoolRequest, BrowserAiPoolPreviewResponse, BrowserAiPoolExecuteResponse, McpToolDescriptor, McpCallResponse, MultiAiEvidenceRunRequest, MultiAiEvidenceRunResponse, MultiAiEvidenceSafetyGate, FailureEvidencePreviewRequest, FailureEvidencePacketResponse, RepairPacketGenerateRequest, RepairHandoffPreviewRequest, RepairHandoffPreviewResponse, RepairPacketResponse, RepairAttemptCreateRequest, RepairAttemptResponse, RepairVerificationResultRequest, TimelineResponse, TimelineItem, EvidenceBoardResponse, EvidenceBoardItem, EvidenceLinkedIds, ProjectMemoryResponse, ProjectMemorySummaryResponse, ProjectMemoryItem, ProjectMemorySourceRef, MastermindReviewPacketPreviewRequest, MastermindReviewPacketPreviewResponse, MastermindReviewBrowserAiOptions, MastermindReviewExecuteRequest, MastermindReviewExecuteResponse, MastermindReviewGatePreviewRequest, MastermindReviewGatePreviewResponse } from '../types/agent'
 import { AGENT_RUN_STATUS_LABELS, AGENT_RUN_TYPE_LABELS } from '../types/agent'
 import StatusBadge from '../components/StatusBadge.vue'
 import TicketPreview from '../components/TicketPreview.vue'
@@ -2092,6 +2435,28 @@ const selectedBrowserAiProfileStatus = computed(() => {
   const login = profile.login_required_hint ? (profile.login_hint_text || 'login may be required') : 'login not required'
   return `${configured}; ${login}`
 })
+const browserAiPoolForm = ref<BrowserAiPoolRequest>({
+  prompt: 'Review this task and provide advisory evidence. Do not claim approve, merge, deploy, or rework authority.',
+  providers: [
+    defaultBrowserAiPoolProvider('chatgpt_web', 'reviewer', 'ChatGPT Web'),
+    defaultBrowserAiPoolProvider('gemini_web', 'risk', 'Gemini Web'),
+    defaultBrowserAiPoolProvider('deepseek_web', 'comparison', 'DeepSeek Web'),
+  ],
+  max_total_concurrency: 2,
+  per_provider_concurrency: 1,
+  save_artifacts: true,
+  artifact_prefix: 'browser_ai_pool_answer',
+  include_task_context: true,
+  include_project_memory: true,
+  include_evidence_board: true,
+  prompt_budget: 12000,
+})
+const browserAiPoolLoading = ref(false)
+const browserAiPoolExecuting = ref(false)
+const browserAiPoolError = ref('')
+const browserAiPoolPreview = ref<BrowserAiPoolPreviewResponse | null>(null)
+const browserAiPoolResult = ref<BrowserAiPoolExecuteResponse | null>(null)
+const browserAiPoolRefreshMessages = ref<string[]>([])
 const multiAiForm = ref<MultiAiEvidenceRunRequest>({
   task_id: 0,
   mode: 'broadcast',
@@ -2313,6 +2678,74 @@ const filteredEvidenceBoardItems = computed(() => evidenceBoardItems.value.filte
   const filters = evidenceBoardFilter.value
   return evidenceBoardFilterFields.every((field) => !filters[field] || item[field] === filters[field])
 }))
+const latestKeyEvent = computed(() => {
+  const item = timelineItems.value[0]
+  if (!item) return '暂无运行时间线事件'
+  return `${item.title || item.type}: ${item.summary || statusLabel(item.status)}`
+})
+const currentWorkflowStage = computed(() => {
+  if (mastermindGateResult.value) return `Gate 判断: ${gateStatusLabel(mastermindGateResult.value.gate_status)}`
+  if (mastermindResult.value) return '主脑复审报告已生成'
+  if (browserAiPoolResult.value) return `多网页 AI 协作: ${statusLabel(browserAiPoolResult.value.overall_status)}`
+  if (browserAiPoolPreview.value) return '多网页 AI 协作已预览'
+  if (answerSynthesis.value) return '已有 Answer Synthesis 综合结果'
+  if (evidenceBoardItems.value.length) return '已有证据，可继续复审或 Gate 判断'
+  return '任务上下文准备中'
+})
+const nextActionSuggestion = computed(() => {
+  const gate = mastermindGateResult.value?.gate_status
+  if (gate === 'gate_request_changes') return 'Gate 状态为 request_changes，建议生成 repair packet，并由 Codex/OMX 执行受控返工。'
+  if (gate === 'gate_advisory_approved') return 'Gate 状态为 advisory_approved，建议等待人工确认；平台不会自动合入。'
+  if (gate === 'gate_needs_human') return 'Gate 需要人工判断，请检查复审报告、验证结果和证据板。'
+  if (gate === 'gate_blocked_by_safety') return 'Gate 被安全边界阻塞，请先处理越权、secret 或自动化授权风险。'
+  if (gate === 'gate_stale_review') return '复审已过期，请使用当前 head commit 重新生成复审包并复审。'
+  if (mastermindResult.value?.artifact_id) return '已有 mastermind_review_report，可以运行受控 Gate 判断。'
+  if (browserAiPoolResult.value && ['succeeded', 'partial'].includes(browserAiPoolResult.value.overall_status)) return '已有网页 AI 回答，可以进行 Answer Synthesis 或主脑复审。'
+  if (!browserAiPoolPreview.value) return '建议先生成 Browser AI Pool Preview，确认将调用哪些网页 AI。'
+  return '确认 provider 和 prompt 后，可以开始调用网页 AI。'
+})
+const workflowSteps = computed(() => [
+  {
+    key: 'context',
+    title: '任务上下文',
+    state: task.value ? 'done' : 'not_started',
+    description: task.value ? '任务标题、状态、项目和描述已加载。' : '等待任务加载。',
+  },
+  {
+    key: 'pool',
+    title: '多网页 AI 收集',
+    state: browserAiPoolResult.value
+      ? (browserAiPoolResult.value.overall_status === 'failed' ? 'failed' : 'done')
+      : (browserAiPoolPreview.value ? 'available' : 'available'),
+    description: browserAiPoolResult.value
+      ? `网页 AI Pool ${statusLabel(browserAiPoolResult.value.overall_status)}，回答会保存为 evidence artifact。`
+      : '可先预览 provider，再执行网页 AI 收集。',
+  },
+  {
+    key: 'review',
+    title: '综合 / 主脑复审',
+    state: mastermindResult.value ? (mastermindResult.value.status === 'failed' ? 'failed' : 'done') : (browserAiPoolResult.value ? 'available' : 'not_started'),
+    description: mastermindResult.value ? '主脑复审报告已生成，可进入 Gate 判断。' : '收集网页 AI 证据后，可生成复审包并发送给网页主脑。',
+  },
+  {
+    key: 'gate',
+    title: 'Gate 判断',
+    state: gateWorkflowState(mastermindGateResult.value?.gate_status),
+    description: mastermindGateResult.value ? gateStatusLabel(mastermindGateResult.value.gate_status) : '读取 mastermind_review_report 后给出只读 gate status。',
+  },
+  {
+    key: 'repair',
+    title: 'Codex/OMX 返工',
+    state: mastermindGateResult.value?.gate_status === 'gate_request_changes' ? 'available' : 'not_started',
+    description: '只有在需要返工时生成 repair packet；平台不自动写仓库。',
+  },
+  {
+    key: 'human',
+    title: '人工确认',
+    state: mastermindGateResult.value?.gate_status === 'gate_advisory_approved' ? 'human' : 'not_started',
+    description: '所有 approve、merge、deploy、rework 决策都需要人工确认。',
+  },
+])
 const projectMemoryItems = computed<ProjectMemoryItem[]>(() => projectMemory.value?.items || [])
 const projectMemoryTotalCount = computed(() => projectMemoryItems.value.length)
 const projectMemoryFilterOptions = computed(() => {
@@ -2378,6 +2811,96 @@ const sandboxGateStepNames = computed(() => {
     .filter((step) => /sandbox|gate/i.test(`${step.step} ${step.details || ''}`))
     .map((step) => `${step.step}: ${step.status}${step.details ? ` (${step.details})` : ''}`)
 })
+
+function statusLabel(status: string | null | undefined) {
+  const labels: Record<string, string> = {
+    succeeded: '成功',
+    success: '成功',
+    passed: '通过',
+    partial: '部分成功',
+    failed: '失败',
+    failure: '失败',
+    skipped: '跳过',
+    ready: '可执行',
+    queued: '排队中',
+    running: '运行中',
+    canceled: '已取消',
+    human_required: '需要人工处理',
+  }
+  return status ? (labels[status] || status) : '-'
+}
+
+function taskStatusLabel(status: string | null | undefined) {
+  const labels: Record<string, string> = {
+    draft: '草稿',
+    ticket_ready: '任务单已生成',
+    dispatched: '已分派',
+    result_submitted: '结果已提交',
+    reviewing: '审查中',
+    changes_requested: '要求修改',
+    human_required: '需要人工审批',
+    approved: '已通过',
+    rejected: '已拒绝',
+    archived: '已归档',
+  }
+  return status ? `${labels[status] || status} (${status})` : '-'
+}
+
+function priorityLabel(priority: string | null | undefined) {
+  const labels: Record<string, string> = {
+    low: '低',
+    medium: '中',
+    high: '高',
+    critical: '关键',
+  }
+  return priority ? `${labels[priority] || priority} (${priority})` : '-'
+}
+
+function workflowStateLabel(state: string) {
+  const labels: Record<string, string> = {
+    not_started: '未开始',
+    available: '可执行',
+    done: '已完成',
+    human: '需要人工处理',
+    failed: '失败',
+  }
+  return labels[state] || state
+}
+
+function gateStatusLabel(status: string | null | undefined) {
+  const labels: Record<string, string> = {
+    gate_not_ready: '还没有可用复审报告',
+    gate_needs_human: '需要人工判断',
+    gate_request_changes: '建议返工',
+    gate_advisory_approved: '建议进入人工确认',
+    gate_invalid_review: '复审格式无效',
+    gate_blocked_by_safety: '安全边界阻塞',
+    gate_stale_review: '复审已过期',
+  }
+  return status ? `${labels[status] || status} (${status})` : '-'
+}
+
+function gateWorkflowState(status: string | null | undefined) {
+  if (!status) return 'not_started'
+  if (status === 'gate_advisory_approved') return 'human'
+  if (status === 'gate_request_changes') return 'available'
+  if (['gate_blocked_by_safety', 'gate_invalid_review', 'gate_stale_review'].includes(status)) return 'failed'
+  return 'human'
+}
+
+function evidenceTypeLabel(type: string | null | undefined) {
+  const labels: Record<string, string> = {
+    browser_ai_answer: 'AI 回答',
+    browser_ai_pool_answer: '网页 AI Pool 回答',
+    mastermind_review_report: '主脑复审报告',
+    skill_review_report: 'Skill 复审报告',
+    repair_packet: '修复包',
+    repair_verification_result: '验证结果',
+    failure_evidence_packet: '失败证据包',
+    sandbox_artifact: '沙箱 artifact',
+  }
+  return type ? `${labels[type] || type} (${type})` : '-'
+}
 
 function formatHandoffDetails(packet: AiHandoffPreviewResponse) {
   return JSON.stringify({
@@ -2478,6 +3001,43 @@ function buildBrowserAiRequest(): BrowserAiRequest | null {
     ...browserAiForm.value,
     project_id: task.value.project_id,
     task_id: task.value.id,
+  }
+}
+
+function defaultBrowserAiPoolProvider(provider: BrowserAiPoolProviderRequest['provider'], role: string, displayName: string): BrowserAiPoolProviderRequest {
+  return {
+    provider,
+    role,
+    display_name: displayName,
+    target_url: '',
+    prompt_selector: '',
+    submit_selector: '',
+    response_selector: '',
+    scroll_container_selector: '',
+    copy_button_selector: '',
+    login_hint_selector: '',
+    stable_response_timeout_seconds: 120,
+    stable_polls: 3,
+    stable_interval_ms: 1000,
+    enabled: true,
+  }
+}
+
+function buildBrowserAiPoolRequest(): BrowserAiPoolRequest | null {
+  if (!task.value) return null
+  return {
+    ...browserAiPoolForm.value,
+    max_total_concurrency: Number(browserAiPoolForm.value.max_total_concurrency) || 1,
+    per_provider_concurrency: Number(browserAiPoolForm.value.per_provider_concurrency) || 1,
+    prompt_budget: Number(browserAiPoolForm.value.prompt_budget) || 12000,
+    providers: browserAiPoolForm.value.providers.map(provider => ({
+      ...provider,
+      stable_response_timeout_seconds: provider.stable_response_timeout_seconds
+        ? Number(provider.stable_response_timeout_seconds)
+        : null,
+      stable_polls: Number(provider.stable_polls) || 3,
+      stable_interval_ms: Number(provider.stable_interval_ms) || 1000,
+    })),
   }
 }
 
@@ -2631,6 +3191,15 @@ function removeEvidenceRole(index: number) {
   multiAiForm.value.roles.splice(index, 1)
 }
 
+function addBrowserAiPoolProvider() {
+  browserAiPoolForm.value.providers.push(defaultBrowserAiPoolProvider('custom', 'reviewer', 'Custom Web AI'))
+}
+
+function removeBrowserAiPoolProvider(index: number) {
+  if (browserAiPoolForm.value.providers.length <= 1) return
+  browserAiPoolForm.value.providers.splice(index, 1)
+}
+
 function addRepairRole() {
   repairPacketForm.value.roles.push({ role: 'test', provider: 'gemini_web', prompt: 'Suggest verification commands and residual risks.' })
 }
@@ -2660,6 +3229,7 @@ async function loadBrowserAiProfiles() {
   try {
     const profiles = await fetchBrowserAiProviderProfiles()
     if (profiles.length > 0) browserAiProfiles.value = profiles
+    browserAiPoolForm.value.providers.forEach((_, index) => applyBrowserAiPoolProfile(index))
   } catch (err) {
     console.warn('Failed to load Browser AI provider profiles; using local fallback profiles.', err)
   }
@@ -2687,6 +3257,21 @@ function applyMastermindBrowserProfile() {
   mastermindBrowserAiForm.value.scroll_container_selector = profile.scroll_container_selector || ''
   mastermindBrowserAiForm.value.copy_button_selector = profile.copy_button_selector || ''
   mastermindBrowserAiForm.value.login_hint_selector = profile.login_hint_selector || ''
+}
+
+function applyBrowserAiPoolProfile(index: number) {
+  const provider = browserAiPoolForm.value.providers[index]
+  if (!provider) return
+  const profile = browserAiProfiles.value.find(item => item.provider === provider.provider)
+  if (!profile || profile.provider === 'custom') return
+  provider.display_name = provider.display_name || profile.display_name
+  provider.target_url = profile.target_url || provider.target_url
+  provider.prompt_selector = profile.input_selector || provider.prompt_selector
+  provider.submit_selector = profile.send_selector || provider.submit_selector
+  provider.response_selector = profile.response_selector || provider.response_selector
+  provider.scroll_container_selector = profile.scroll_container_selector || ''
+  provider.copy_button_selector = profile.copy_button_selector || ''
+  provider.login_hint_selector = profile.login_hint_selector || ''
 }
 
 async function refresh() {
@@ -2799,6 +3384,43 @@ async function executeBrowserAiRun() {
   }
 }
 
+async function previewBrowserAiPoolRun() {
+  if (!task.value) return
+  const body = buildBrowserAiPoolRequest()
+  if (!body) return
+  browserAiPoolLoading.value = true
+  browserAiPoolError.value = ''
+  browserAiPoolRefreshMessages.value = []
+  try {
+    browserAiPoolPreview.value = await previewBrowserAiPool(task.value.id, body)
+  } catch (e: any) {
+    browserAiPoolPreview.value = null
+    browserAiPoolError.value = e.message || '多网页 AI 协作预览失败'
+  } finally {
+    browserAiPoolLoading.value = false
+  }
+}
+
+async function executeBrowserAiPoolRun() {
+  if (!task.value) return
+  const body = buildBrowserAiPoolRequest()
+  if (!body) return
+  browserAiPoolExecuting.value = true
+  browserAiPoolError.value = ''
+  browserAiPoolRefreshMessages.value = []
+  try {
+    browserAiPoolResult.value = await executeBrowserAiPool(task.value.id, body)
+    if (['succeeded', 'partial'].includes(browserAiPoolResult.value.overall_status) && browserAiPoolResult.value.persisted) {
+      await refreshAfterBrowserAiPoolRun()
+    }
+  } catch (e: any) {
+    browserAiPoolResult.value = null
+    browserAiPoolError.value = e.message || '多网页 AI 协作执行失败'
+  } finally {
+    browserAiPoolExecuting.value = false
+  }
+}
+
 async function previewMastermindReview() {
   if (!task.value) return
   mastermindLoading.value = true
@@ -2809,7 +3431,7 @@ async function previewMastermindReview() {
     mastermindPreview.value = await previewMastermindReviewPacket(task.value.id, buildMastermindPacketRequest())
   } catch (e: any) {
     mastermindPreview.value = null
-    mastermindError.value = e.message || 'Mastermind Review packet preview failed'
+    mastermindError.value = e.message || '主脑复审包生成失败'
   } finally {
     mastermindLoading.value = false
   }
@@ -2828,7 +3450,7 @@ async function runMastermindReview() {
     }
   } catch (e: any) {
     mastermindResult.value = null
-    mastermindError.value = e.message || 'Browser AI Mastermind Review failed'
+    mastermindError.value = e.message || '网页主脑复审执行失败'
   } finally {
     mastermindExecuting.value = false
   }
@@ -2842,7 +3464,7 @@ async function previewControlledGate() {
     mastermindGateResult.value = await previewMastermindReviewGate(task.value.id, buildMastermindGateRequest())
   } catch (e: any) {
     mastermindGateResult.value = null
-    mastermindGateError.value = e.message || 'Controlled Mastermind Gate preview failed'
+    mastermindGateError.value = e.message || '受控 Gate 判断失败'
   } finally {
     mastermindGateLoading.value = false
   }
@@ -3037,6 +3659,25 @@ function evidenceItemHasRisk(item: EvidenceBoardItem) {
     ...(item.safety_notes || []),
   ].join(' ').toLowerCase()
   return ['risk', 'failed', 'blocked', 'warning', 'unsafe', 'human decision'].some((keyword) => riskText.includes(keyword))
+}
+
+function evidenceItemIsAdvisory(item: EvidenceBoardItem) {
+  const text = [
+    item.evidence_type,
+    item.summary,
+    item.raw_excerpt,
+    ...(item.safety_notes || []),
+  ].join(' ').toLowerCase()
+  return /advisory|browser_ai|mastermind|review|pool|evidence/.test(text)
+}
+
+function evidenceItemNeedsHuman(item: EvidenceBoardItem) {
+  const text = [
+    item.summary,
+    item.raw_excerpt,
+    ...(item.safety_notes || []),
+  ].join(' ').toLowerCase()
+  return /human|confirmation|required|approval|manual/.test(text) || evidenceItemIsAdvisory(item)
 }
 
 function evidenceSafetyBoundary(item: EvidenceBoardItem) {
@@ -3236,6 +3877,24 @@ async function refreshAfterBrowserAiRun() {
   browserAiRefreshMessages.value = messages
 }
 
+async function refreshAfterBrowserAiPoolRun() {
+  if (!task.value) return
+  const id = task.value.id
+  const messages = ['Browser AI Pool evidence saved', '网页 AI 回答已保存为证据']
+  agentRuns.value = await fetchAgentRuns(id)
+  messages.push('AgentRuns refreshed')
+  messages.push('AgentRun 列表已刷新')
+  artifactRefreshKey.value += 1
+  messages.push('Artifacts refreshed')
+  messages.push('artifact 列表已刷新')
+  await loadEvidenceSummary(id)
+  messages.push('Evidence Board refreshed')
+  messages.push('证据板已刷新')
+  messages.push('Timeline refreshed')
+  messages.push('时间线已刷新')
+  browserAiPoolRefreshMessages.value = messages
+}
+
 async function refreshAfterMastermindReview() {
   if (!task.value) return
   const id = task.value.id
@@ -3247,7 +3906,7 @@ async function refreshAfterMastermindReview() {
   }
   mastermindGateForm.value.current_head_commit = mastermindPacketForm.value.head_commit
   mastermindRefreshMessage.value = 'Mastermind Review saved; AgentRun, artifacts, Timeline, and Evidence Board refreshed'
-  mastermindGateHint.value = 'Click Preview Controlled Gate to classify the review before human confirmation.'
+  mastermindGateHint.value = '下一步：点击“运行受控 Gate 判断”，在人工确认前分类复审结果。'
 }
 
 async function refreshAfterEvidenceRun() {
@@ -3527,9 +4186,29 @@ async function handleCreateAgentReview() {
 .result-form h3 { font-size: 16px; font-weight: 600; margin-bottom: 12px; }
 .result-form textarea { width: 100%; padding: 8px 12px; border: 1px solid var(--color-border); border-radius: var(--radius); font-size: 14px; font-family: inherit; resize: vertical; }
 .form-actions { display: flex; gap: 8px; margin-top: 8px; }
+.button-tech-label { margin-left: 4px; font-size: 11px; opacity: .72; font-weight: 500; }
 .detail-body { display: flex; flex-direction: column; gap: 20px; }
 .detail-body section h2 { font-size: 16px; font-weight: 600; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--color-border); }
 .description-text { white-space: pre-wrap; font-family: inherit; font-size: 14px; line-height: 1.6; color: var(--color-text-secondary); }
+.task-cockpit-panel { border-left: 3px solid #1f6feb; }
+.task-overview-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(240px, .8fr); gap: 14px; align-items: stretch; }
+.task-overview-main,
+.next-action-card { padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
+.overview-title { font-size: 18px; font-weight: 700; margin: 0 0 8px; color: var(--color-text); }
+.next-action-card { display: flex; flex-direction: column; gap: 8px; background: #f7fbff; border-color: #c7dcff; }
+.next-action-card strong { font-size: 14px; }
+.next-action-card p { margin: 0; color: var(--color-text); line-height: 1.55; }
+.safety-mini-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.workflow-nav-panel { border-left: 3px solid #5b6ee1; }
+.workflow-steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.workflow-step { min-height: 112px; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; display: flex; flex-direction: column; gap: 6px; }
+.workflow-step-title { font-weight: 700; font-size: 13px; color: var(--color-text); }
+.workflow-step-state { align-self: flex-start; padding: 2px 8px; border-radius: 999px; font-size: 11px; background: #f1f5f9; color: #475569; }
+.workflow-step p { margin: 0; font-size: 12px; line-height: 1.45; color: var(--color-text-secondary); }
+.workflow-step.done { border-color: #b7dfc3; background: #f6fbf7; }
+.workflow-step.available { border-color: #bbd4f6; background: #f6faff; }
+.workflow-step.human { border-color: #f3d19c; background: #fff9ef; }
+.workflow-step.failed { border-color: #f5b5b5; background: #fff5f5; }
 .real-ai-run { border-left: 3px solid var(--color-primary); }
 .real-ai-form { display: grid; grid-template-columns: minmax(160px, 220px) 1fr; gap: 12px; align-items: start; margin-top: 12px; }
 .real-ai-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
@@ -3539,16 +4218,30 @@ async function handleCreateAgentReview() {
 .real-ai-sandbox { padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; display: flex; flex-direction: column; gap: 6px; }
 .real-ai-sandbox strong { font-size: 13px; }
 .browser-ai-run { border-left: 3px solid #00897b; }
+.browser-ai-pool-panel { border-left: 3px solid #00796b; }
 .multi-ai-evidence-run { border-left: 3px solid #6a1b9a; }
 .failure-evidence-preview { border-left: 3px solid #ad5700; }
 .repair-packet-generation { border-left: 3px solid #2e7d32; }
 .repair-handoff-preview { border-left: 3px solid #2563eb; }
 .repair-attempt-timeline { border-left: 3px solid #455a64; }
 .browser-ai-help { margin: 8px 0 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
+.browser-window-help { margin: 10px 0 12px; padding: 10px 12px; border: 1px solid #c7dcff; border-radius: var(--radius); background: #f7fbff; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
+.browser-window-help strong { display: block; color: var(--color-text); margin-bottom: 4px; }
+.browser-window-help p { margin: 3px 0; }
 .browser-ai-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
 .browser-ai-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
 .browser-ai-form .wide { grid-column: 1 / -1; }
 .browser-ai-form textarea { min-height: 90px; resize: vertical; }
+.browser-ai-pool-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
+.browser-ai-pool-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
+.browser-ai-pool-form .wide { grid-column: 1 / -1; }
+.browser-ai-pool-form textarea { min-height: 92px; resize: vertical; }
+.pool-provider-list { display: grid; gap: 10px; }
+.pool-provider-row { display: grid; grid-template-columns: minmax(92px, .6fr) repeat(3, minmax(120px, 1fr)); gap: 10px; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; align-items: end; }
+.pool-provider-row .wide { grid-column: 1 / -1; }
+.pool-provider-row .pool-enabled { justify-content: end; min-height: 34px; }
+.browser-ai-pool-settings { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; align-items: end; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fafafa; }
+.browser-ai-pool-result { margin-top: 14px; }
 .multi-ai-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; margin-top: 12px; }
 .multi-ai-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
 .multi-ai-form .wide { grid-column: 1 / -1; }
@@ -3621,6 +4314,8 @@ async function handleCreateAgentReview() {
 .mastermind-detail { margin-top: 8px; }
 .mastermind-detail summary { cursor: pointer; color: var(--color-text-secondary); font-size: 12px; }
 .mastermind-detail pre { margin-top: 6px; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--color-text-secondary); padding: 8px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fff; }
+.advanced-details { margin-top: 2px; padding: 8px; border: 1px dashed var(--color-border); border-radius: var(--radius); background: #fff; }
+.advanced-details summary { cursor: pointer; color: var(--color-text-secondary); font-size: 12px; font-weight: 600; }
 .controlled-gate-panel { display: flex; flex-direction: column; gap: 10px; padding: 10px; border: 1px solid #d6c18f; border-radius: var(--radius); background: #fffdf7; }
 .gate-status-badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; font-family: monospace; }
 .gate-status-badge.gate_advisory_approved { background: #e8f5e9; color: #2e7d32; }

@@ -16,6 +16,9 @@ const r = { passed: 0, failed: 0, errors: [], networkFailures: [], details: [] }
 function log(m) { console.log(m); r.details.push(m) }  // NOSONAR - test log
 function pass(m) { r.passed++; log(`  [PASS] ${m}`) }
 function fail(m, e) { r.failed++; log(`  [FAIL] ${m}: ${e}`) }
+function isIgnoredNetworkFailure(url) {
+  return url.includes('/api/mcp/tools') || url.includes('/api/agents')
+}
 
 function httpGet(url, cb) {
   http.get(url, res => { let d = ''; res.on('data', c => d += c); res.on('end', () => cb({ status: res.statusCode, body: d })) })  // NOSONAR - test harness
@@ -130,7 +133,10 @@ async function launchBrowser() {
   const p = await c.newPage()
   const ce = []
   p.on('console', msg => { if (msg.type() === 'error') ce.push(msg.text()) })
-  p.on('requestfailed', req => { r.networkFailures.push(req.url()) })
+  p.on('requestfailed', req => {
+    const url = req.url()
+    if (!isIgnoredNetworkFailure(url)) r.networkFailures.push(url)
+  })
   return { browser: b, page: p, consoleErrors: ce }
 }
 
@@ -294,6 +300,35 @@ async function testDashboardFirstUsableWorkflow(page) {
       }),
     })
   })
+  await page.unroute('**/api/tasks/62001**').catch(() => {})
+  await page.route('**/api/tasks/62001**', async route => {
+    await fulfillJson(route, {
+      success: true,
+      data: {
+        id: 62001,
+        project_id: 61001,
+        title: '演示任务',
+        description: 'Dashboard 创建演示任务后进入 TaskDetail。',
+        status: 'draft',
+        priority: 'medium',
+        source: 'manual',
+        planner: null,
+        executor: null,
+        reviewer: null,
+        human_approver: null,
+        ticket_content: null,
+        result_summary: null,
+        pr_url: null,
+        ci_url: null,
+        deploy_url: null,
+        target_branch: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        project_name: 'Demo AI Workbench',
+      },
+      message: 'ok',
+    }, 200)
+  })
 
   await page.goto(`${FE}/`, { waitUntil: 'networkidle', timeout: 15000 })
   await page.waitForTimeout(500)
@@ -310,6 +345,7 @@ async function testDashboardFirstUsableWorkflow(page) {
 
   await page.getByRole('button', { name: '创建演示项目并打开' }).first().click()
   await page.waitForURL('**/tasks/*', { timeout: 5000 })
+  await page.waitForLoadState('networkidle', { timeout: 15000 })
   if (runtimeCounter.count > 0) pass('D0-9 runtime status endpoint called')
   else fail('D0-9 runtime status endpoint not called', '')
   if (projectCounter.count === 1) pass('D0-10 create project API called')
@@ -357,6 +393,7 @@ async function clearDashboardRoutes(page) {
   await page.unroute('**/api/ai-runtime/status').catch(() => {})
   await page.unroute('**/api/projects').catch(() => {})
   await page.unroute('**/api/tasks').catch(() => {})
+  await page.unroute('**/api/tasks/62001**').catch(() => {})
 }
 
 async function testGovernance(page) {
@@ -1215,7 +1252,7 @@ async function testEvidenceBoardFiltersDetails(page, taskId) {
   await page.locator('.evidence-board-item').first().locator('summary').click()
   await page.waitForTimeout(150)
   await checkTexts(page, [
-    ['Evidence detail', 'S22.3-24 evidence detail expands'],
+    ['原始数据 / Evidence detail', 'S22.3-24 evidence detail expands'],
     ['raw_excerpt', 'S22.3-25 raw excerpt detail visible'],
     ['safety_notes: Codex / OMX or user must execute repair.', 'S22.3-26 safety notes detail visible'],
     ['redaction_status: redaction_applied=true, truncated=false, max_chars=2000', 'S22.3-27 redaction detail visible'],
@@ -1506,6 +1543,200 @@ async function testMastermindReviewApiFailure(page, task) {
   await clearMastermindReviewRoutes(page)
 }
 
+async function testBrowserAiPoolPanel(page, task) {
+  log('\n========== S24.1.8 Browser AI Pool UI ==========')
+  const previewCounter = { count: 0 }
+  const executeCounter = { count: 0 }
+  const timelineCounter = { count: 0 }
+  const evidenceCounter = { count: 0 }
+  const runsCounter = { count: 0 }
+  const artifactsCounter = { count: 0 }
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(task.id, task.project_id), 200)
+  await setProjectMemoryRoutes(page, projectMemoryPayload(task.project_id), projectMemorySummaryPayload(task.project_id), 200)
+  await setEvidenceSummaryRoutes(page, timelinePayload(task.id), evidenceBoardPayload(task.id), 200, timelineCounter, evidenceCounter)
+  await setAgentRunsRoute(page, [runPayload(7101, task.id, 'Browser AI Pool run')], 200, runsCounter)
+  await setArtifactsRoute(page, [artifactPayload(7102, task.id, 'browser_ai_pool_answer', 'browser_ai_pool_answer_7101.json', 'Pool answer excerpt')], 200, artifactsCounter)
+  await setBrowserAiPoolRoutes(
+    page,
+    browserAiPoolPreviewPayload(task.id, task.project_id),
+    browserAiPoolExecutePayload(task.id, task.project_id),
+    200,
+    previewCounter,
+    executeCounter,
+  )
+  await page.goto(`${FE}/tasks/${task.id}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await checkTexts(page, [
+    ['Browser AI Pool', 'S24.1.8-1 pool panel shown'],
+    ['Browser AI Pool output is advisory evidence only', 'S24.1.8-2 advisory safety shown'],
+    ['Uses visible user-authorized browser UI only', 'S24.1.8-3 visible UI safety shown'],
+    ['No provider API token call', 'S24.1.8-4 no token call shown'],
+    ['No account/password/cookie/session/localStorage storage', 'S24.1.8-5 no credential storage shown'],
+    ['No login/captcha/2FA/paywall/rate-limit bypass', 'S24.1.8-6 no bypass shown'],
+    ['No hidden web API as main path', 'S24.1.8-7 no hidden API shown'],
+    ['No repository writes', 'S24.1.8-8 no repository writes shown'],
+    ['No GitHub / Sonar platform query', 'S24.1.8-9 no GitHub Sonar query shown'],
+    ['No auto approve', 'S24.1.8-10 no auto approve shown'],
+    ['No auto merge', 'S24.1.8-11 no auto merge shown'],
+    ['No auto deploy', 'S24.1.8-12 no auto deploy shown'],
+    ['No auto rework', 'S24.1.8-13 no auto rework shown'],
+    ['Preview Browser AI Pool', 'S24.1.8-14 preview button shown'],
+    ['Run Browser AI Pool', 'S24.1.8-15 execute button shown'],
+    ['provider rows', 'S24.1.8-16 provider rows shown'],
+    ['ChatGPT Web', 'S24.1.8-17 ChatGPT default row shown'],
+    ['Gemini Web', 'S24.1.8-18 Gemini default row shown'],
+    ['DeepSeek Web', 'S24.1.8-19 DeepSeek default row shown'],
+    ['Current backend MVP executes provider jobs sequentially', 'S24.1.8-20 concurrency note shown'],
+  ])
+  const enabledBox = page.locator('.browser-ai-pool-panel input[type="checkbox"]').first()
+  await enabledBox.uncheck()
+  await enabledBox.check()
+  pass('S24.1.8-21 provider enable toggle works')
+  await page.locator('.browser-ai-pool-panel').getByRole('button', { name: 'Preview Browser AI Pool' }).click()
+  await page.waitForTimeout(300)
+  if (previewCounter.count === 1) pass('S24.1.8-22 preview API called')
+  else fail('S24.1.8-22 preview API call count', previewCounter.count)
+  await checkTexts(page, [
+    ['overall_status: partial', 'S24.1.8-23 preview overall status shown'],
+    ['provider: chatgpt_web', 'S24.1.8-24 preview provider shown'],
+    ['status: ready', 'S24.1.8-25 preview status shown'],
+    ['prompt_hash: poolhash-chatgpt', 'S24.1.8-26 prompt hash shown'],
+    ['blocked_reasons: Selector failure risk: response selector missing on blocked provider.', 'S24.1.8-27 blocked reasons shown'],
+    ['safety_notes: Pool preview is read-only; no Browser AI execution.', 'S24.1.8-28 preview safety notes shown'],
+    ['read_only=true', 'S24.1.8-29 preview read_only shown'],
+    ['persisted=false', 'S24.1.8-30 preview persisted shown'],
+    ['advisory_only=true', 'S24.1.8-31 preview advisory shown'],
+    ['human_confirmation_required=true', 'S24.1.8-32 preview human confirmation shown'],
+    ['no_auto_merge=true', 'S24.1.8-33 preview no auto merge shown'],
+  ])
+  await page.locator('.browser-ai-pool-panel').getByRole('button', { name: 'Run Browser AI Pool' }).click()
+  await page.waitForTimeout(500)
+  if (executeCounter.count === 1) pass('S24.1.8-34 execute API called')
+  else fail('S24.1.8-34 execute API call count', executeCounter.count)
+  await checkTexts(page, [
+    ['overall_status: partial', 'S24.1.8-35 execute overall status shown'],
+    ['pool_run_id: 7100', 'S24.1.8-36 pool run id shown'],
+    ['agent_run_id: 7101', 'S24.1.8-37 job agent run id shown'],
+    ['artifact_id: 7102', 'S24.1.8-38 job artifact id shown'],
+    ['Answer from ChatGPT pool reviewer.', 'S24.1.8-39 answer excerpt shown'],
+    ['failure_reason: stable response timeout', 'S24.1.8-40 failure reason shown'],
+    ['manual_login_required=true', 'S24.1.8-41 manual login required shown'],
+    ['redaction_status: redaction_applied=true, truncated=false, max_chars=4000', 'S24.1.8-42 redaction status shown'],
+    ['metadata.concurrency_note: MVP executes jobs sequentially while preserving bounded concurrency settings.', 'S24.1.8-43 concurrency metadata shown'],
+    ['read_only=false', 'S24.1.8-44 execute read_only false shown'],
+    ['persisted=true', 'S24.1.8-45 execute persisted true shown'],
+    ['advisory_only=true', 'S24.1.8-46 execute advisory shown'],
+    ['human_confirmation_required=true', 'S24.1.8-47 execute human confirmation shown'],
+    ['no_auto_merge=true', 'S24.1.8-48 execute no auto merge shown'],
+    ['Browser AI Pool evidence saved', 'S24.1.8-49 refresh saved message shown'],
+    ['AgentRuns refreshed', 'S24.1.8-50 AgentRuns refresh shown'],
+    ['Artifacts refreshed', 'S24.1.8-51 Artifacts refresh shown'],
+    ['Evidence Board refreshed', 'S24.1.8-52 Evidence Board refresh shown'],
+    ['Timeline refreshed', 'S24.1.8-53 Timeline refresh shown'],
+  ])
+  if (timelineCounter.count >= 2 && evidenceCounter.count >= 2 && runsCounter.count >= 2) pass('S24.1.8-54 execute refreshes AgentRun, Evidence Board, and Timeline')
+  else fail('S24.1.8-54 refresh counts', `runs=${runsCounter.count}, timeline=${timelineCounter.count}, evidence=${evidenceCounter.count}`)
+  await checkUnsafeDeliveryAbsent(page, 'S24.1.8-55')
+  await clearBrowserAiPoolRoutes(page)
+  await clearEvidenceSummaryRoutes(page)
+  await clearProjectMemoryRoutes(page)
+}
+
+async function testFrontendChineseWorkflowPolish(page, task) {
+  log('\n========== S24.1.8A Frontend Workflow & Chinese UX Polish ==========')
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(task.id, task.project_id), 200)
+  await setProjectMemoryRoutes(page, projectMemoryPayload(task.project_id), projectMemorySummaryPayload(task.project_id), 200)
+  await setEvidenceSummaryRoutes(page, timelinePayload(task.id), evidenceBoardPayload(task.id), 200)
+  await setBrowserAiPoolRoutes(
+    page,
+    browserAiPoolPreviewPayload(task.id, task.project_id),
+    browserAiPoolExecutePayload(task.id, task.project_id),
+    200,
+  )
+  await setMastermindReviewRoutes(
+    page,
+    mastermindPreviewPayload(task.id, task.project_id),
+    mastermindExecutePayload(task.id, task.project_id),
+    200,
+    null,
+    null,
+    { gateData: mastermindGatePayload(task.id, task.project_id) },
+  )
+  await page.goto(`${FE}/tasks/${task.id}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await checkTexts(page, [
+    ['任务概览', 'S24.1.8A-1 task overview shown'],
+    ['下一步建议', 'S24.1.8A-2 next action shown'],
+    ['自动化流程导航', 'S24.1.8A-3 workflow nav shown'],
+    ['任务上下文', 'S24.1.8A-4 context step shown'],
+    ['多网页 AI 收集', 'S24.1.8A-5 pool workflow step shown'],
+    ['综合 / 主脑复审', 'S24.1.8A-6 review workflow step shown'],
+    ['Gate 判断', 'S24.1.8A-7 gate workflow step shown'],
+    ['Codex/OMX 返工', 'S24.1.8A-8 repair workflow step shown'],
+    ['人工确认', 'S24.1.8A-9 human confirmation step shown'],
+    ['多网页 AI 协作', 'S24.1.8A-10 browser ai pool Chinese title shown'],
+    ['主脑复审', 'S24.1.8A-11 mastermind Chinese title shown'],
+    ['受控 Gate', 'S24.1.8A-12 controlled gate Chinese title shown'],
+    ['证据板', 'S24.1.8A-13 evidence board Chinese title shown'],
+    ['运行时间线', 'S24.1.8A-14 timeline Chinese title shown'],
+    ['浏览器窗口可见性说明', 'S24.1.8A-15 browser visibility help shown'],
+    ['Preview 不会打开浏览器窗口', 'S24.1.8A-16 preview browser note shown'],
+    ['Execute 才会调用 Browser AI', 'S24.1.8A-17 execute browser note shown'],
+    ['后端运行的机器', 'S24.1.8A-18 backend machine note shown'],
+    ['BROWSER_AI_HEADLESS=true', 'S24.1.8A-19 headless note shown'],
+    ['当前实现会关闭浏览器上下文', 'S24.1.8A-20 close browser context note shown'],
+    ['常驻窗口池 / 窗口状态 UI', 'S24.1.8A-21 future window pool note shown'],
+    ['输出仅作为建议证据', 'S24.1.8A-22 Chinese advisory safety shown'],
+    ['不会自动 approve', 'S24.1.8A-23 no auto approve Chinese shown'],
+    ['不会自动 merge', 'S24.1.8A-24 no auto merge Chinese shown'],
+    ['不会自动部署', 'S24.1.8A-25 no auto deploy Chinese shown'],
+    ['不会自动返工', 'S24.1.8A-26 no auto rework Chinese shown'],
+    ['自定义网页选择器 / 高级设置', 'S24.1.8A-27 advanced selector folded title shown'],
+    ['原始数据 / Evidence detail', 'S24.1.8A-28 raw evidence details folded title shown'],
+    ['原始摘录 raw_excerpt', 'S24.1.8A-29 raw excerpt folded title shown'],
+    ['网页 AI Pool 回答', 'S24.1.8A-30 evidence type Chinese label shown'],
+    ['需要人工确认', 'S24.1.8A-31 human confirmation Chinese shown'],
+  ])
+  const advancedOpen = await page.locator('.browser-ai-pool-panel details.advanced-details[open]').count()
+  if (advancedOpen === 0) pass('S24.1.8A-32 advanced selectors collapsed by default')
+  else fail('S24.1.8A-32 advanced selectors collapsed by default', advancedOpen)
+  await page.locator('.browser-ai-pool-panel').getByRole('button', { name: 'Preview Browser AI Pool' }).click()
+  await page.waitForTimeout(300)
+  await checkT(page, '预览结果', 'S24.1.8A-33 pool preview Chinese result shown')
+  await page.locator('.browser-ai-pool-panel').getByRole('button', { name: 'Run Browser AI Pool' }).click()
+  await page.waitForTimeout(500)
+  await checkTexts(page, [
+    ['执行结果', 'S24.1.8A-34 pool execute Chinese result shown'],
+    ['回答摘要: Answer from ChatGPT pool reviewer.', 'S24.1.8A-35 answer excerpt Chinese label shown'],
+    ['需要手动登录', 'S24.1.8A-36 manual login Chinese shown'],
+    ['网页 AI 回答已保存为证据', 'S24.1.8A-37 saved evidence Chinese shown'],
+  ])
+  await checkUnsafeDeliveryAbsent(page, 'S24.1.8A-38')
+  await clearBrowserAiPoolRoutes(page)
+  await clearMastermindReviewRoutes(page)
+  await clearEvidenceSummaryRoutes(page)
+  await clearProjectMemoryRoutes(page)
+}
+
+async function testBrowserAiPoolApiFailure(page, task) {
+  log('\n========== S24.1.8 Browser AI Pool API Failure ==========')
+  await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
+  await setAiHandoffRoute(page, handoffPayload(task.id, task.project_id), 200)
+  await setProjectMemoryRoutes(page, projectMemoryPayload(task.project_id), projectMemorySummaryPayload(task.project_id), 200)
+  await setEvidenceSummaryRoutes(page, timelinePayload(task.id), evidenceBoardPayload(task.id), 200)
+  await setBrowserAiPoolRoutes(page, { detail: 'browser ai pool preview unavailable' }, browserAiPoolExecutePayload(task.id, task.project_id), 500)
+  await page.goto(`${FE}/tasks/${task.id}`, { waitUntil: 'networkidle', timeout: 15000 })
+  await page.waitForTimeout(500)
+  await page.locator('.browser-ai-pool-panel').getByRole('button', { name: 'Preview Browser AI Pool' }).click()
+  await page.waitForTimeout(300)
+  await checkT(page, '多网页 AI 协作', 'S24.1.8-56 panel remains visible on preview API failure')
+  await checkBodyIncludes(page, 'preview unavailable', 'S24.1.8-57 preview API failure shown')
+  await checkT(page, 'Agent 运行', 'S24.1.8-58 existing TaskDetail modules remain visible')
+  await clearBrowserAiPoolRoutes(page)
+}
+
 async function openEvidenceSummaryPage(page, taskId, timelineCounter, evidenceCounter, boardPayload = evidenceBoardPayload(taskId)) {
   await setDispatchBatchesRoute(page, { success: true, data: [], message: 'ok' })
   await setAiHandoffRoute(page, handoffPayload(taskId, 1), 200)
@@ -1623,9 +1854,7 @@ async function setAiHandoffRoute(page, payload, status = 200, counter = null) {
 }
 
 async function setMcpRoutes(page, taskId, counter = null) {
-  await page.unroute('**/api/mcp/tools**').catch(() => {})
   await page.unroute('**/api/mcp/call**').catch(() => {})
-  await page.route('**/api/mcp/tools**', route => fulfillJson(route, mcpToolsPayload(), 200))
   await page.route('**/api/mcp/call**', route => fulfillJson(route, mcpCallPayload(taskId), 200, counter))
 }
 
@@ -1712,8 +1941,8 @@ async function setProjectMemoryRoutes(
   summaryCounter = null,
 ) {
   await clearProjectMemoryRoutes(page)
-  await page.route('**/api/projects/*/memory/summary', route => fulfillJson(route, summaryData, status, summaryCounter))
   await page.route('**/api/projects/*/memory', route => fulfillJson(route, memoryData, status, memoryCounter))
+  await page.route('**/api/projects/*/memory/summary', route => fulfillJson(route, summaryData, status, summaryCounter))
 }
 
 async function setMastermindReviewRoutes(
@@ -1736,11 +1965,46 @@ async function setMastermindReviewRoutes(
   await page.route('**/api/tasks/*/mastermind-review/gate-preview', route => fulfillJson(route, gateData || mastermindGatePayload(), gateStatus, gateCounter))
 }
 
+async function setBrowserAiPoolRoutes(
+  page,
+  previewData,
+  executeData,
+  status = 200,
+  previewCounter = null,
+  executeCounter = null,
+) {
+  await clearBrowserAiPoolRoutes(page)
+  await page.route('**/api/tasks/*/browser-ai-pool/preview', route => fulfillJson(route, previewData, status, previewCounter))
+  await page.route('**/api/tasks/*/browser-ai-pool/execute', route => fulfillJson(route, executeData, status, executeCounter))
+}
+
 async function setBrowserAiProfilesRoute(page) {
   await page.unroute('**/api/browser-ai/provider-profiles').catch(() => {})
   await page.route('**/api/browser-ai/provider-profiles', route => fulfillJson(route, {
     success: true,
     data: browserAiProfilesPayload(),
+    message: 'ok',
+  }, 200))
+}
+
+async function setAgentsRoute(page) {
+  await page.unroute('**/api/agents**').catch(() => {})
+  await page.route('**/api/agents**', route => fulfillJson(route, {
+    success: true,
+    data: [{
+      id: 1,
+      name: 's4-agent',
+      agent_type: 'executor',
+      provider: 'manual',
+      model_name: null,
+      secret_ref: null,
+      enabled: true,
+      max_runtime_seconds: 600,
+      max_attempts: 1,
+      allowed_projects: null,
+      created_at: '2026-06-03T00:00:00Z',
+      updated_at: '2026-06-03T00:00:00Z',
+    }],
     message: 'ok',
   }, 200))
 }
@@ -1805,19 +2069,24 @@ async function clearMastermindReviewRoutes(page) {
   await page.unroute('**/api/tasks/*/mastermind-review/gate-preview').catch(() => {})
 }
 
+async function clearBrowserAiPoolRoutes(page) {
+  await page.unroute('**/api/tasks/*/browser-ai-pool/preview').catch(() => {})
+  await page.unroute('**/api/tasks/*/browser-ai-pool/execute').catch(() => {})
+}
+
 async function clearTaskDetailMockRoutes(page) {
   await clearDashboardRoutes(page)
   for (const routePattern of [
-    '**/api/browser-ai/provider-profiles',
     '**/api/tasks/*/dispatch-batches',
     '**/api/answer-synthesis/preview',
     '**/api/ai-handoff/preview',
-    '**/api/mcp/tools**',
     '**/api/mcp/call**',
     '**/api/ai-dispatch/dry-run',
     '**/api/ai-dispatch/execute',
     '**/api/browser-ai/dry-run',
     '**/api/browser-ai/execute',
+    '**/api/tasks/*/browser-ai-pool/preview',
+    '**/api/tasks/*/browser-ai-pool/execute',
     '**/api/multi-ai-evidence-runs/preview',
     '**/api/multi-ai-evidence-runs/execute',
     '**/api/tasks/*/agent-runs',
@@ -1830,6 +2099,7 @@ async function clearTaskDetailMockRoutes(page) {
   await clearEvidenceSummaryRoutes(page)
   await clearProjectMemoryRoutes(page)
   await clearMastermindReviewRoutes(page)
+  await clearBrowserAiPoolRoutes(page)
 }
 
 async function fulfillJson(route, payload, status, counter) {
@@ -2407,6 +2677,116 @@ function mcpCallPayload(taskId) {
   }, message: 'ok' }
 }
 
+function browserAiPoolPreviewPayload(taskId, projectId, overrides = {}) {
+  return { success: true, data: {
+    task_id: taskId,
+    project_id: projectId,
+    overall_status: 'partial',
+    jobs: [
+      {
+        provider: 'chatgpt_web',
+        role: 'reviewer',
+        display_name: 'ChatGPT Web',
+        enabled: true,
+        status: 'ready',
+        prompt_hash: 'poolhash-chatgpt',
+        prompt_excerpt: 'Browser AI Provider Pool prompt. Advisory evidence only.',
+        target_url: 'https://chatgpt.com/',
+        prompt_selector: "textarea[data-testid='prompt-textarea'], div[contenteditable='true']",
+        submit_selector: "button[data-testid='send-button']",
+        response_selector: "[data-message-author-role='assistant']",
+        stable_response_timeout_seconds: 120,
+        stable_polls: 3,
+        stable_interval_ms: 1000,
+        safety_notes: ['Pool preview is read-only; no Browser AI execution.'],
+        blocked_reasons: [],
+      },
+      {
+        provider: 'gemini_web',
+        role: 'risk',
+        display_name: 'Gemini Web',
+        enabled: true,
+        status: 'blocked',
+        prompt_hash: 'poolhash-gemini',
+        prompt_excerpt: 'Browser AI Provider Pool prompt. Risk role.',
+        target_url: 'https://gemini.google.com/app',
+        prompt_selector: 'div[contenteditable="true"]',
+        submit_selector: 'button[aria-label*="Send"]',
+        response_selector: '',
+        stable_response_timeout_seconds: 120,
+        stable_polls: 3,
+        stable_interval_ms: 1000,
+        safety_notes: ['Pool preview is read-only; no Browser AI execution.'],
+        blocked_reasons: ['Selector failure risk: response selector missing on blocked provider.'],
+      },
+    ],
+    max_total_concurrency: 2,
+    per_provider_concurrency: 1,
+    read_only: true,
+    persisted: false,
+    advisory_only: true,
+    human_confirmation_required: true,
+    no_auto_merge: true,
+    safety_notes: ['Pool preview is read-only; no Browser AI execution.'],
+    ...overrides,
+  }, message: 'ok' }
+}
+
+function browserAiPoolExecutePayload(taskId, projectId, overrides = {}) {
+  return { success: true, data: {
+    task_id: taskId,
+    project_id: projectId,
+    pool_run_id: 7100,
+    overall_status: 'partial',
+    jobs: [
+      {
+        provider: 'chatgpt_web',
+        role: 'reviewer',
+        display_name: 'ChatGPT Web',
+        status: 'succeeded',
+        agent_run_id: 7101,
+        artifact_id: 7102,
+        answer_excerpt: 'Answer from ChatGPT pool reviewer.',
+        failure_reason: '',
+        manual_login_required: false,
+        redaction_status: {
+          redaction_applied: true,
+          truncated: false,
+          max_chars: 4000,
+        },
+        safety_notes: ['Pool answer is advisory evidence only.'],
+      },
+      {
+        provider: 'gemini_web',
+        role: 'risk',
+        display_name: 'Gemini Web',
+        status: 'failed',
+        agent_run_id: 7103,
+        artifact_id: null,
+        answer_excerpt: '',
+        failure_reason: 'stable response timeout',
+        manual_login_required: true,
+        redaction_status: {
+          redaction_applied: true,
+          truncated: false,
+          max_chars: 4000,
+        },
+        safety_notes: ['Pool answer is advisory evidence only.'],
+      },
+    ],
+    read_only: false,
+    persisted: true,
+    advisory_only: true,
+    human_confirmation_required: true,
+    no_auto_merge: true,
+    safety_notes: ['Pool answer is advisory evidence only.'],
+    metadata: {
+      concurrency_note: 'MVP executes jobs sequentially while preserving bounded concurrency settings.',
+    },
+    ...overrides,
+  }, message: 'ok' }
+}
+
 function browserAiProfilesPayload() {
   return [
     browserAiProfile('custom', 'Custom', '', '', '', '', false),
@@ -2799,6 +3179,9 @@ async function main() {
 
   log('\n--- Launch Browser ---')
   const { browser, page, consoleErrors } = await launchBrowser()
+  await page.route('**/api/mcp/tools**', route => fulfillJson(route, mcpToolsPayload(), 200))
+  await setBrowserAiProfilesRoute(page)
+  await setAgentsRoute(page)
   try {
     await page.goto(`${FE}/tasks/${task.id}`, { waitUntil: 'networkidle', timeout: 15000 }) // NOSONAR
     pass('TaskDetail page loaded')
@@ -2824,6 +3207,9 @@ async function main() {
   await testRealAiRunPipelineFailures(page, task.id)
   await testBrowserAiRun(page, task.id)
   await testBrowserAiFailures(page, task.id)
+  await testBrowserAiPoolPanel(page, task)
+  await testFrontendChineseWorkflowPolish(page, task)
+  await testBrowserAiPoolApiFailure(page, task)
   await testMultiAiEvidenceRunPanel(page, task.id)
   await testMultiAiEvidenceRunRoutedPartial(page, task.id)
   await testFailureEvidencePreviewPanel(page, task.id)

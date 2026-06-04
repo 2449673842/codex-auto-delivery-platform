@@ -532,6 +532,106 @@ export interface BrowserAiResponse {
   steps: BrowserAiStep[]
 }
 
+// ── Browser AI Provider Pool / advisory evidence queue ──
+export interface BrowserAiPoolProviderRequest {
+  provider: BrowserAiProvider
+  role: string
+  display_name: string
+  target_url: string
+  prompt_selector: string
+  submit_selector: string
+  response_selector: string
+  scroll_container_selector?: string
+  copy_button_selector?: string
+  login_hint_selector?: string
+  stable_response_timeout_seconds: number | null
+  stable_polls: number
+  stable_interval_ms: number
+  enabled: boolean
+}
+
+export interface BrowserAiPoolRequest {
+  prompt: string
+  providers: BrowserAiPoolProviderRequest[]
+  max_total_concurrency: number
+  per_provider_concurrency: number
+  save_artifacts: boolean
+  artifact_prefix: string
+  include_task_context: boolean
+  include_project_memory: boolean
+  include_evidence_board: boolean
+  prompt_budget: number
+}
+
+export interface BrowserAiPoolRedactionStatus {
+  redaction_applied: boolean
+  truncated: boolean
+  max_chars: number
+}
+
+export interface BrowserAiPoolJobPreview {
+  provider: string
+  role: string
+  display_name: string
+  enabled: boolean
+  status: string
+  prompt_hash: string
+  prompt_excerpt: string
+  target_url: string
+  prompt_selector: string
+  submit_selector: string
+  response_selector: string
+  stable_response_timeout_seconds: number | null
+  stable_polls: number
+  stable_interval_ms: number
+  safety_notes: string[]
+  blocked_reasons: string[]
+}
+
+export interface BrowserAiPoolPreviewResponse {
+  task_id: number
+  project_id: number
+  overall_status: string
+  jobs: BrowserAiPoolJobPreview[]
+  max_total_concurrency: number
+  per_provider_concurrency: number
+  read_only: boolean
+  persisted: boolean
+  advisory_only: boolean
+  human_confirmation_required: boolean
+  no_auto_merge: boolean
+  safety_notes: string[]
+}
+
+export interface BrowserAiPoolJobResult {
+  provider: string
+  role: string
+  display_name: string
+  status: string
+  agent_run_id: number | null
+  artifact_id: number | null
+  answer_excerpt: string
+  failure_reason: string
+  manual_login_required: boolean
+  redaction_status: BrowserAiPoolRedactionStatus
+  safety_notes: string[]
+}
+
+export interface BrowserAiPoolExecuteResponse {
+  task_id: number
+  project_id: number
+  pool_run_id: number | null
+  overall_status: string
+  jobs: BrowserAiPoolJobResult[]
+  read_only: boolean
+  persisted: boolean
+  advisory_only: boolean
+  human_confirmation_required: boolean
+  no_auto_merge: boolean
+  safety_notes: string[]
+  metadata: Record<string, any>
+}
+
 // ── Multi-AI Evidence Run / Evidence collection only ──
 export type MultiAiEvidenceRunMode = 'broadcast' | 'routed'
 export type MultiAiEvidencePromptSource = 'task_goal' | 'handoff_packet' | 'answer_synthesis' | 'custom_prompt'
