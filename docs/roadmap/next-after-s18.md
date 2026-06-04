@@ -311,7 +311,15 @@ MCP 仍然保留，但它主要解决“外部 AI 读取上下文”，不是直
 - S24.1.4：Controlled Mastermind Gate Design
 - S24.1.5：Controlled Mastermind Gate Preview API
 - S24.1.6：TaskDetail Gate UI
-- S24.1.7：Browser AI Provider Pool / Multi-window Queue Design
+- S24.1.7：Browser AI Provider Pool / Multi-window Queue MVP
+- S24.1.8：TaskDetail Browser AI Pool UI
+- S24.1.8A：Frontend Workflow & Chinese UX Polish MVP
+- S24.1.9：AutoPilot Lite Design
+- S24.1.10：AutoPilot Lite Preview API
+- S24.1.11：AutoPilot Lite Execute API
+- S24.1.12：TaskDetail AutoPilot Lite UI
+- S24.1.13：Persistent Browser Window Pool Design
+- S24.1.14：Persistent Browser Window Pool MVP
 - S24.2：Read-only MCP resources/tools
 - S24.3：Codex skill adapter docs/example
 - S24.4：Claude Desktop / Cursor local integration example
@@ -414,6 +422,62 @@ S24.1.4 gate status 草案：
 - `gate_stale_review`
 
 其中 `gate_advisory_approved` 只能表示主脑建议可以继续，仍然需要人工确认，不能表示平台允许自动 merge。
+
+S24.1.9 AutoPilot Lite 继续保持设计优先：
+
+- 只设计如何串联已有 Browser AI Pool、Answer Synthesis、Mastermind Review 和 Controlled Gate。
+- 只设计 Multi-Web-AI Review Batch、状态机、recommendation taxonomy 和安全边界。
+- 不实现 AutoPilot Lite。
+- 不新增 AutoPilot API。
+- 不新增 UI。
+- 不新增数据库。
+- 不打开 Browser AI。
+- 不调用 provider。
+- 不查询 GitHub / Sonar 作为平台能力。
+- 不写 AgentRun / TaskArtifact / TaskEvent。
+- 不写真实仓库。
+- 不创建 PR。
+- 不 approve PR。
+- 不 merge PR。
+- 不 deploy。
+- 不自动返工。
+
+S24.1.9 AutoPilot Lite MVP 流程草案：
+
+```text
+Run AutoPilot Lite
+-> Build context packet
+-> Browser AI Pool Preview
+-> Browser AI Pool Execute
+-> Save browser_ai_pool_answer artifacts
+-> Answer Synthesis Preview
+-> Mastermind Review Packet Preview
+-> Browser AI Mastermind Review Execute
+-> Save mastermind_review_report
+-> Controlled Gate Preview
+-> Generate AutoPilot recommendation
+```
+
+S24.1.9 recommendation taxonomy 草案：
+
+- `ready_for_human_confirmation`
+- `request_codex_rework`
+- `needs_human_review`
+- `blocked_by_safety`
+- `stale_review_rerun_required`
+- `invalid_review_rerun_required`
+- `insufficient_evidence`
+
+S24.1.10 / S24.1.11 / S24.1.12 后续拆分：
+
+- S24.1.10 AutoPilot Lite Preview API：只读 preview，不执行 Browser AI。
+- S24.1.11 AutoPilot Lite Execute API：串联已有 Browser AI Pool / Mastermind Review / Gate，但不 approve / merge / deploy / rework。
+- S24.1.12 TaskDetail AutoPilot Lite UI：展示 preview、执行进度、recommendation 和人工确认提醒。
+
+S24.1.13 / S24.1.14 后移到 Browser 窗口池：
+
+- S24.1.13 Persistent Browser Window Pool Design。
+- S24.1.14 Persistent Browser Window Pool MVP。
 
 S24.0 只做设计文档，不新增 MCP server、stdio transport、HTTP / SSE transport、Codex skill adapter、后端 API、前端 UI、数据库或业务代码。
 
