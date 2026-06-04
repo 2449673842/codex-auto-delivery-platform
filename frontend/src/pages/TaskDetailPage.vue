@@ -487,10 +487,10 @@
           </div>
 
           <div class="form-actions wide">
-            <button class="btn btn-sm" aria-label="Preview Browser AI Pool" @click="previewBrowserAiPoolRun" :disabled="browserAiPoolLoading || !task">
+            <button class="btn btn-sm" @click="previewBrowserAiPoolRun" :disabled="browserAiPoolLoading || !task">
               预览将调用哪些网页 AI <span class="button-tech-label">Preview Browser AI Pool</span>
             </button>
-            <button class="btn btn-primary btn-sm" aria-label="Run Browser AI Pool" @click="executeBrowserAiPoolRun" :disabled="browserAiPoolExecuting || !task">
+            <button class="btn btn-primary btn-sm" @click="executeBrowserAiPoolRun" :disabled="browserAiPoolExecuting || !task">
               开始调用网页 AI <span class="button-tech-label">Run Browser AI Pool</span>
             </button>
           </div>
@@ -1110,7 +1110,7 @@
         <div class="section-header">
           <h2>证据板 / 运行时间线（Evidence Board / Timeline）</h2>
           <div class="section-actions">
-            <button class="btn btn-sm" aria-label="Refresh Timeline / Evidence Board" @click="refreshEvidenceSummary" :disabled="evidenceSummaryLoading">
+            <button class="btn btn-sm" @click="refreshEvidenceSummary" :disabled="evidenceSummaryLoading">
               刷新证据板 / 时间线 <span class="button-tech-label">Refresh Timeline / Evidence Board</span>
             </button>
           </div>
@@ -1636,7 +1636,7 @@
                 Reuses the PR URL, PR number, verification results, and SonarCloud values from the Mastermind Review packet form. The UI does not query GitHub or Sonar.
               </p>
               <div class="form-actions">
-                <button class="btn btn-sm" aria-label="Preview Controlled Gate" @click="previewControlledGate" :disabled="mastermindGateLoading">
+                <button class="btn btn-sm" @click="previewControlledGate" :disabled="mastermindGateLoading">
                   运行受控 Gate 判断 <span class="button-tech-label">Preview Controlled Gate</span>
                 </button>
               </div>
@@ -2708,15 +2708,13 @@ const workflowSteps = computed(() => [
   {
     key: 'context',
     title: '任务上下文',
-    state: task.value ? 'done' : 'not_started',
+    state: contextWorkflowState(),
     description: task.value ? '任务标题、状态、项目和描述已加载。' : '等待任务加载。',
   },
   {
     key: 'pool',
     title: '多网页 AI 收集',
-    state: browserAiPoolResult.value
-      ? (browserAiPoolResult.value.overall_status === 'failed' ? 'failed' : 'done')
-      : (task.value ? 'available' : 'not_started'),
+    state: browserAiPoolWorkflowState(),
     description: browserAiPoolResult.value
       ? `网页 AI Pool ${statusLabel(browserAiPoolResult.value.overall_status)}，回答会保存为 evidence artifact。`
       : '可先预览 provider，再执行网页 AI 收集。',
@@ -2724,7 +2722,7 @@ const workflowSteps = computed(() => [
   {
     key: 'review',
     title: '综合 / 主脑复审',
-    state: mastermindResult.value ? (mastermindResult.value.status === 'failed' ? 'failed' : 'done') : (browserAiPoolResult.value ? 'available' : 'not_started'),
+    state: mastermindReviewWorkflowState(),
     description: mastermindResult.value ? '主脑复审报告已生成，可进入 Gate 判断。' : '收集网页 AI 证据后，可生成复审包并发送给网页主脑。',
   },
   {
@@ -2736,13 +2734,13 @@ const workflowSteps = computed(() => [
   {
     key: 'repair',
     title: 'Codex/OMX 返工',
-    state: mastermindGateResult.value?.gate_status === 'gate_request_changes' ? 'available' : 'not_started',
+    state: repairWorkflowState(mastermindGateResult.value?.gate_status),
     description: '只有在需要返工时生成 repair packet；平台不自动写仓库。',
   },
   {
     key: 'human',
     title: '人工确认',
-    state: mastermindGateResult.value?.gate_status === 'gate_advisory_approved' ? 'human' : 'not_started',
+    state: humanWorkflowState(mastermindGateResult.value?.gate_status),
     description: '所有 approve、merge、deploy、rework 决策都需要人工确认。',
   },
 ])
@@ -2865,6 +2863,28 @@ function workflowStateLabel(state: string) {
     failed: '失败',
   }
   return labels[state] || state
+}
+
+function contextWorkflowState() {
+  return task.value ? 'done' : 'not_started'
+}
+
+function browserAiPoolWorkflowState() {
+  if (!browserAiPoolResult.value) return task.value ? 'available' : 'not_started'
+  return browserAiPoolResult.value.overall_status === 'failed' ? 'failed' : 'done'
+}
+
+function mastermindReviewWorkflowState() {
+  if (!mastermindResult.value) return browserAiPoolResult.value ? 'available' : 'not_started'
+  return mastermindResult.value.status === 'failed' ? 'failed' : 'done'
+}
+
+function repairWorkflowState(status: string | null | undefined) {
+  return status === 'gate_request_changes' ? 'available' : 'not_started'
+}
+
+function humanWorkflowState(status: string | null | undefined) {
+  return status === 'gate_advisory_approved' ? 'human' : 'not_started'
 }
 
 function gateStatusLabel(status: string | null | undefined) {
@@ -3880,19 +3900,21 @@ async function refreshAfterBrowserAiRun() {
 async function refreshAfterBrowserAiPoolRun() {
   if (!task.value) return
   const id = task.value.id
-  const messages = ['Browser AI Pool evidence saved', '网页 AI 回答已保存为证据']
   agentRuns.value = await fetchAgentRuns(id)
-  messages.push('AgentRuns refreshed')
-  messages.push('AgentRun 列表已刷新')
   artifactRefreshKey.value += 1
-  messages.push('Artifacts refreshed')
-  messages.push('artifact 列表已刷新')
   await loadEvidenceSummary(id)
-  messages.push('Evidence Board refreshed')
-  messages.push('证据板已刷新')
-  messages.push('Timeline refreshed')
-  messages.push('时间线已刷新')
-  browserAiPoolRefreshMessages.value = messages
+  browserAiPoolRefreshMessages.value = [
+    'Browser AI Pool evidence saved',
+    '网页 AI 回答已保存为证据',
+    'AgentRuns refreshed',
+    'AgentRun 列表已刷新',
+    'Artifacts refreshed',
+    'artifact 列表已刷新',
+    'Evidence Board refreshed',
+    '证据板已刷新',
+    'Timeline refreshed',
+    '时间线已刷新',
+  ]
 }
 
 async function refreshAfterMastermindReview() {
