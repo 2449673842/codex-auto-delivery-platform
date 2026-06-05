@@ -1,3 +1,4 @@
+import asyncio
 import json
 from unittest.mock import patch
 
@@ -127,6 +128,7 @@ async def _counts() -> dict[str, int]:
 
 
 async def _seed_mastermind_report(task_id: int, project_id: int, **overrides) -> TaskArtifact:
+    await asyncio.sleep(0)
     payload = {
         "verdict": "approved",
         "summary": "Clean advisory review; human confirmation required.",
